@@ -22,7 +22,7 @@ const cookieOptions = {
 //localhost:5000 and localhost:5173 are treated as same site.  so sameSite value must be strict in development server.  in production sameSite will be none
 // in development server secure will false .  in production secure will be true
 
-const { MongoClient, ServerApiVersion } = require("mongodb");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const uri = `mongodb+srv://${process.env.DB_User}:${process.env.DB_Pass}@cluster0.dr5qw.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
@@ -62,6 +62,46 @@ async function run() {
     // getting students here
     app.get("/students", async (req, res) => {
       const result = await studentsCollection.find().toArray();
+      res.send(result);
+    });
+    // getting single students here
+    app.get("/students/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const student = await studentsCollection.findOne(query);
+      res.send(student);
+    });
+    // deleting single student here
+    app.delete("/students/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await studentsCollection.deleteOne(query);
+      res.send(result);
+    });
+
+    app.patch("/students/:id", async (req, res) => {
+      const id = req.params.id;
+      const updates = req.body;
+
+      const query = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: {},
+      };
+
+      if (updates.status !== undefined) {
+        updateDoc.$set.status = updates.status;
+      }
+      if (updates.class !== undefined) {
+        updateDoc.$set["academic.class"] = updates.class; // ✅ correct nested update
+      }
+
+      if (Object.keys(updateDoc.$set).length === 0) {
+        return res
+          .status(400)
+          .send({ message: "No valid fields provided to update." });
+      }
+
+      const result = await studentsCollection.updateOne(query, updateDoc);
       res.send(result);
     });
 
