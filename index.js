@@ -4,6 +4,12 @@ const cors = require("cors");
 
 const port = process.env.PORT || 9000;
 const app = express();
+const admin = require("firebase-admin");
+const serviceAccount = require("./alyaqeen-62c18-firebase-adminsdk-fbsvc-1b71e1f5e6.json");
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
 
 //Must remove "/" from your production URL
 app.use(
@@ -39,6 +45,47 @@ async function run() {
     // collections
     const usersCollection = client.db("alyaqeenDb").collection("users");
     const studentsCollection = client.db("alyaqeenDb").collection("students");
+    const notificationsCollection = client
+      .db("alyaqeenDb")
+      .collection("notifications");
+
+    app.get("/users/role/:email", async (req, res) => {
+      const email = req.params.email;
+      const query = { email };
+      const result = await usersCollection.findOne(query);
+      res.send({ role: result?.role });
+    });
+
+    app.post("/create-student-user", async (req, res) => {
+      const { email, password, displayName } = req.body;
+
+      if (!email || !password) {
+        return res
+          .status(400)
+          .send({ error: "Email and password are required." });
+      }
+
+      try {
+        const userRecord = await admin.auth().createUser({
+          email,
+          password,
+          displayName,
+        });
+
+        // Optional: assign custom claims if needed, e.g., role: "student"
+        await admin
+          .auth()
+          .setCustomUserClaims(userRecord.uid, { role: "student" });
+
+        res.send({
+          message: "Student user created successfully",
+          uid: userRecord.uid,
+          email: userRecord.email,
+        });
+      } catch (error) {
+        res.status(500).send({ error: error.message });
+      }
+    });
 
     // posting users here
     app.post("/users", async (req, res) => {
@@ -79,29 +126,62 @@ async function run() {
       res.send(result);
     });
 
-    app.patch("/students/:id", async (req, res) => {
+    // student update
+    app.put("/student/:id", async (req, res) => {
       const id = req.params.id;
-      const updates = req.body;
-
       const query = { _id: new ObjectId(id) };
-      const updateDoc = {
-        $set: {},
+      const studentData = req.body;
+      const updatedDoc = {
+        $set: { ...studentData },
       };
+      const result = await studentsCollection.updateOne(query, updatedDoc);
+      res.send(result);
+    });
 
-      if (updates.status !== undefined) {
-        updateDoc.$set.status = updates.status;
+    // status update
+    app.patch("/student/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const { status } = req.body;
+      const updatedDoc = {
+        $set: { status },
+      };
+      try {
+        const result = await studentsCollection.updateOne(query, updatedDoc);
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ error: "Failed to update student status." });
       }
-      if (updates.class !== undefined) {
-        updateDoc.$set["academic.class"] = updates.class; // ✅ correct nested update
-      }
+    });
 
-      if (Object.keys(updateDoc.$set).length === 0) {
-        return res
-          .status(400)
-          .send({ message: "No valid fields provided to update." });
-      }
+    // notification load
+    app.post("/notifications", async (req, res) => {
+      const notification = req.body;
+      const result = await notificationsCollection.insertOne(notification);
+      res.send(result);
+    });
+    app.get("/notifications", async (req, res) => {
+      const result = await notificationsCollection.find().toArray();
+      res.send(result);
+    });
 
-      const result = await studentsCollection.updateOne(query, updateDoc);
+    app.get("/notifications/unread", async (req, res) => {
+      try {
+        const result = await notificationsCollection
+          .find({ isRead: false })
+          .toArray();
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ success: false, message: "Server error" });
+      }
+    });
+
+    app.patch("/notifications/:id", async (req, res) => {
+      const id = req.params.id;
+      const result = await notificationsCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { isRead: true } }
+      );
       res.send(result);
     });
 
