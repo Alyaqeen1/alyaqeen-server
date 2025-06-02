@@ -6,6 +6,10 @@ const port = process.env.PORT || 9000;
 const app = express();
 const admin = require("firebase-admin");
 const serviceAccount = require("./alyaqeen-62c18-firebase-adminsdk-fbsvc-1b71e1f5e6.json");
+const jwt = require("jsonwebtoken");
+const cookieParser = require("cookie-parser");
+
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -19,6 +23,7 @@ app.use(
   })
 );
 app.use(express.json());
+app.use(cookieParser());
 
 const cookieOptions = {
   httpOnly: true,
@@ -40,16 +45,56 @@ const client = new MongoClient(uri, {
   },
 });
 
+const verifyToken = (req, res, next) => {
+  const token = req.cookies?.token;
+  if (!token) {
+    return res.status(401).send({ message: true });
+  }
+  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+    if (err) {
+      return res.status(401).send({ message: "unauthorized access" });
+    }
+    req.user = decoded;
+    next();
+  });
+};
+
 async function run() {
   try {
     // collections
     const usersCollection = client.db("alyaqeenDb").collection("users");
     const studentsCollection = client.db("alyaqeenDb").collection("students");
+    const familiesCollection = client.db("alyaqeenDb").collection("families");
     const notificationsCollection = client
       .db("alyaqeenDb")
       .collection("notifications");
 
-    app.get("/users/role/:email", async (req, res) => {
+    app.post("/jwt", async (req, res) => {
+      const email = req.body;
+      const token = jwt.sign(email, process.env.JWT_SECRET, {
+        expiresIn: "1h",
+      });
+      res
+        .cookie("token", token, {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
+        })
+        .send({ success: true });
+      //   console.log(token);
+    });
+    app.get("/logout", async (req, res) => {
+      res
+        .clearCookie("token", {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
+          maxAge: 0,
+        })
+        .send({ success: true });
+    });
+
+    app.get("/users/role/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
       const query = { email };
       const result = await usersCollection.findOne(query);
@@ -102,17 +147,17 @@ async function run() {
     });
 
     // getting users here
-    app.get("/users", async (req, res) => {
+    app.get("/users", verifyToken, async (req, res) => {
       const result = await usersCollection.find().toArray();
       res.send(result);
     });
     // getting students here
-    app.get("/students", async (req, res) => {
+    app.get("/students", verifyToken, async (req, res) => {
       const result = await studentsCollection.find().toArray();
       res.send(result);
     });
     // getting single students here
-    app.get("/students/:id", async (req, res) => {
+    app.get("/students/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const student = await studentsCollection.findOne(query);
@@ -160,12 +205,12 @@ async function run() {
       const result = await notificationsCollection.insertOne(notification);
       res.send(result);
     });
-    app.get("/notifications", async (req, res) => {
+    app.get("/notifications", verifyToken, async (req, res) => {
       const result = await notificationsCollection.find().toArray();
       res.send(result);
     });
 
-    app.get("/notifications/unread", async (req, res) => {
+    app.get("/notifications/unread", verifyToken, async (req, res) => {
       try {
         const result = await notificationsCollection
           .find({ isRead: false })
@@ -183,6 +228,50 @@ async function run() {
         { $set: { isRead: true } }
       );
       res.send(result);
+    });
+
+    // family post
+    app.post("/families", async (req, res) => {
+      const family = req.body;
+      const result = await familiesCollection.insertOne(family);
+      res.send(result);
+    });
+    // family get
+    app.get("/families", verifyToken, async (req, res) => {
+      const result = await familiesCollection.find().toArray();
+      res.send(result);
+    });
+    // family get by id
+    app.get("/family/:email", verifyToken, async (req, res) => {
+      const email = req.params.email;
+      const query = { email };
+      const result = await familiesCollection.findOne(query);
+      res.send(result);
+    });
+
+    app.patch("/family/:email/add-child", async (req, res) => {
+      const email = req.params.email;
+      const { studentUid } = req.body;
+
+      const result = await familiesCollection.updateOne(
+        { email },
+        { $addToSet: { children: studentUid } } // prevents duplicates
+      );
+
+      res.send(result);
+    });
+
+    // stripe payment intent
+    app.post("/create-payment-intent", async (req, res) => {
+      const { price } = req.body;
+      const amount = parseInt(price * 100); // Convert to cents
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount,
+        currency: "gbp",
+        payment_method_types: ["card"],
+      });
+
+      res.send({ clientSecret: paymentIntent.client_secret });
     });
 
     // Connect the client to the server	(optional starting in v4.7)
