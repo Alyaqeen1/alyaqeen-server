@@ -9,6 +9,11 @@ const serviceAccount = require("./alyaqeen-62c18-firebase-adminsdk-fbsvc-1b71e1f
 const jwt = require("jsonwebtoken");
 const cookieParser = require("cookie-parser");
 
+const createStudentsRouter = require("./routes/students.routes");
+const createUsersRouter = require("./routes/users.routes");
+const createFamiliesRouter = require("./routes/families.routes");
+const createNotificationsRouter = require("./routes/notifications.routes");
+
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 admin.initializeApp({
@@ -34,6 +39,8 @@ const cookieOptions = {
 // in development server secure will false .  in production secure will be true
 
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const feeStructure = require("./config/feeStructure");
+
 const uri = `mongodb+srv://${process.env.DB_User}:${process.env.DB_Pass}@cluster0.dr5qw.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
@@ -94,13 +101,6 @@ async function run() {
         .send({ success: true });
     });
 
-    app.get("/users/role/:email", verifyToken, async (req, res) => {
-      const email = req.params.email;
-      const query = { email };
-      const result = await usersCollection.findOne(query);
-      res.send({ role: result?.role });
-    });
-
     app.post("/create-student-user", async (req, res) => {
       const { email, password, displayName } = req.body;
 
@@ -132,134 +132,13 @@ async function run() {
       }
     });
 
-    // posting users here
-    app.post("/users", async (req, res) => {
-      const newUser = req.body;
-      const result = await usersCollection.insertOne(newUser);
-      res.send(result);
-    });
-
-    // posting students whole data here
-    app.post("/students", async (req, res) => {
-      const newStudent = req.body;
-      const result = await studentsCollection.insertOne(newStudent);
-      res.send(result);
-    });
-
-    // getting users here
-    app.get("/users", verifyToken, async (req, res) => {
-      const result = await usersCollection.find().toArray();
-      res.send(result);
-    });
-    // getting students here
-    app.get("/students", verifyToken, async (req, res) => {
-      const result = await studentsCollection.find().toArray();
-      res.send(result);
-    });
-    // getting single students here
-    app.get("/students/:id", verifyToken, async (req, res) => {
-      const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
-      const student = await studentsCollection.findOne(query);
-      res.send(student);
-    });
-    // deleting single student here
-    app.delete("/students/:id", async (req, res) => {
-      const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
-      const result = await studentsCollection.deleteOne(query);
-      res.send(result);
-    });
-
-    // student update
-    app.put("/student/:id", async (req, res) => {
-      const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
-      const studentData = req.body;
-      const updatedDoc = {
-        $set: { ...studentData },
-      };
-      const result = await studentsCollection.updateOne(query, updatedDoc);
-      res.send(result);
-    });
-
-    // status update
-    app.patch("/student/:id", async (req, res) => {
-      const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
-      const { status } = req.body;
-      const updatedDoc = {
-        $set: { status },
-      };
-      try {
-        const result = await studentsCollection.updateOne(query, updatedDoc);
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({ error: "Failed to update student status." });
-      }
-    });
-
-    // notification load
-    app.post("/notifications", async (req, res) => {
-      const notification = req.body;
-      const result = await notificationsCollection.insertOne(notification);
-      res.send(result);
-    });
-    app.get("/notifications", verifyToken, async (req, res) => {
-      const result = await notificationsCollection.find().toArray();
-      res.send(result);
-    });
-
-    app.get("/notifications/unread", verifyToken, async (req, res) => {
-      try {
-        const result = await notificationsCollection
-          .find({ isRead: false })
-          .toArray();
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({ success: false, message: "Server error" });
-      }
-    });
-
-    app.patch("/notifications/:id", async (req, res) => {
-      const id = req.params.id;
-      const result = await notificationsCollection.updateOne(
-        { _id: new ObjectId(id) },
-        { $set: { isRead: true } }
-      );
-      res.send(result);
-    });
-
-    // family post
-    app.post("/families", async (req, res) => {
-      const family = req.body;
-      const result = await familiesCollection.insertOne(family);
-      res.send(result);
-    });
-    // family get
-    app.get("/families", verifyToken, async (req, res) => {
-      const result = await familiesCollection.find().toArray();
-      res.send(result);
-    });
-    // family get by id
-    app.get("/family/:email", verifyToken, async (req, res) => {
-      const email = req.params.email;
-      const query = { email };
-      const result = await familiesCollection.findOne(query);
-      res.send(result);
-    });
-
-    app.patch("/family/:email/add-child", async (req, res) => {
-      const email = req.params.email;
-      const { studentUid } = req.body;
-
-      const result = await familiesCollection.updateOne(
-        { email },
-        { $addToSet: { children: studentUid } } // prevents duplicates
-      );
-
-      res.send(result);
-    });
+    app.use("/students", createStudentsRouter(studentsCollection, verifyToken));
+    app.use("/users", createUsersRouter(usersCollection));
+    app.use("/families", createFamiliesRouter(familiesCollection));
+    app.use(
+      "/notifications",
+      createNotificationsRouter(notificationsCollection, verifyToken)
+    );
 
     // stripe payment intent
     app.post("/create-payment-intent", async (req, res) => {
@@ -272,6 +151,71 @@ async function run() {
       });
 
       res.send({ clientSecret: paymentIntent.client_secret });
+    });
+
+    app.get("/fees/calculate/:studentId", async (req, res) => {
+      try {
+        const studentId = req.params.studentId;
+        const student = await studentsCollection.findOne({
+          _id: new ObjectId(studentId),
+        });
+        if (!student) {
+          return res.status(404).send({ error: "Student not found" });
+        }
+
+        // Find family by parent email (adjust as per your data structure)
+        const family = await familiesCollection.findOne({
+          email: student.parent_email,
+        });
+        const siblingsCount = family?.children?.length || 0;
+
+        // Admission fee with discount if siblings > threshold
+        let admissionFee = feeStructure?.admissionFee;
+        if (siblingsCount > feeStructure?.discountOnAdmission?.threshold) {
+          admissionFee =
+            admissionFee *
+            (1 - feeStructure?.discountOnAdmission?.percentage / 100);
+        }
+
+        // Determine department and session (weekdays/weekends)
+        const department = student.academic?.department || "Arabic Language"; // fallback if missing
+        const sessionType =
+          student.academic?.session === "weekend" ? "weekends" : "weekdays";
+
+        // Monthly fee lookup
+        const monthlyFee = feeStructure.monthlyFees[department]?.[sessionType];
+        if (!monthlyFee) {
+          return res
+            .status(400)
+            .send({ error: "Invalid department or session type" });
+        }
+
+        // Admission date logic for pro-rated or full fee
+        const admissionDate = new Date(student.startingDate);
+        const dayOfMonth = admissionDate.getDate();
+
+        let firstMonthFee;
+        if (dayOfMonth > 10) {
+          // Pro-rate: example 1/3 of monthly fee
+          firstMonthFee = monthlyFee / 3;
+        } else {
+          firstMonthFee = monthlyFee;
+        }
+
+        // Respond with fees details
+        res.send({
+          admissionFee: admissionFee.toFixed(2),
+          firstMonthFee: firstMonthFee.toFixed(2),
+          fullMonthlyFee: monthlyFee.toFixed(2),
+          message:
+            dayOfMonth > 10
+              ? "Pro-rated fee applied for the first month."
+              : "Full fee applied for the first month.",
+        });
+      } catch (error) {
+        console.error("Error calculating fees:", error);
+        res.status(500).send({ error: "Server error calculating fees" });
+      }
     });
 
     // Connect the client to the server	(optional starting in v4.7)
