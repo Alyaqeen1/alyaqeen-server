@@ -13,6 +13,7 @@ const createStudentsRouter = require("./routes/students.routes");
 const createUsersRouter = require("./routes/users.routes");
 const createFamiliesRouter = require("./routes/families.routes");
 const createNotificationsRouter = require("./routes/notifications.routes");
+const createFeesRouter = require("./routes/fees.routes");
 
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
@@ -72,6 +73,7 @@ async function run() {
     const usersCollection = client.db("alyaqeenDb").collection("users");
     const studentsCollection = client.db("alyaqeenDb").collection("students");
     const familiesCollection = client.db("alyaqeenDb").collection("families");
+    const feesCollection = client.db("alyaqeenDb").collection("fees");
     const notificationsCollection = client
       .db("alyaqeenDb")
       .collection("notifications");
@@ -134,11 +136,15 @@ async function run() {
 
     app.use("/students", createStudentsRouter(studentsCollection, verifyToken));
     app.use("/users", createUsersRouter(usersCollection));
-    app.use("/families", createFamiliesRouter(familiesCollection));
+    app.use(
+      "/families",
+      createFamiliesRouter(familiesCollection, studentsCollection)
+    );
     app.use(
       "/notifications",
       createNotificationsRouter(notificationsCollection, verifyToken)
     );
+    app.use("/fees", createFeesRouter(feesCollection, studentsCollection));
 
     // stripe payment intent
     app.post("/create-payment-intent", async (req, res) => {
