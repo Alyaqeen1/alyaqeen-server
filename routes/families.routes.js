@@ -49,6 +49,54 @@ module.exports = (familiesCollection, studentsCollection) => {
                     $expr: {
                       $and: [
                         { $in: ["$uid", "$$childUids"] },
+                        { $eq: ["$status", "enrolled"] }, // filter only approved
+                      ],
+                    },
+                  },
+                },
+              ],
+              as: "childrenDocs",
+            },
+          },
+          {
+            $project: {
+              name: 1,
+              email: 1,
+              children: 1,
+              childrenDocs: 1,
+              feeChoice: 1,
+            },
+          },
+        ])
+        .toArray();
+
+      if (result.length === 0) {
+        return res.status(404).send({ message: "Family not found" });
+      }
+
+      res.send(result[0]);
+    } catch (err) {
+      console.error(err);
+      res.status(500).send({ error: "Server error" });
+    }
+  });
+  router.get("/:email/with-children/approved", async (req, res) => {
+    const email = req.params.email;
+
+    try {
+      const result = await familiesCollection
+        .aggregate([
+          { $match: { email } },
+          {
+            $lookup: {
+              from: studentsCollection.collectionName, // actual collection name
+              let: { childUids: "$children" },
+              pipeline: [
+                {
+                  $match: {
+                    $expr: {
+                      $and: [
+                        { $in: ["$uid", "$$childUids"] },
                         { $eq: ["$status", "approved"] }, // filter only approved
                       ],
                     },

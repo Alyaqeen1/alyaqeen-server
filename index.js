@@ -171,7 +171,7 @@ async function run() {
 
         // Find family by parent email (adjust as per your data structure)
         const family = await familiesCollection.findOne({
-          email: student.parent_email,
+          email: student.email,
         });
         const siblingsCount = family?.children?.length || 0;
 
