@@ -1,4 +1,5 @@
 const express = require("express");
+const { ObjectId } = require("mongodb");
 const router = express.Router();
 
 module.exports = (familiesCollection, studentsCollection) => {
@@ -7,9 +8,9 @@ module.exports = (familiesCollection, studentsCollection) => {
     res.send(result);
   });
 
-  router.get("/:email", async (req, res) => {
-    const email = req.params.email;
-    const query = { email };
+  router.get("/:id", async (req, res) => {
+    const id = req.params.id;
+    const query = { _id: new ObjectId(id) };
     const result = await familiesCollection.findOne(query);
     res.send(result);
   });
@@ -32,13 +33,10 @@ module.exports = (familiesCollection, studentsCollection) => {
     res.send(result);
   });
 
-  router.get("/:email/with-children", async (req, res) => {
-    const email = req.params.email;
-
+  router.get("/with-children/enrolled", async (req, res) => {
     try {
       const result = await familiesCollection
         .aggregate([
-          { $match: { email } },
           {
             $lookup: {
               from: studentsCollection.collectionName, // actual collection name
@@ -49,7 +47,8 @@ module.exports = (familiesCollection, studentsCollection) => {
                     $expr: {
                       $and: [
                         { $in: ["$uid", "$$childUids"] },
-                        { $eq: ["$status", "enrolled"] }, // filter only approved
+                        // { $eq: ["$status", "enrolled"] }, // filter only approved
+                        { $in: ["$status", ["enrolled", "hold"]] }, // filter for enrolled or hold
                       ],
                     },
                   },
@@ -58,29 +57,38 @@ module.exports = (familiesCollection, studentsCollection) => {
               as: "childrenDocs",
             },
           },
-          {
-            $project: {
-              name: 1,
-              email: 1,
-              children: 1,
-              childrenDocs: 1,
-              feeChoice: 1,
-            },
-          },
+          // {
+          //   $project: {
+          //     name: 1,
+          //     email: 1,
+          //     children: 1,
+          //     childrenDocs: 1,
+          //     feeChoice: 1,
+          //   },
+          // },
         ])
         .toArray();
 
-      if (result.length === 0) {
-        return res.status(404).send({ message: "Family not found" });
-      }
+      // Optional: Sanitize the data to remove any potential circular references
+      // const sanitizedResult = result.map((family) => ({
+      //   ...family,
+      //   childrenDocs: family.childrenDocs.map((child) => ({
+      //     // explicitly list the fields you want to include
+      //     uid: child.uid,
+      //     name: child.name,
+      //     status: child.status,
+      //     // etc.
+      //   })),
+      // }));
 
-      res.send(result[0]);
+      res.send(result);
     } catch (err) {
       console.error(err);
       res.status(500).send({ error: "Server error" });
     }
   });
-  router.get("/:email/with-children/approved", async (req, res) => {
+
+  router.get("/with-children/approved/:email", async (req, res) => {
     const email = req.params.email;
 
     try {
@@ -106,15 +114,15 @@ module.exports = (familiesCollection, studentsCollection) => {
               as: "childrenDocs",
             },
           },
-          {
-            $project: {
-              name: 1,
-              email: 1,
-              children: 1,
-              childrenDocs: 1,
-              feeChoice: 1,
-            },
-          },
+          // {
+          //   $project: {
+          //     name: 1,
+          //     email: 1,
+          //     children: 1,
+          //     childrenDocs: 1,
+          //     feeChoice: 1,
+          //   },
+          // },
         ])
         .toArray();
 
@@ -129,7 +137,7 @@ module.exports = (familiesCollection, studentsCollection) => {
     }
   });
 
-  router.get("/:email/with-children/all", async (req, res) => {
+  router.get("/with-children/all/:email", async (req, res) => {
     const email = req.params.email;
 
     try {
@@ -144,15 +152,15 @@ module.exports = (familiesCollection, studentsCollection) => {
               as: "childrenDocs",
             },
           },
-          {
-            $project: {
-              name: 1,
-              email: 1,
-              children: 1,
-              childrenDocs: 1,
-              feeChoice: 1,
-            },
-          },
+          // {
+          //   $project: {
+          //     name: 1,
+          //     email: 1,
+          //     children: 1,
+          //     childrenDocs: 1,
+          //     feeChoice: 1,
+          //   },
+          // },
         ])
         .toArray();
 
@@ -167,7 +175,7 @@ module.exports = (familiesCollection, studentsCollection) => {
     }
   });
 
-  router.patch("/:email/update-fee-choice", async (req, res) => {
+  router.patch("/update-fee-choice/:email", async (req, res) => {
     const email = req.params.email;
     const { feeChoice } = req.body;
 
@@ -180,6 +188,53 @@ module.exports = (familiesCollection, studentsCollection) => {
     } catch (err) {
       console.error(err);
       res.status(500).send({ error: "Server error" });
+    }
+  });
+  // Delete family
+  router.delete("/:id", async (req, res) => {
+    const id = req.params.id;
+    const query = { _id: new ObjectId(id) };
+    const result = await familiesCollection.deleteOne(query);
+    res.send(result);
+  });
+  // update family
+
+  router.patch("/update-by-admin/:id", async (req, res) => {
+    try {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const { name, children, discount, newlyAddedChildren = [] } = req.body;
+
+      if (!Array.isArray(children)) {
+        return res.status(400).json({ error: "Invalid children array" });
+      }
+
+      const updatedDoc = {
+        $set: {
+          name,
+          discount: Number(discount) || 0,
+          children,
+          updatedAt: new Date(),
+        },
+      };
+
+      const familyResult = await familiesCollection.updateOne(
+        query,
+        updatedDoc
+      );
+
+      // ✅ Only update newly added students to "enrolled"
+      if (newlyAddedChildren.length > 0) {
+        await studentsCollection.updateMany(
+          { uid: { $in: newlyAddedChildren } },
+          { $set: { status: "enrolled" } }
+        );
+      }
+
+      res.send({ success: true, modifiedCount: familyResult.modifiedCount });
+    } catch (error) {
+      console.error("Error updating family:", error);
+      res.status(500).send({ error: "Failed to update family" });
     }
   });
 
