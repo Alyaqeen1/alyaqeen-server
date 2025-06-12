@@ -144,7 +144,10 @@ async function run() {
       "/notifications",
       createNotificationsRouter(notificationsCollection, verifyToken)
     );
-    app.use("/fees", createFeesRouter(feesCollection, studentsCollection));
+    app.use(
+      "/fees",
+      createFeesRouter(feesCollection, studentsCollection, familiesCollection)
+    );
 
     // stripe payment intent
     app.post("/create-payment-intent", async (req, res) => {

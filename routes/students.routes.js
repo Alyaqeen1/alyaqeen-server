@@ -10,6 +10,24 @@ module.exports = (studentsCollection, verifyToken) => {
     const result = await studentsCollection.find().toArray();
     res.send(result);
   });
+  // ✅ 2. Get students excluding 'enrolled' and 'hold' statuses
+  router.get("/without-enrolled", verifyToken, async (req, res) => {
+    try {
+      const result = await studentsCollection
+        .find({ status: { $nin: ["enrolled", "hold"] } })
+        .toArray();
+      res.send(result);
+    } catch (error) {
+      console.error("Error fetching filtered students:", error);
+      res.status(500).send({ error: "Failed to fetch students." });
+    }
+  });
+  router.get("/get-by-status/:status", verifyToken, async (req, res) => {
+    const status = req.params.status;
+    const query = { status };
+    const result = await studentsCollection.find(query).toArray();
+    res.send(result);
+  });
 
   // Get single student
   router.get("/:id", verifyToken, async (req, res) => {
