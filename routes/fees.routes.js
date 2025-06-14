@@ -12,80 +12,91 @@ module.exports = (feesCollection, studentsCollection, familiesCollection) => {
 
   router.post("/", async (req, res) => {
     const feesData = req.body;
-    const { familyId, amount, paymentType, name, email } = feesData;
+    const {
+      familyId,
+      amount,
+      paymentType,
+      students = [],
+      method = "Unknown",
+    } = feesData;
 
     try {
-      // 1. Save the fee data
-      const result = await feesCollection.insertOne({ ...feesData });
+      // 1. Get the family document
+      const family = await familiesCollection.findOne({
+        _id: new ObjectId(familyId),
+      });
 
-      if (paymentType === "admissionOnHold") {
-        try {
-          // 1. Get the family document
-          const family = await familiesCollection.findOne({
-            _id: new ObjectId(familyId),
-          });
-
-          if (!family || !Array.isArray(family.children)) {
-            return res
-              .status(404)
-              .send({ message: "Family not found or no children in family." });
-          }
-
-          const childrenUids = family.children;
-
-          // 2. Fetch approved students
-          const approvedStudents = await studentsCollection
-            .find({
-              uid: { $in: childrenUids },
-              status: "approved",
-            })
-            .toArray();
-
-          // 3. Collect all student names
-          const studentNames = approvedStudents.map((student) => student.name);
-
-          if (studentNames.length === 0) {
-            return res
-              .status(404)
-              .send({ message: "No approved students found in this family." });
-          }
-
-          // 4. Send one email with all student names
-          await sendHoldEmail({
-            to: email,
-            parentName: name,
-            studentNames, // array of names
-            method: feesData?.method || "Selected Method",
-          });
-        } catch (err) {
-          console.error("❌ Error sending hold email:", err);
-          return res.status(500).send({ message: "Internal server error" });
-        }
-      } else {
-        // Standard paymentType: send confirmation email to one student
-        const student = await studentsCollection.findOne({
-          _id: new ObjectId(feesData.uid),
-        });
-
-        if (!student) {
-          return res.status(404).send({ message: "Student not found" });
-        }
-
-        await sendEmailViaAPI({
-          to: student.email,
-          name: student.name,
-          amount,
-          department: student?.academic?.department,
-          session: student?.academic?.session,
-          class: student?.academic?.class,
-          time: student?.academic?.time,
-        });
+      if (!family || !Array.isArray(family.children)) {
+        return res
+          .status(404)
+          .send({ message: "Family not found or has no children." });
       }
 
-      // Success response
+      const familyName = family?.name || "Parent";
+      const familyEmail = family?.email;
+
+      if (!familyEmail) {
+        return res.status(400).send({ message: "Family email is required." });
+      }
+
+      // 2. Extract studentIds from students
+      const studentIds = students?.map((s) => new ObjectId(s.studentId));
+
+      // 3. Fetch full student records
+      const allStudents = await studentsCollection
+        .find({ _id: { $in: studentIds } })
+        .toArray();
+
+      if (!allStudents.length) {
+        return res
+          .status(404)
+          .send({ message: "No matching students found in the database." });
+      }
+
+      // 4. Optionally add timestamp
+      feesData.timestamp = new Date();
+
+      // 5. Save fee document
+      const result = await feesCollection.insertOne(feesData);
+
+      // 6. Send Email based on type
+      if (paymentType === "admissionOnHold") {
+        await sendHoldEmail({
+          to: familyEmail,
+          parentName: familyName,
+          studentNames: allStudents.map((s) => s.name),
+          method,
+        });
+      } else if (paymentType === "admission") {
+        const enrichedStudents = allStudents.map((student) => {
+          const feeInfo = feesData.students.find(
+            (s) => String(s.studentId) === String(student._id)
+          );
+
+          return {
+            ...student,
+            admissionFee: feeInfo?.admissionFee || 0,
+            monthly_fee: feeInfo?.monthlyFee || 0,
+          };
+        });
+
+        await sendEmailViaAPI({
+          to: familyEmail,
+          parentName: familyName,
+          students: enrichedStudents,
+          totalAmount: amount,
+          method,
+        });
+      } else {
+        console.log(
+          "✅ Payment saved, but no email sent for type:",
+          paymentType
+        );
+      }
+
       res.send(result);
     } catch (err) {
-      console.error("❌ Error in fee route:", err);
+      console.error("❌ Error in /fees route:", err);
       res.status(500).send({ message: "Internal server error" });
     }
   });

@@ -134,7 +134,10 @@ async function run() {
       }
     });
 
-    app.use("/students", createStudentsRouter(studentsCollection, verifyToken));
+    app.use(
+      "/students",
+      createStudentsRouter(studentsCollection, verifyToken, familiesCollection)
+    );
     app.use("/users", createUsersRouter(usersCollection));
     app.use(
       "/families",

@@ -15,6 +15,13 @@ module.exports = (familiesCollection, studentsCollection) => {
     res.send(result);
   });
 
+  router.get("/by-email/:email", async (req, res) => {
+    const email = req.params.email;
+    const query = { email };
+    const result = await familiesCollection.findOne(query);
+    res.send(result);
+  });
+
   router.post("/", async (req, res) => {
     const family = req.body;
     const result = await familiesCollection.insertOne(family);
