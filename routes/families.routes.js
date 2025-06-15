@@ -40,6 +40,8 @@ module.exports = (familiesCollection, studentsCollection) => {
     res.send(result);
   });
 
+  // students who are enrolled or hold with family
+
   router.get("/with-children/enrolled", async (req, res) => {
     try {
       const result = await familiesCollection
@@ -94,7 +96,63 @@ module.exports = (familiesCollection, studentsCollection) => {
       res.status(500).send({ error: "Server error" });
     }
   });
+  // students who are hold with family
 
+  router.get("/with-children/hold", async (req, res) => {
+    try {
+      const result = await familiesCollection
+        .aggregate([
+          {
+            $lookup: {
+              from: studentsCollection.collectionName, // actual collection name
+              let: { childUids: "$children" },
+              pipeline: [
+                {
+                  $match: {
+                    $expr: {
+                      $and: [
+                        { $in: ["$uid", "$$childUids"] },
+                        // { $eq: ["$status", "enrolled"] }, // filter only approved
+                        { $in: ["$status", ["hold"]] }, // filter for enrolled or hold
+                      ],
+                    },
+                  },
+                },
+              ],
+              as: "childrenDocs",
+            },
+          },
+          // {
+          //   $project: {
+          //     name: 1,
+          //     email: 1,
+          //     children: 1,
+          //     childrenDocs: 1,
+          //     feeChoice: 1,
+          //   },
+          // },
+        ])
+        .toArray();
+
+      // Optional: Sanitize the data to remove any potential circular references
+      // const sanitizedResult = result.map((family) => ({
+      //   ...family,
+      //   childrenDocs: family.childrenDocs.map((child) => ({
+      //     // explicitly list the fields you want to include
+      //     uid: child.uid,
+      //     name: child.name,
+      //     status: child.status,
+      //     // etc.
+      //   })),
+      // }));
+
+      res.send(result);
+    } catch (err) {
+      console.error(err);
+      res.status(500).send({ error: "Server error" });
+    }
+  });
+  // student who is approved with family
   router.get("/with-children/approved/:email", async (req, res) => {
     const email = req.params.email;
 
@@ -143,7 +201,56 @@ module.exports = (familiesCollection, studentsCollection) => {
       res.status(500).send({ error: "Server error" });
     }
   });
+  // student who is enrolled with family
+  router.get("/with-children/enrolled/:email", async (req, res) => {
+    const email = req.params.email;
 
+    try {
+      const result = await familiesCollection
+        .aggregate([
+          { $match: { email } },
+          {
+            $lookup: {
+              from: studentsCollection.collectionName, // actual collection name
+              let: { childUids: "$children" },
+              pipeline: [
+                {
+                  $match: {
+                    $expr: {
+                      $and: [
+                        { $in: ["$uid", "$$childUids"] },
+                        { $eq: ["$status", "enrolled"] }, // filter only approved
+                      ],
+                    },
+                  },
+                },
+              ],
+              as: "childrenDocs",
+            },
+          },
+          // {
+          //   $project: {
+          //     name: 1,
+          //     email: 1,
+          //     children: 1,
+          //     childrenDocs: 1,
+          //     feeChoice: 1,
+          //   },
+          // },
+        ])
+        .toArray();
+
+      if (result.length === 0) {
+        return res.status(404).send({ message: "Family not found" });
+      }
+
+      res.send(result[0]);
+    } catch (err) {
+      console.error(err);
+      res.status(500).send({ error: "Server error" });
+    }
+  });
+  // student with family
   router.get("/with-children/all/:email", async (req, res) => {
     const email = req.params.email;
 
