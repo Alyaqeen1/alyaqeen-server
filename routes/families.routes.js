@@ -2,7 +2,7 @@ const express = require("express");
 const { ObjectId } = require("mongodb");
 const router = express.Router();
 
-module.exports = (familiesCollection, studentsCollection) => {
+module.exports = (familiesCollection, studentsCollection, feesCollection) => {
   router.get("/", async (req, res) => {
     const result = await familiesCollection.find().toArray();
     res.send(result);
@@ -10,7 +10,11 @@ module.exports = (familiesCollection, studentsCollection) => {
 
   router.get("/:id", async (req, res) => {
     const id = req.params.id;
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ error: "Invalid ID format" });
+    }
     const query = { _id: new ObjectId(id) };
+
     const result = await familiesCollection.findOne(query);
     res.send(result);
   });
@@ -307,7 +311,11 @@ module.exports = (familiesCollection, studentsCollection) => {
   // Delete family
   router.delete("/:id", async (req, res) => {
     const id = req.params.id;
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ error: "Invalid ID format" });
+    }
     const query = { _id: new ObjectId(id) };
+
     const result = await familiesCollection.deleteOne(query);
     res.send(result);
   });
@@ -316,7 +324,11 @@ module.exports = (familiesCollection, studentsCollection) => {
   router.patch("/update-by-admin/:id", async (req, res) => {
     try {
       const id = req.params.id;
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({ error: "Invalid ID format" });
+      }
       const query = { _id: new ObjectId(id) };
+
       const { name, children, discount, newlyAddedChildren = [] } = req.body;
 
       if (!Array.isArray(children)) {
@@ -349,6 +361,135 @@ module.exports = (familiesCollection, studentsCollection) => {
     } catch (error) {
       console.error("Error updating family:", error);
       res.status(500).send({ error: "Failed to update family" });
+    }
+  });
+  router.get("/with-children/enrolled-fee-summary", async (req, res) => {
+    try {
+      const result = await familiesCollection
+        .aggregate([
+          // 1. Lookup student documents for the children array
+          {
+            $lookup: {
+              from: studentsCollection.collectionName,
+              let: { childUids: "$children" },
+              pipeline: [
+                {
+                  $match: {
+                    $expr: {
+                      $and: [
+                        { $in: ["$uid", "$$childUids"] },
+                        { $in: ["$status", ["enrolled", "hold"]] },
+                      ],
+                    },
+                  },
+                },
+              ],
+              as: "childrenDocs",
+            },
+          },
+          // 2. Lookup all fees documents by familyId (matching families._id or familyId field)
+          {
+            $lookup: {
+              from: feesCollection.collectionName,
+              localField: "_id",
+              foreignField: "familyId",
+
+              as: "feePayments",
+            },
+          },
+          // 3. Optionally, you can add a stage to summarize the fees per family
+          {
+            $addFields: {
+              totalPaidAmount: {
+                $sum: {
+                  $map: {
+                    input: {
+                      $filter: {
+                        input: "$feePayments",
+                        as: "fee",
+                        cond: { $eq: ["$$fee.status", "paid"] },
+                      },
+                    },
+                    as: "paidFee",
+                    in: "$$paidFee.amount",
+                  },
+                },
+              },
+              totalPendingAmount: {
+                $sum: {
+                  $map: {
+                    input: {
+                      $filter: {
+                        input: "$feePayments",
+                        as: "fee",
+                        cond: { $ne: ["$$fee.status", "paid"] },
+                      },
+                    },
+                    as: "pendingFee",
+                    in: "$$pendingFee.amount",
+                  },
+                },
+              },
+            },
+          },
+        ])
+        .toArray();
+
+      res.send(result);
+    } catch (err) {
+      console.error(err);
+      res.status(500).send({ error: "Server error" });
+    }
+  });
+  router.get("/with-children/enrolled/by-id/:id", async (req, res) => {
+    const id = req.params.id;
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ error: "Invalid ID format" });
+    }
+
+    try {
+      const result = await familiesCollection
+        .aggregate([
+          { $match: { _id: new ObjectId(id) } },
+          {
+            $lookup: {
+              from: studentsCollection.collectionName, // actual collection name
+              let: { childUids: "$children" },
+              pipeline: [
+                {
+                  $match: {
+                    $expr: {
+                      $and: [
+                        { $in: ["$uid", "$$childUids"] },
+                        { $eq: ["$status", "enrolled"] }, // filter only approved
+                      ],
+                    },
+                  },
+                },
+              ],
+              as: "childrenDocs",
+            },
+          },
+          // {
+          //   $project: {
+          //     name: 1,
+          //     email: 1,
+          //     children: 1,
+          //     childrenDocs: 1,
+          //     feeChoice: 1,
+          //   },
+          // },
+        ])
+        .toArray();
+
+      if (result.length === 0) {
+        return res.status(404).send({ message: "Family not found" });
+      }
+
+      res.send(result[0]);
+    } catch (err) {
+      console.error(err);
+      res.status(500).send({ error: "Server error" });
     }
   });
 

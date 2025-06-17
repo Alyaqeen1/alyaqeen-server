@@ -141,7 +141,11 @@ async function run() {
     app.use("/users", createUsersRouter(usersCollection));
     app.use(
       "/families",
-      createFamiliesRouter(familiesCollection, studentsCollection)
+      createFamiliesRouter(
+        familiesCollection,
+        studentsCollection,
+        feesCollection
+      )
     );
     app.use(
       "/notifications",
