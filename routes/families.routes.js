@@ -367,7 +367,13 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
     try {
       const result = await familiesCollection
         .aggregate([
-          // 1. Lookup student documents for the children array
+          // 1. Convert _id (ObjectId) to string for matching
+          {
+            $addFields: {
+              familyIdString: { $toString: "$_id" }, // Convert ObjectId to string
+            },
+          },
+          // 2. Lookup student documents for the children array
           {
             $lookup: {
               from: studentsCollection.collectionName,
@@ -387,17 +393,16 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
               as: "childrenDocs",
             },
           },
-          // 2. Lookup all fees documents by familyId (matching families._id or familyId field)
+          // 3. Lookup fees using the string version of familyId
           {
             $lookup: {
               from: feesCollection.collectionName,
-              localField: "_id",
-              foreignField: "familyId",
-
+              localField: "familyIdString", // Use the converted string
+              foreignField: "familyId", // This is a string in feesCollection
               as: "feePayments",
             },
           },
-          // 3. Optionally, you can add a stage to summarize the fees per family
+          // 4. Calculate total paid and pending amounts
           {
             $addFields: {
               totalPaidAmount: {
@@ -432,6 +437,8 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
               },
             },
           },
+          // 5. (Optional) Remove the temporary field
+          { $unset: "familyIdString" },
         ])
         .toArray();
 

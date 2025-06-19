@@ -2,6 +2,7 @@ const express = require("express");
 const { ObjectId } = require("mongodb");
 const sendEmailViaAPI = require("../config/sendAdmissionEmail");
 const sendHoldEmail = require("../config/sendHoldEmail");
+const sendMonthlyFeeEmail = require("../config/sendMonthlyFeeEmail");
 const router = express.Router();
 
 module.exports = (feesCollection, studentsCollection, familiesCollection) => {
@@ -64,6 +65,18 @@ module.exports = (feesCollection, studentsCollection, familiesCollection) => {
 
       // 5. Save fee document
       const result = await feesCollection.insertOne(feesData);
+
+      if (paymentType === "monthly" || paymentType === "monthlyOnHold") {
+        await sendMonthlyFeeEmail({
+          to: familyEmail,
+          parentName: familyName,
+          students: feesData.students,
+          totalAmount: amount,
+          method,
+          date: feesData.timestamp,
+          isOnHold: paymentType === "monthlyOnHold", // 👈 this decides the message & subject
+        });
+      }
 
       // 6. Send Email based on type
       if (paymentType === "admissionOnHold") {

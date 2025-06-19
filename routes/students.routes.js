@@ -66,37 +66,38 @@ module.exports = (studentsCollection, verifyToken, familiesCollection) => {
   });
 
   // Update student status
+
   router.patch("/:id", async (req, res) => {
-    const id = req.params.id;
-    const query = { _id: new ObjectId(id) };
-    const { status } = req.body;
-
-    const updatedDoc = { $set: { status } };
-
     try {
-      // First, fetch the student data
-      const student = await studentsCollection.findOne(query);
+      const { id } = req.params;
+      const { status } = req.body;
 
-      if (!student) {
-        return res.status(404).send({ error: "Student not found." });
+      if (!status) {
+        return res.status(400).json({ error: "Status is required" });
       }
 
-      // Proceed to update the status
-      const result = await studentsCollection.updateOne(query, updatedDoc);
+      const result = await studentsCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { status } }
+      );
+      // 2. Fetch the updated student
+      const student = await studentsCollection.findOne({
+        _id: new ObjectId(id),
+      });
 
-      // ✅ If status is being changed to "approved", trigger the email
+      // 3. If approved, send email
       if (status === "approved") {
         await sendApprovalEmail({
-          to: student.email, // adjust based on your schema
-          name: student?.father?.name, // parent's name
-          studentName: student.name, // student's name
+          to: student?.email,
+          name: student?.family_name,
+          studentName: student?.name,
         });
       }
 
-      res.send(result);
+      res.json(result);
     } catch (error) {
-      console.error("Error updating status:", error);
-      res.status(500).send({ error: "Failed to update student status." });
+      console.error("PATCH /students/:id failed:", error);
+      res.status(500).json({ error: "Internal Server Error" });
     }
   });
 
