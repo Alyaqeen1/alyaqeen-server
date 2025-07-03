@@ -1,5 +1,6 @@
 require("dotenv").config();
 const SibApiV3Sdk = require("sib-api-v3-sdk");
+const sessionMap = require("./sessionMap");
 
 const sendEmailViaAPI = async ({
   to,
@@ -37,7 +38,7 @@ const sendEmailViaAPI = async ({
         department = "-",
         session = "-",
         class: className = "-",
-        time = "-",
+        time,
       } = academic;
 
       return `
@@ -47,7 +48,9 @@ const sendEmailViaAPI = async ({
         <li><strong>Department:</strong> ${department}</li>
         <li><strong>Class:</strong> ${className}</li>
         <li><strong>Session:</strong> ${session}</li>
-        <li><strong>Time:</strong> ${time}</li>
+        <li><strong>Time:</strong> ${
+          sessionMap[time] ? sessionMap[time] : "-"
+        }</li>
         <li><strong>Admission Fee:</strong> €${admissionFee.toFixed(2)}</li>
         <li><strong>First Month Fee:</strong> €${monthly_fee.toFixed(2)}</li>
         <li><strong>Starting Date:</strong> ${formattedStartDate}</li>

@@ -6,7 +6,7 @@ const sendApprovalEmail = require("../config/sendApprovalEmail");
 // Accept the studentsCollection via parameter
 module.exports = (studentsCollection, verifyToken, familiesCollection) => {
   // Get all students
-  router.get("/", verifyToken, async (req, res) => {
+  router.get("/", async (req, res) => {
     const result = await studentsCollection.find().toArray();
     res.send(result);
   });

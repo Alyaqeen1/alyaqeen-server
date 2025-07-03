@@ -15,6 +15,9 @@ const createFamiliesRouter = require("./routes/families.routes");
 const createNotificationsRouter = require("./routes/notifications.routes");
 const createFeesRouter = require("./routes/fees.routes");
 const createTeachersRouter = require("./routes/teachers.routes");
+const createDepartmentsRouter = require("./routes/departments.routes");
+const createClassesRouter = require("./routes/classes.routes");
+const createSubjectsRouter = require("./routes/subjects.routes");
 
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
@@ -76,6 +79,11 @@ async function run() {
     const familiesCollection = client.db("alyaqeenDb").collection("families");
     const feesCollection = client.db("alyaqeenDb").collection("fees");
     const teachersCollection = client.db("alyaqeenDb").collection("teachers");
+    const departmentCollection = client
+      .db("alyaqeenDb")
+      .collection("departments");
+    const classCollection = client.db("alyaqeenDb").collection("classes");
+    const subjectCollection = client.db("alyaqeenDb").collection("subjects");
     const notificationsCollection = client
       .db("alyaqeenDb")
       .collection("notifications");
@@ -158,6 +166,9 @@ async function run() {
       createFeesRouter(feesCollection, studentsCollection, familiesCollection)
     );
     app.use("/teachers", createTeachersRouter(teachersCollection));
+    app.use("/departments", createDepartmentsRouter(departmentCollection));
+    app.use("/classes", createClassesRouter(classCollection));
+    app.use("/subjects", createSubjectsRouter(subjectCollection));
 
     // stripe payment intent
     app.post("/create-payment-intent", async (req, res) => {
@@ -170,71 +181,6 @@ async function run() {
       });
 
       res.send({ clientSecret: paymentIntent.client_secret });
-    });
-
-    app.get("/fees/calculate/:studentId", async (req, res) => {
-      try {
-        const studentId = req.params.studentId;
-        const student = await studentsCollection.findOne({
-          _id: new ObjectId(studentId),
-        });
-        if (!student) {
-          return res.status(404).send({ error: "Student not found" });
-        }
-
-        // Find family by parent email (adjust as per your data structure)
-        const family = await familiesCollection.findOne({
-          email: student.email,
-        });
-        const siblingsCount = family?.children?.length || 0;
-
-        // Admission fee with discount if siblings > threshold
-        let admissionFee = feeStructure?.admissionFee;
-        if (siblingsCount > feeStructure?.discountOnAdmission?.threshold) {
-          admissionFee =
-            admissionFee *
-            (1 - feeStructure?.discountOnAdmission?.percentage / 100);
-        }
-
-        // Determine department and session (weekdays/weekends)
-        const department = student.academic?.department || "Arabic Language"; // fallback if missing
-        const sessionType =
-          student.academic?.session === "weekend" ? "weekends" : "weekdays";
-
-        // Monthly fee lookup
-        const monthlyFee = feeStructure.monthlyFees[department]?.[sessionType];
-        if (!monthlyFee) {
-          return res
-            .status(400)
-            .send({ error: "Invalid department or session type" });
-        }
-
-        // Admission date logic for pro-rated or full fee
-        const admissionDate = new Date(student.startingDate);
-        const dayOfMonth = admissionDate.getDate();
-
-        let firstMonthFee;
-        if (dayOfMonth > 10) {
-          // Pro-rate: example 1/3 of monthly fee
-          firstMonthFee = monthlyFee / 3;
-        } else {
-          firstMonthFee = monthlyFee;
-        }
-
-        // Respond with fees details
-        res.send({
-          admissionFee: admissionFee.toFixed(2),
-          firstMonthFee: firstMonthFee.toFixed(2),
-          fullMonthlyFee: monthlyFee.toFixed(2),
-          message:
-            dayOfMonth > 10
-              ? "Pro-rated fee applied for the first month."
-              : "Full fee applied for the first month.",
-        });
-      } catch (error) {
-        console.error("Error calculating fees:", error);
-        res.status(500).send({ error: "Server error calculating fees" });
-      }
     });
 
     // Connect the client to the server	(optional starting in v4.7)
