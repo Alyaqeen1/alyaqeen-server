@@ -79,11 +79,11 @@ async function run() {
     const familiesCollection = client.db("alyaqeenDb").collection("families");
     const feesCollection = client.db("alyaqeenDb").collection("fees");
     const teachersCollection = client.db("alyaqeenDb").collection("teachers");
-    const departmentCollection = client
+    const departmentsCollection = client
       .db("alyaqeenDb")
       .collection("departments");
-    const classCollection = client.db("alyaqeenDb").collection("classes");
-    const subjectCollection = client.db("alyaqeenDb").collection("subjects");
+    const classesCollection = client.db("alyaqeenDb").collection("classes");
+    const subjectsCollection = client.db("alyaqeenDb").collection("subjects");
     const notificationsCollection = client
       .db("alyaqeenDb")
       .collection("notifications");
@@ -165,10 +165,18 @@ async function run() {
       "/fees",
       createFeesRouter(feesCollection, studentsCollection, familiesCollection)
     );
-    app.use("/teachers", createTeachersRouter(teachersCollection));
-    app.use("/departments", createDepartmentsRouter(departmentCollection));
-    app.use("/classes", createClassesRouter(classCollection));
-    app.use("/subjects", createSubjectsRouter(subjectCollection));
+    app.use(
+      "/teachers",
+      createTeachersRouter(
+        teachersCollection,
+        departmentsCollection,
+        classesCollection,
+        subjectsCollection
+      )
+    );
+    app.use("/departments", createDepartmentsRouter(departmentsCollection));
+    app.use("/classes", createClassesRouter(classesCollection));
+    app.use("/subjects", createSubjectsRouter(subjectsCollection));
 
     // stripe payment intent
     app.post("/create-payment-intent", async (req, res) => {
