@@ -5,36 +5,124 @@ const sendApprovalEmail = require("../config/sendApprovalEmail");
 
 // Accept the studentsCollection via parameter
 module.exports = (studentsCollection, verifyToken, familiesCollection) => {
-  // Get all students
+  // 🔁 Reusable aggregation pipeline function
+  const buildStudentAggregationPipeline = (match = {}) => [
+    { $match: match },
+    {
+      $addFields: {
+        deptObjectId: {
+          $cond: [
+            { $ne: ["$academic.dept_id", null] },
+            { $toObjectId: "$academic.dept_id" },
+            null,
+          ],
+        },
+        classObjectId: {
+          $cond: [
+            { $ne: ["$academic.class_id", null] },
+            { $toObjectId: "$academic.class_id" },
+            null,
+          ],
+        },
+      },
+    },
+    {
+      $lookup: {
+        from: "departments",
+        localField: "deptObjectId",
+        foreignField: "_id",
+        as: "departmentInfo",
+      },
+    },
+    {
+      $lookup: {
+        from: "classes",
+        localField: "classObjectId",
+        foreignField: "_id",
+        as: "classInfo",
+      },
+    },
+    {
+      $addFields: {
+        "academic.department": {
+          $arrayElemAt: ["$departmentInfo.dept_name", 0],
+        },
+        "academic.class": {
+          $arrayElemAt: ["$classInfo.class_name", 0],
+        },
+      },
+    },
+    {
+      $project: {
+        departmentInfo: 0,
+        classInfo: 0,
+        deptObjectId: 0,
+        classObjectId: 0,
+      },
+    },
+  ];
+
+  // 🔹 GET: All students with department/class names
   router.get("/", async (req, res) => {
-    const result = await studentsCollection.find().toArray();
-    res.send(result);
-  });
-  // ✅ 2. Get students excluding 'enrolled' and 'hold' statuses
-  router.get("/without-enrolled", verifyToken, async (req, res) => {
     try {
       const result = await studentsCollection
-        .find({ status: { $nin: ["enrolled", "hold"] } })
+        .aggregate(buildStudentAggregationPipeline())
         .toArray();
       res.send(result);
     } catch (error) {
-      console.error("Error fetching filtered students:", error);
-      res.status(500).send({ error: "Failed to fetch students." });
+      console.error("Error fetching all students:", error);
+      res.status(500).send({ error: "Failed to fetch students" });
     }
   });
-  router.get("/get-by-status/:status", verifyToken, async (req, res) => {
-    const status = req.params.status;
-    const query = { status };
-    const result = await studentsCollection.find(query).toArray();
-    res.send(result);
+
+  // 🔹 GET: Students without enrolled or hold status
+  router.get("/without-enrolled", verifyToken, async (req, res) => {
+    try {
+      const result = await studentsCollection
+        .aggregate(
+          buildStudentAggregationPipeline({
+            status: { $nin: ["enrolled", "hold"] },
+          })
+        )
+        .toArray();
+      res.send(result);
+    } catch (error) {
+      console.error("Error fetching students without enrolled:", error);
+      res.status(500).send({ error: "Failed to fetch students" });
+    }
   });
 
-  // Get single student
+  // 🔹 GET: Students by specific status
+  router.get("/get-by-status/:status", verifyToken, async (req, res) => {
+    const status = req.params.status;
+    try {
+      const result = await studentsCollection
+        .aggregate(buildStudentAggregationPipeline({ status }))
+        .toArray();
+      res.send(result);
+    } catch (error) {
+      console.error("Error fetching students by status:", error);
+      res.status(500).send({ error: "Failed to fetch students" });
+    }
+  });
+
+  // 🔹 GET: Single student by ID (with department/class info)
   router.get("/:id", verifyToken, async (req, res) => {
     const id = req.params.id;
-    const query = { _id: new ObjectId(id) };
-    const student = await studentsCollection.findOne(query);
-    res.send(student);
+    try {
+      const student = await studentsCollection
+        .aggregate(buildStudentAggregationPipeline({ _id: new ObjectId(id) }))
+        .toArray();
+
+      if (!student.length) {
+        return res.status(404).send({ message: "Student not found" });
+      }
+
+      res.send(student[0]);
+    } catch (error) {
+      console.error("Error fetching single student:", error);
+      res.status(500).send({ error: "Failed to fetch student" });
+    }
   });
 
   // Create new student
