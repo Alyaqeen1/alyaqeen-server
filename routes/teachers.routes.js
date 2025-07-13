@@ -36,6 +36,16 @@ module.exports = (
       res.status(404).send({ message: "Teachers not found" });
     }
   });
+  router.get("/by-email/:email", async (req, res) => {
+    const email = req.params.email;
+    const query = { email };
+    const result = await teachersCollection.findOne(query);
+    if (result) {
+      res.send(result);
+    } else {
+      res.status(404).send({ message: "Teachers not found" });
+    }
+  });
   router.get("/by-activity/:activity", async (req, res) => {
     const activity = req.params.activity;
 

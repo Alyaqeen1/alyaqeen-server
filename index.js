@@ -19,6 +19,8 @@ const createDepartmentsRouter = require("./routes/departments.routes");
 const createClassesRouter = require("./routes/classes.routes");
 const createSubjectsRouter = require("./routes/subjects.routes");
 const createPrayerTimesRouter = require("./routes/prayer_times.routes");
+const createGroupsRouter = require("./routes/groups.routes");
+const createAttendancesRouter = require("./routes/attendances.routes");
 
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
@@ -88,6 +90,10 @@ async function run() {
       .collection("departments");
     const classesCollection = client.db("alyaqeenDb").collection("classes");
     const subjectsCollection = client.db("alyaqeenDb").collection("subjects");
+    const groupsCollection = client.db("alyaqeenDb").collection("groups");
+    const attendancesCollection = client
+      .db("alyaqeenDb")
+      .collection("attendances");
     const notificationsCollection = client
       .db("alyaqeenDb")
       .collection("notifications");
@@ -150,7 +156,12 @@ async function run() {
 
     app.use(
       "/students",
-      createStudentsRouter(studentsCollection, verifyToken, familiesCollection)
+      createStudentsRouter(
+        studentsCollection,
+        verifyToken,
+        familiesCollection,
+        groupsCollection
+      )
     );
     app.use("/users", createUsersRouter(usersCollection));
     app.use(
@@ -182,6 +193,8 @@ async function run() {
     app.use("/classes", createClassesRouter(classesCollection));
     app.use("/subjects", createSubjectsRouter(subjectsCollection));
     app.use("/prayer-times", createPrayerTimesRouter(prayerTimesCollection));
+    app.use("/groups", createGroupsRouter(groupsCollection));
+    app.use("/attendances", createAttendancesRouter(attendancesCollection));
 
     // stripe payment intent
     app.post("/create-payment-intent", async (req, res) => {

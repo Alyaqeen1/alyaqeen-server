@@ -4,7 +4,12 @@ const { ObjectId } = require("mongodb");
 const sendApprovalEmail = require("../config/sendApprovalEmail");
 
 // Accept the studentsCollection via parameter
-module.exports = (studentsCollection, verifyToken, familiesCollection) => {
+module.exports = (
+  studentsCollection,
+  verifyToken,
+  familiesCollection,
+  groupsCollection
+) => {
   // 🔁 Reusable aggregation pipeline function
   const buildStudentAggregationPipeline = (match = {}) => [
     { $match: match },
@@ -107,7 +112,7 @@ module.exports = (studentsCollection, verifyToken, familiesCollection) => {
   });
 
   // 🔹 GET: Single student by ID (with department/class info)
-  router.get("/:id", verifyToken, async (req, res) => {
+  router.get("/by-id/:id", verifyToken, async (req, res) => {
     const id = req.params.id;
     try {
       const student = await studentsCollection
@@ -122,6 +127,40 @@ module.exports = (studentsCollection, verifyToken, familiesCollection) => {
     } catch (error) {
       console.error("Error fetching single student:", error);
       res.status(500).send({ error: "Failed to fetch student" });
+    }
+  });
+
+  router.get("/by-group/:groupId", async (req, res) => {
+    try {
+      const groupId = req.params.groupId;
+      const group = await groupsCollection.findOne({
+        _id: new ObjectId(groupId),
+      });
+
+      if (!group) return res.status(404).send({ message: "Group not found" });
+
+      const pipeline = [
+        {
+          $match: {
+            $expr: {
+              $and: [
+                { $eq: [{ $toString: "$academic.dept_id" }, group.dept_id] },
+                { $eq: [{ $toString: "$academic.class_id" }, group.class_id] },
+                { $eq: ["$academic.session", group.session] },
+                { $eq: ["$academic.time", group.time] },
+                { $eq: ["$status", "approved"] },
+              ],
+            },
+          },
+        },
+        ...buildStudentAggregationPipeline(), // no extra $match needed here
+      ];
+
+      const students = await studentsCollection.aggregate(pipeline).toArray();
+      res.send(students);
+    } catch (error) {
+      console.error("Error fetching students by group:", error);
+      res.status(500).send({ error: "Internal Server Error" });
     }
   });
 
