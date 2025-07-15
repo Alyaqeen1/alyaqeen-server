@@ -160,6 +160,7 @@ async function run() {
         studentsCollection,
         verifyToken,
         familiesCollection,
+        classesCollection,
         groupsCollection
       )
     );

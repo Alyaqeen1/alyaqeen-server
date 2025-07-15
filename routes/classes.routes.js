@@ -7,6 +7,24 @@ module.exports = (classesCollection) => {
     const result = await classesCollection.find().toArray();
     res.send(result);
   });
+  router.get("/find-one", async (req, res) => {
+    const { dept_id, class_id, session, time } = req.query;
+    try {
+      const classData = await classesCollection.findOne({
+        _id: new ObjectId(class_id),
+        dept_id,
+        session,
+        session_time: time,
+      });
+
+      if (!classData)
+        return res.status(404).send({ message: "Group not found" });
+
+      res.send(classData);
+    } catch (error) {
+      res.status(500).send({ error: "Failed to fetch class" });
+    }
+  });
   router.get("/:id", async (req, res) => {
     const id = req.params.id;
     const query = { _id: new ObjectId(id) };

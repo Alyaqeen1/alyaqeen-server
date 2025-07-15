@@ -8,6 +8,7 @@ module.exports = (
   studentsCollection,
   verifyToken,
   familiesCollection,
+  classesCollection,
   groupsCollection
 ) => {
   // 🔁 Reusable aggregation pipeline function
@@ -130,36 +131,46 @@ module.exports = (
     }
   });
 
-  router.get("/by-group/:groupId", async (req, res) => {
+  // GET /students/by-group/:classId  (classId comes from classes collection)
+
+  router.get("/by-group/:classId", async (req, res) => {
     try {
-      const groupId = req.params.groupId;
-      const group = await groupsCollection.findOne({
-        _id: new ObjectId(groupId),
+      const { classId } = req.params;
+
+      // 1️⃣  Sanity‑check the ID
+      if (!ObjectId.isValid(classId))
+        return res.status(400).send({ message: "Invalid class ID" });
+
+      // 2️⃣  Fetch the class we want to match against
+      const cls = await classesCollection.findOne({
+        _id: new ObjectId(classId),
       });
+      console.log(cls);
 
-      if (!group) return res.status(404).send({ message: "Group not found" });
+      if (!cls) return res.status(404).send({ message: "Class not found" });
 
-      const pipeline = [
-        {
-          $match: {
-            $expr: {
-              $and: [
-                { $eq: [{ $toString: "$academic.dept_id" }, group.dept_id] },
-                { $eq: [{ $toString: "$academic.class_id" }, group.class_id] },
-                { $eq: ["$academic.session", group.session] },
-                { $eq: ["$academic.time", group.time] },
-                { $eq: ["$status", "approved"] },
-              ],
-            },
+      // 3️⃣  Build the aggregation pipeline
+      const matchStage = {
+        $match: {
+          $expr: {
+            $and: [
+              { $eq: ["$academic.dept_id", cls.dept_id] }, // same dept
+              { $eq: ["$academic.class_id", cls._id.toString()] }, // same class
+              { $eq: ["$academic.session", cls.session] }, // same session
+              { $eq: ["$academic.time", cls.session_time] }, // same time
+              { $eq: ["$status", "approved"] }, // only approved students
+            ],
           },
         },
-        ...buildStudentAggregationPipeline(), // no extra $match needed here
-      ];
+      };
 
-      const students = await studentsCollection.aggregate(pipeline).toArray();
+      const students = await studentsCollection
+        .aggregate([matchStage, ...buildStudentAggregationPipeline()])
+        .toArray();
+
       res.send(students);
-    } catch (error) {
-      console.error("Error fetching students by group:", error);
+    } catch (err) {
+      console.error("Error in /by-group/:classId →", err);
       res.status(500).send({ error: "Internal Server Error" });
     }
   });
