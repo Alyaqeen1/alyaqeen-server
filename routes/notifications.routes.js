@@ -9,9 +9,13 @@ module.exports = (notificationsCollection, verifyToken) => {
     res.send(result);
   });
 
-  router.get("/", verifyToken, async (req, res) => {
-    const result = await notificationsCollection.find().toArray();
-    res.send(result);
+  router.get("/notifications", async (req, res) => {
+    const notifications = await notificationsCollection
+      .find({})
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    res.send(notifications);
   });
 
   router.get("/unread", verifyToken, async (req, res) => {
