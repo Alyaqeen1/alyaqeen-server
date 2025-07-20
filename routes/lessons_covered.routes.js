@@ -71,26 +71,20 @@ module.exports = (lessonsCoveredCollection) => {
   router.get("/monthly-summary", async (req, res) => {
     try {
       const { year, month } = req.query;
-
-      // Create match conditions - use year as-is without conversion
-      const matchConditions = {};
-      if (year) matchConditions.year = year; // Keep as string if that's how it's stored
-      if (month) matchConditions.month = month;
+      const matchConditions = {
+        $and: [
+          {
+            $or: [
+              { monthly_publish: false },
+              { monthly_publish: { $exists: false } },
+            ],
+          },
+          ...(year ? [{ year }] : []),
+          ...(month ? [{ month }] : []),
+        ],
+      };
 
       const pipeline = [
-        // Optional debug stage to check data before filtering
-        /* {
-        $limit: 1,
-        $project: {
-          debug: {
-            storedYear: "$year",
-            storedMonth: "$month",
-            yearType: { $type: "$year" },
-            monthType: { $type: "$month" }
-          }
-        }
-      }, */
-
         // Add initial match stage if filters are provided
         ...(Object.keys(matchConditions).length
           ? [{ $match: matchConditions }]
@@ -107,20 +101,22 @@ module.exports = (lessonsCoveredCollection) => {
           },
         },
 
-        // Group by student, month, and year (using the stored fields)
+        // Group by student, month, and year
         {
           $group: {
             _id: {
               student_id: "$student_id",
               month: "$month",
-              year: "$year", // Using the stored year field directly
+              year: "$year",
+              subject_id: "$subject_id",
             },
             entries: {
               $push: {
                 time_of_month: "$time_of_month",
-                qaidahPages: { $toInt: "$qaidahPages" },
-                duasSurahs: { $toInt: "$duasSurahs" },
-                islamicStudiesPages: { $toInt: "$islamicStudiesPages" },
+                qaidahPages: "$qaidahPages",
+                duasSurahs: "$duasSurahs",
+                islamicStudiesPages: "$islamicStudiesPages",
+                original_id: "$_id", // Preserve original document ID
               },
             },
             book_names: { $addToSet: "$book_name" },
@@ -143,6 +139,7 @@ module.exports = (lessonsCoveredCollection) => {
             subject_id: 1,
             teacher_id: 1,
             department_id: 1,
+            entries: 1,
             beginning: {
               $arrayElemAt: [
                 {
@@ -177,7 +174,7 @@ module.exports = (lessonsCoveredCollection) => {
           },
         },
 
-        // Calculate progress (from 0 if no beginning exists)
+        // Calculate progress and collect document IDs
         {
           $project: {
             student_id: 1,
@@ -190,24 +187,41 @@ module.exports = (lessonsCoveredCollection) => {
             department_id: 1,
             qaidahProgress: {
               $subtract: [
-                "$ending.qaidahPages",
-                { $ifNull: ["$beginning.qaidahPages", 0] },
+                { $toInt: "$ending.qaidahPages" },
+                { $ifNull: [{ $toInt: "$beginning.qaidahPages" }, 0] },
               ],
             },
             duasSurahsProgress: {
               $subtract: [
-                "$ending.duasSurahs",
-                { $ifNull: ["$beginning.duasSurahs", 0] },
+                { $toInt: "$ending.duasSurahs" },
+                { $ifNull: [{ $toInt: "$beginning.duasSurahs" }, 0] },
               ],
             },
             islamicStudiesProgress: {
               $subtract: [
-                "$ending.islamicStudiesPages",
-                { $ifNull: ["$beginning.islamicStudiesPages", 0] },
+                { $toInt: "$ending.islamicStudiesPages" },
+                { $ifNull: [{ $toInt: "$beginning.islamicStudiesPages" }, 0] },
               ],
             },
             hasBeginning: { $ne: ["$beginning", null] },
             hasEnding: true,
+            // Only include ending ID if no beginning exists
+            processedDocumentIds: {
+              $cond: [
+                { $not: ["$beginning"] },
+                [{ $toString: "$ending.original_id" }],
+                {
+                  $filter: {
+                    input: [
+                      { $toString: "$beginning.original_id" },
+                      { $toString: "$ending.original_id" },
+                    ],
+                    as: "id",
+                    cond: { $ne: ["$$id", null] },
+                  },
+                },
+              ],
+            },
           },
         },
 
@@ -251,6 +265,7 @@ module.exports = (lessonsCoveredCollection) => {
           $project: {
             student_id: 1,
             student_name: "$student_info.name",
+            processedDocumentIds: 1,
             teacher_id: 1,
             month: 1,
             year: 1,
@@ -269,7 +284,6 @@ module.exports = (lessonsCoveredCollection) => {
       const result = await lessonsCoveredCollection
         .aggregate(pipeline)
         .toArray();
-
       res.send(result);
     } catch (error) {
       console.error("Error in monthly-summary:", error);
@@ -290,13 +304,16 @@ module.exports = (lessonsCoveredCollection) => {
       }
 
       const pipeline = [
-        // Match documents for the specific year
         {
           $match: {
-            year: year,
+            year,
+            $or: [
+              { yearly_publish: false },
+              { yearly_publish: { $exists: false } },
+            ],
           },
         },
-        // Convert string IDs to ObjectId
+
         {
           $addFields: {
             student_id: { $toObjectId: "$student_id" },
@@ -305,7 +322,6 @@ module.exports = (lessonsCoveredCollection) => {
             teacher_id: { $toObjectId: "$teacher_id" },
           },
         },
-        // First group by student and month to separate beginning/ending entries
         {
           $group: {
             _id: {
@@ -314,6 +330,7 @@ module.exports = (lessonsCoveredCollection) => {
               class_id: "$class_id",
               subject_id: "$subject_id",
             },
+            original_ids: { $addToSet: "$_id" },
             entries: {
               $push: {
                 time_of_month: "$time_of_month",
@@ -325,7 +342,6 @@ module.exports = (lessonsCoveredCollection) => {
             book_names: { $addToSet: "$book_name" },
           },
         },
-        // Separate beginning and ending entries for each month
         {
           $project: {
             _id: 0,
@@ -334,6 +350,7 @@ module.exports = (lessonsCoveredCollection) => {
             class_id: "$_id.class_id",
             subject_id: "$_id.subject_id",
             book_names: 1,
+            original_ids: 1,
             beginning: {
               $arrayElemAt: [
                 {
@@ -360,14 +377,11 @@ module.exports = (lessonsCoveredCollection) => {
             },
           },
         },
-        // Only include months that have ending (may or may not have beginning)
         {
           $match: {
             ending: { $ne: null },
           },
         },
-
-        // Calculate monthly progress (from 0 if no beginning exists)
         {
           $project: {
             student_id: 1,
@@ -375,6 +389,7 @@ module.exports = (lessonsCoveredCollection) => {
             class_id: 1,
             subject_id: 1,
             book_names: 1,
+            original_ids: 1,
             qaidahProgress: {
               $subtract: [
                 "$ending.qaidahPages",
@@ -396,7 +411,6 @@ module.exports = (lessonsCoveredCollection) => {
             hasBeginning: { $ne: ["$beginning", null] },
           },
         },
-        // Now group to calculate yearly totals per student
         {
           $group: {
             _id: {
@@ -404,36 +418,58 @@ module.exports = (lessonsCoveredCollection) => {
               class_id: "$class_id",
               subject_id: "$subject_id",
             },
-            book_names: { $addToSet: "$book_name" },
+            book_names: { $addToSet: "$book_names" },
             qaidahYearlyProgress: { $sum: "$qaidahProgress" },
             duasSurahsYearlyProgress: { $sum: "$duasSurahsProgress" },
             islamicStudiesYearlyProgress: { $sum: "$islamicStudiesProgress" },
-            months_with_ending: { $sum: 1 }, // Total months with ending
+            months_with_ending: { $sum: 1 },
             months_with_both: {
               $sum: {
                 $cond: [{ $eq: ["$hasBeginning", true] }, 1, 0],
               },
             },
+            allOriginalIds: { $push: "$original_ids" }, // array of arrays
           },
         },
-        // Add year and format output
+        {
+          $addFields: {
+            processedDocumentIds: {
+              $map: {
+                input: {
+                  $reduce: {
+                    input: "$allOriginalIds",
+                    initialValue: [],
+                    in: { $concatArrays: ["$$value", "$$this"] },
+                  },
+                },
+                as: "id",
+                in: { $toString: "$$id" },
+              },
+            },
+          },
+        },
         {
           $project: {
             _id: 0,
             student_id: "$_id.student_id",
             class_id: "$_id.class_id",
             subject_id: "$_id.subject_id",
-            book_names: 1,
-            year: 1, // Final year field
+            book_names: {
+              $reduce: {
+                input: "$book_names",
+                initialValue: [],
+                in: { $setUnion: ["$$value", "$$this"] },
+              },
+            },
             qaidahYearlyProgress: 1,
             duasSurahsYearlyProgress: 1,
             islamicStudiesYearlyProgress: 1,
             months_with_ending: 1,
             months_with_both: 1,
+            processedDocumentIds: 1,
             year: parseInt(year),
           },
         },
-        // Lookup related data
         {
           $lookup: {
             from: "students",
@@ -462,29 +498,19 @@ module.exports = (lessonsCoveredCollection) => {
         },
         { $unwind: "$subject_info" },
         {
-          $addFields: {
-            year: parseInt(year),
-          },
-        },
-
-        // Final projection
-        {
           $project: {
-            _id: 0,
-            student_id: "$_id.student_id",
-            class_id: "$_id.class_id",
-            subject_id: "$_id.subject_id",
+            student_id: 1,
+            student_name: "$student_info.name",
+            class_name: "$class_info.class_name",
+            subject_name: "$subject_info.subject_name",
             book_names: 1,
             qaidahYearlyProgress: 1,
             duasSurahsYearlyProgress: 1,
             islamicStudiesYearlyProgress: 1,
             months_with_ending: 1,
             months_with_both: 1,
-          },
-        },
-        {
-          $addFields: {
-            year: parseInt(year),
+            processedDocumentIds: 1,
+            year: { $literal: parseInt(year) }, // ✅ This fixes the missing field
           },
         },
       ];
@@ -505,35 +531,22 @@ module.exports = (lessonsCoveredCollection) => {
       const { teacher_id } = req.params;
       const { month, year } = req.query;
 
-      // Create match conditions - use year as-is without conversion
+      // Create match conditions - always filter by teacher_id and monthly_publish: false
       const matchConditions = {
-        teacher_id: teacher_id, // Always filter by teacher_id
+        teacher_id: teacher_id,
+        monthly_publish: false,
       };
 
-      if (year) matchConditions.year = year; // Keep as string if that's how it's stored
+      if (year) matchConditions.year = year;
       if (month) matchConditions.month = month;
 
       const pipeline = [
-        // Optional debug stage to check data before filtering
-        /* {
-        $limit: 1,
-        $project: {
-          debug: {
-            storedYear: "$year",
-            storedMonth: "$month",
-            yearType: { $type: "$year" },
-            monthType: { $type: "$month" },
-            teacher_id: 1
-          }
-        }
-      }, */
-
-        // Add initial match stage with teacher_id and optional filters
+        // Initial match stage with all conditions
         {
           $match: matchConditions,
         },
 
-        // Convert string IDs to ObjectId
+        // Convert string IDs to ObjectId and preserve original _id
         {
           $addFields: {
             student_id: { $toObjectId: "$student_id" },
@@ -541,23 +554,26 @@ module.exports = (lessonsCoveredCollection) => {
             subject_id: { $toObjectId: "$subject_id" },
             teacher_id: { $toObjectId: "$teacher_id" },
             department_id: { $toObjectId: "$department_id" },
+            original_id: { $toString: "$_id" }, // Preserve original document ID
           },
         },
 
-        // Group by student, month, and year (using the stored fields)
+        // Group by student, month, and year
         {
           $group: {
             _id: {
               student_id: "$student_id",
               month: "$month",
-              year: "$year", // Using the stored year field directly
+              year: "$year",
             },
             entries: {
               $push: {
                 time_of_month: "$time_of_month",
-                qaidahPages: { $toInt: "$qaidahPages" },
-                duasSurahs: { $toInt: "$duasSurahs" },
-                islamicStudiesPages: { $toInt: "$islamicStudiesPages" },
+                qaidahPages: "$qaidahPages",
+                duasSurahs: "$duasSurahs",
+                islamicStudiesPages: "$islamicStudiesPages",
+                original_id: "$original_id",
+                monthly_publish: "$monthly_publish",
               },
             },
             book_names: { $addToSet: "$book_name" },
@@ -565,6 +581,14 @@ module.exports = (lessonsCoveredCollection) => {
             subject_id: { $first: "$subject_id" },
             teacher_id: { $first: "$teacher_id" },
             department_id: { $first: "$department_id" },
+            all_published: { $min: "$monthly_publish" }, // Check if any entry is unpublished
+          },
+        },
+
+        // Ensure we only include groups with unpublished entries
+        {
+          $match: {
+            all_published: false,
           },
         },
 
@@ -580,6 +604,7 @@ module.exports = (lessonsCoveredCollection) => {
             subject_id: 1,
             teacher_id: 1,
             department_id: 1,
+            entries: 1,
             beginning: {
               $arrayElemAt: [
                 {
@@ -614,7 +639,7 @@ module.exports = (lessonsCoveredCollection) => {
           },
         },
 
-        // Calculate progress (from 0 if no beginning exists)
+        // Calculate progress and collect document IDs
         {
           $project: {
             student_id: 1,
@@ -627,24 +652,42 @@ module.exports = (lessonsCoveredCollection) => {
             department_id: 1,
             qaidahProgress: {
               $subtract: [
-                "$ending.qaidahPages",
-                { $ifNull: ["$beginning.qaidahPages", 0] },
+                { $toInt: "$ending.qaidahPages" },
+                { $ifNull: [{ $toInt: "$beginning.qaidahPages" }, 0] },
               ],
             },
             duasSurahsProgress: {
               $subtract: [
-                "$ending.duasSurahs",
-                { $ifNull: ["$beginning.duasSurahs", 0] },
+                { $toInt: "$ending.duasSurahs" },
+                { $ifNull: [{ $toInt: "$beginning.duasSurahs" }, 0] },
               ],
             },
             islamicStudiesProgress: {
               $subtract: [
-                "$ending.islamicStudiesPages",
-                { $ifNull: ["$beginning.islamicStudiesPages", 0] },
+                { $toInt: "$ending.islamicStudiesPages" },
+                { $ifNull: [{ $toInt: "$beginning.islamicStudiesPages" }, 0] },
               ],
             },
             hasBeginning: { $ne: ["$beginning", null] },
             hasEnding: true,
+            // Collect document IDs properly
+            processedDocumentIds: {
+              $cond: [
+                { $not: ["$beginning"] },
+                [{ $toString: "$ending.original_id" }],
+                {
+                  $filter: {
+                    input: [
+                      { $toString: "$beginning.original_id" },
+                      { $toString: "$ending.original_id" },
+                    ],
+                    as: "id",
+                    cond: { $ne: ["$$id", null] },
+                  },
+                },
+              ],
+            },
+            isUnpublished: { $literal: true }, // Mark as unpublished
           },
         },
 
@@ -658,10 +701,7 @@ module.exports = (lessonsCoveredCollection) => {
           },
         },
         {
-          $unwind: {
-            path: "$student_info",
-            preserveNullAndEmptyArrays: true,
-          },
+          $unwind: { path: "$student_info", preserveNullAndEmptyArrays: true },
         },
 
         {
@@ -672,12 +712,7 @@ module.exports = (lessonsCoveredCollection) => {
             as: "class_info",
           },
         },
-        {
-          $unwind: {
-            path: "$class_info",
-            preserveNullAndEmptyArrays: true,
-          },
-        },
+        { $unwind: { path: "$class_info", preserveNullAndEmptyArrays: true } },
 
         {
           $lookup: {
@@ -688,10 +723,7 @@ module.exports = (lessonsCoveredCollection) => {
           },
         },
         {
-          $unwind: {
-            path: "$subject_info",
-            preserveNullAndEmptyArrays: true,
-          },
+          $unwind: { path: "$subject_info", preserveNullAndEmptyArrays: true },
         },
 
         // Final projection
@@ -699,6 +731,7 @@ module.exports = (lessonsCoveredCollection) => {
           $project: {
             student_id: 1,
             student_name: "$student_info.name",
+            processedDocumentIds: 1,
             teacher_id: 1,
             month: 1,
             year: 1,
@@ -710,6 +743,7 @@ module.exports = (lessonsCoveredCollection) => {
             islamicStudiesProgress: 1,
             hasBeginning: 1,
             hasEnding: 1,
+            isUnpublished: 1,
           },
         },
       ];
@@ -717,12 +751,7 @@ module.exports = (lessonsCoveredCollection) => {
       const result = await lessonsCoveredCollection
         .aggregate(pipeline)
         .toArray();
-
-      if (result.length === 0) {
-        return res.status(200).send([]);
-      }
-
-      res.send(result);
+      res.send(result.length > 0 ? result : []);
     } catch (error) {
       console.error("Error in teacher monthly-summary:", error);
       res.status(500).send({
@@ -742,14 +771,16 @@ module.exports = (lessonsCoveredCollection) => {
       }
 
       const pipeline = [
-        // Match documents for the specific teacher and year
         {
           $match: {
             teacher_id: teacher_id,
             year: year,
+            $or: [
+              { yearly_publish: { $exists: false } },
+              { yearly_publish: false },
+            ],
           },
         },
-        // Convert string IDs to ObjectId
         {
           $addFields: {
             student_id: { $toObjectId: "$student_id" },
@@ -758,7 +789,6 @@ module.exports = (lessonsCoveredCollection) => {
             teacher_id: { $toObjectId: "$teacher_id" },
           },
         },
-        // First group by month to separate beginning/ending entries
         {
           $group: {
             _id: {
@@ -776,9 +806,235 @@ module.exports = (lessonsCoveredCollection) => {
               },
             },
             book_names: { $addToSet: "$book_name" },
+            document_ids: { $addToSet: "$_id" }, // collect unpublished document IDs
           },
         },
-        // Separate beginning and ending entries for each month
+        {
+          $project: {
+            _id: 0,
+            student_id: "$_id.student_id",
+            month: "$_id.month",
+            class_id: "$_id.class_id",
+            subject_id: "$_id.subject_id",
+            book_names: 1,
+            document_ids: 1,
+            beginning: {
+              $arrayElemAt: [
+                {
+                  $filter: {
+                    input: "$entries",
+                    as: "entry",
+                    cond: { $eq: ["$$entry.time_of_month", "beginning"] },
+                  },
+                },
+                0,
+              ],
+            },
+            ending: {
+              $arrayElemAt: [
+                {
+                  $filter: {
+                    input: "$entries",
+                    as: "entry",
+                    cond: { $eq: ["$$entry.time_of_month", "ending"] },
+                  },
+                },
+                0,
+              ],
+            },
+          },
+        },
+        {
+          $match: {
+            ending: { $ne: null },
+          },
+        },
+        {
+          $project: {
+            student_id: 1,
+            month: 1,
+            class_id: 1,
+            subject_id: 1,
+            book_names: 1,
+            document_ids: 1,
+            qaidahProgress: {
+              $subtract: [
+                "$ending.qaidahPages",
+                { $ifNull: ["$beginning.qaidahPages", 0] },
+              ],
+            },
+            duasSurahsProgress: {
+              $subtract: [
+                "$ending.duasSurahs",
+                { $ifNull: ["$beginning.duasSurahs", 0] },
+              ],
+            },
+            islamicStudiesProgress: {
+              $subtract: [
+                "$ending.islamicStudiesPages",
+                { $ifNull: ["$beginning.islamicStudiesPages", 0] },
+              ],
+            },
+            hasBeginning: { $ne: ["$beginning", null] },
+          },
+        },
+        {
+          $group: {
+            _id: {
+              student_id: "$student_id",
+              class_id: "$class_id",
+              subject_id: "$subject_id",
+            },
+            book_names: { $addToSet: "$book_names" },
+            processedDocumentIds: { $addToSet: "$document_ids" },
+            qaidahYearlyProgress: { $sum: "$qaidahProgress" },
+            duasSurahsYearlyProgress: { $sum: "$duasSurahsProgress" },
+            islamicStudiesYearlyProgress: { $sum: "$islamicStudiesProgress" },
+            months_with_ending: { $sum: 1 },
+            months_with_both: {
+              $sum: {
+                $cond: [{ $eq: ["$hasBeginning", true] }, 1, 0],
+              },
+            },
+          },
+        },
+        {
+          $project: {
+            _id: 0,
+            student_id: "$_id.student_id",
+            class_id: "$_id.class_id",
+            subject_id: "$_id.subject_id",
+            book_names: {
+              $reduce: {
+                input: "$book_names",
+                initialValue: [],
+                in: { $setUnion: ["$$value", "$$this"] }, // flatten nested arrays
+              },
+            },
+            processedDocumentIds: {
+              $reduce: {
+                input: "$processedDocumentIds",
+                initialValue: [],
+                in: { $setUnion: ["$$value", "$$this"] },
+              },
+            },
+            qaidahYearlyProgress: 1,
+            duasSurahsYearlyProgress: 1,
+            islamicStudiesYearlyProgress: 1,
+            months_with_ending: 1,
+            months_with_both: 1,
+            year: parseInt(year),
+          },
+        },
+        {
+          $lookup: {
+            from: "students",
+            localField: "student_id",
+            foreignField: "_id",
+            as: "student_info",
+          },
+        },
+        { $unwind: "$student_info" },
+        {
+          $lookup: {
+            from: "classes",
+            localField: "class_id",
+            foreignField: "_id",
+            as: "class_info",
+          },
+        },
+        { $unwind: "$class_info" },
+        {
+          $lookup: {
+            from: "subjects",
+            localField: "subject_id",
+            foreignField: "_id",
+            as: "subject_info",
+          },
+        },
+        { $unwind: "$subject_info" },
+        {
+          $project: {
+            student_id: 1,
+            student_name: "$student_info.name",
+            year: 1,
+            processedDocumentIds: 1,
+            book_names: 1,
+            class_name: "$class_info.class_name",
+            subject_name: "$subject_info.subject_name",
+            qaidahYearlyProgress: 1,
+            duasSurahsYearlyProgress: 1,
+            islamicStudiesYearlyProgress: 1,
+            months_with_ending: 1,
+            months_with_both: 1,
+            year: { $literal: parseInt(year) }, // ✅ This fixes the missing field
+          },
+        },
+      ];
+
+      const result = await lessonsCoveredCollection
+        .aggregate(pipeline)
+        .toArray();
+
+      return res.status(200).json(Array.isArray(result) ? result : []);
+    } catch (error) {
+      console.error("Error:", error);
+      return res.status(200).json([]);
+    }
+  });
+
+  // student monthly summary
+  router.get("/student-monthly-summary", async (req, res) => {
+    try {
+      const { month, year, student_ids } = req.query;
+
+      if (!year || !student_ids) {
+        return res.status(400).send({
+          error: "year and student_ids parameters are required",
+        });
+      }
+
+      // Convert comma-separated string to array
+      const studentIdsArray = student_ids.split(",");
+      const matchStage = {
+        $match: {
+          student_id: { $in: studentIdsArray },
+          year: year,
+          monthly_publish: true,
+          ...(month && { month }), // Only include month filter if it's provided
+        },
+      };
+
+      const pipeline = [
+        matchStage,
+        {
+          $addFields: {
+            student_id: { $toObjectId: "$student_id" },
+            class_id: { $toObjectId: "$class_id" },
+            subject_id: { $toObjectId: "$subject_id" },
+            original_id: { $toString: "$_id" },
+          },
+        },
+        {
+          $group: {
+            _id: {
+              student_id: "$student_id",
+              month: "$month",
+              class_id: "$class_id",
+              subject_id: "$subject_id",
+            },
+            entries: {
+              $push: {
+                time_of_month: "$time_of_month",
+                qaidahPages: { $toInt: "$qaidahPages" },
+                duasSurahs: { $toInt: "$duasSurahs" },
+                islamicStudiesPages: { $toInt: "$islamicStudiesPages" },
+                original_id: "$original_id",
+              },
+            },
+            book_names: { $addToSet: "$book_name" },
+          },
+        },
         {
           $project: {
             _id: 0,
@@ -811,15 +1067,14 @@ module.exports = (lessonsCoveredCollection) => {
                 0,
               ],
             },
+            documentIds: "$entries.original_id",
           },
         },
-        // Only include months that have ending (may or may not have beginning)
         {
           $match: {
             ending: { $ne: null },
           },
         },
-        // Calculate monthly progress (from 0 if no beginning exists)
         {
           $project: {
             student_id: 1,
@@ -846,46 +1101,9 @@ module.exports = (lessonsCoveredCollection) => {
               ],
             },
             hasBeginning: { $ne: ["$beginning", null] },
+            processedDocumentIds: "$documentIds",
           },
         },
-        // Now group to calculate yearly totals
-        {
-          $group: {
-            _id: {
-              student_id: "$student_id",
-              class_id: "$class_id",
-              subject_id: "$subject_id",
-            },
-            book_names: { $addToSet: "$book_name" },
-            qaidahYearlyProgress: { $sum: "$qaidahProgress" },
-            duasSurahsYearlyProgress: { $sum: "$duasSurahsProgress" },
-            islamicStudiesYearlyProgress: { $sum: "$islamicStudiesProgress" },
-            months_with_ending: { $sum: 1 }, // Total months with ending
-            months_with_both: {
-              $sum: {
-                $cond: [{ $eq: ["$hasBeginning", true] }, 1, 0],
-              },
-            },
-          },
-        },
-
-        // Add year and format output
-        {
-          $project: {
-            _id: 0,
-            student_id: "$_id.student_id",
-            class_id: "$_id.class_id",
-            subject_id: "$_id.subject_id",
-            book_names: 1,
-            qaidahYearlyProgress: 1,
-            duasSurahsYearlyProgress: 1,
-            islamicStudiesYearlyProgress: 1,
-            months_with_ending: 1,
-            months_with_both: 1,
-            year: parseInt(year),
-          },
-        },
-        // Lookup related data
         {
           $lookup: {
             from: "students",
@@ -914,16 +1132,235 @@ module.exports = (lessonsCoveredCollection) => {
         },
         { $unwind: "$subject_info" },
         {
+          $project: {
+            student_id: 1,
+            student_name: "$student_info.name",
+            month: 1,
+            year: { $literal: parseInt(year) },
+            book_names: 1,
+            class_name: "$class_info.class_name",
+            subject_name: "$subject_info.subject_name",
+            qaidahProgress: 1,
+            duasSurahsProgress: 1,
+            islamicStudiesProgress: 1,
+            hasBeginning: 1,
+            processedDocumentIds: 1,
+            isPublished: { $literal: true },
+          },
+        },
+      ];
+
+      const result = await lessonsCoveredCollection
+        .aggregate(pipeline)
+        .toArray();
+      res.send(result.length > 0 ? result : []);
+    } catch (error) {
+      console.error("Error in student monthly-summary:", error);
+      res.status(500).send({
+        error: "Internal server error",
+        details: error.message,
+      });
+    }
+  });
+  router.get("/student-yearly-summary", async (req, res) => {
+    try {
+      const { year, student_ids } = req.query;
+
+      if (!year || !student_ids) {
+        return res.status(400).send({
+          error: "year and student_ids parameters are required",
+        });
+      }
+
+      // Convert comma-separated string to array
+      const studentIdsArray = student_ids.split(",");
+
+      const pipeline = [
+        {
+          $match: {
+            student_id: { $in: studentIdsArray },
+            year: year,
+            yearly_publish: true,
+          },
+        },
+        {
           $addFields: {
+            student_id: { $toObjectId: "$student_id" },
+            class_id: { $toObjectId: "$class_id" },
+            subject_id: { $toObjectId: "$subject_id" },
+            original_id: { $toString: "$_id" },
+          },
+        },
+        {
+          $group: {
+            _id: {
+              student_id: "$student_id",
+              month: "$month",
+              class_id: "$class_id",
+              subject_id: "$subject_id",
+            },
+            entries: {
+              $push: {
+                time_of_month: "$time_of_month",
+                qaidahPages: { $toInt: "$qaidahPages" },
+                duasSurahs: { $toInt: "$duasSurahs" },
+                islamicStudiesPages: { $toInt: "$islamicStudiesPages" },
+                original_id: "$original_id",
+              },
+            },
+            book_names: { $addToSet: "$book_name" },
+          },
+        },
+        {
+          $project: {
+            _id: 0,
+            student_id: "$_id.student_id",
+            month: "$_id.month",
+            class_id: "$_id.class_id",
+            subject_id: "$_id.subject_id",
+            book_names: 1,
+            beginning: {
+              $arrayElemAt: [
+                {
+                  $filter: {
+                    input: "$entries",
+                    as: "entry",
+                    cond: { $eq: ["$$entry.time_of_month", "beginning"] },
+                  },
+                },
+                0,
+              ],
+            },
+            ending: {
+              $arrayElemAt: [
+                {
+                  $filter: {
+                    input: "$entries",
+                    as: "entry",
+                    cond: { $eq: ["$$entry.time_of_month", "ending"] },
+                  },
+                },
+                0,
+              ],
+            },
+            documentIds: "$entries.original_id",
+          },
+        },
+        {
+          $match: {
+            ending: { $ne: null },
+          },
+        },
+        {
+          $project: {
+            student_id: 1,
+            month: 1,
+            class_id: 1,
+            subject_id: 1,
+            book_names: 1,
+            qaidahProgress: {
+              $subtract: [
+                "$ending.qaidahPages",
+                { $ifNull: ["$beginning.qaidahPages", 0] },
+              ],
+            },
+            duasSurahsProgress: {
+              $subtract: [
+                "$ending.duasSurahs",
+                { $ifNull: ["$beginning.duasSurahs", 0] },
+              ],
+            },
+            islamicStudiesProgress: {
+              $subtract: [
+                "$ending.islamicStudiesPages",
+                { $ifNull: ["$beginning.islamicStudiesPages", 0] },
+              ],
+            },
+            hasBeginning: { $ne: ["$beginning", null] },
+            documentIds: 1,
+          },
+        },
+        {
+          $group: {
+            _id: {
+              student_id: "$student_id",
+              class_id: "$class_id",
+              subject_id: "$subject_id",
+            },
+            book_names: { $addToSet: "$book_names" },
+            processedDocumentIds: { $addToSet: "$documentIds" },
+            qaidahYearlyProgress: { $sum: "$qaidahProgress" },
+            duasSurahsYearlyProgress: { $sum: "$duasSurahsProgress" },
+            islamicStudiesYearlyProgress: { $sum: "$islamicStudiesProgress" },
+            months_with_ending: { $sum: 1 },
+            months_with_both: {
+              $sum: {
+                $cond: [{ $eq: ["$hasBeginning", true] }, 1, 0],
+              },
+            },
+          },
+        },
+        {
+          $project: {
+            _id: 0,
+            student_id: "$_id.student_id",
+            class_id: "$_id.class_id",
+            subject_id: "$_id.subject_id",
+            book_names: {
+              $reduce: {
+                input: "$book_names",
+                initialValue: [],
+                in: { $setUnion: ["$$value", "$$this"] },
+              },
+            },
+            processedDocumentIds: {
+              $reduce: {
+                input: "$processedDocumentIds",
+                initialValue: [],
+                in: { $setUnion: ["$$value", "$$this"] },
+              },
+            },
+            qaidahYearlyProgress: 1,
+            duasSurahsYearlyProgress: 1,
+            islamicStudiesYearlyProgress: 1,
+            months_with_ending: 1,
+            months_with_both: 1,
             year: parseInt(year),
           },
         },
-        // Final projection
+        {
+          $lookup: {
+            from: "students",
+            localField: "student_id",
+            foreignField: "_id",
+            as: "student_info",
+          },
+        },
+        { $unwind: "$student_info" },
+        {
+          $lookup: {
+            from: "classes",
+            localField: "class_id",
+            foreignField: "_id",
+            as: "class_info",
+          },
+        },
+        { $unwind: "$class_info" },
+        {
+          $lookup: {
+            from: "subjects",
+            localField: "subject_id",
+            foreignField: "_id",
+            as: "subject_info",
+          },
+        },
+        { $unwind: "$subject_info" },
         {
           $project: {
             student_id: 1,
             student_name: "$student_info.name",
             year: 1,
+            processedDocumentIds: 1,
             book_names: 1,
             class_name: "$class_info.class_name",
             subject_name: "$subject_info.subject_name",
@@ -932,11 +1369,7 @@ module.exports = (lessonsCoveredCollection) => {
             islamicStudiesYearlyProgress: 1,
             months_with_ending: 1,
             months_with_both: 1,
-          },
-        },
-        {
-          $addFields: {
-            year: parseInt(year),
+            isPublished: { $literal: true },
           },
         },
       ];
@@ -944,16 +1377,13 @@ module.exports = (lessonsCoveredCollection) => {
       const result = await lessonsCoveredCollection
         .aggregate(pipeline)
         .toArray();
-
-      // Force empty array response - THREE different safeguards:
-      if (!result || !Array.isArray(result) || result.length === 0) {
-        return res.status(200).json(Array.isArray(result) ? result : []);
-      }
-
-      return res.status(200).json(result);
+      res.send(result.length > 0 ? result : []);
     } catch (error) {
-      console.error("Error:", error);
-      return res.status(200).json([]); // Even on error, return empty array
+      console.error("Error in student yearly-summary:", error);
+      res.status(500).send({
+        error: "Internal server error",
+        details: error.message,
+      });
     }
   });
 
@@ -1100,6 +1530,55 @@ module.exports = (lessonsCoveredCollection) => {
     } catch (error) {
       console.error("Update Error:", error); // ✅ Log the error for debugging
       res.status(500).send({ error: "Update failed" });
+    }
+  });
+
+  // PATCH /api/lessons_covered/publish/:id
+  // PATCH /publish-multiple
+  router.patch("/publish-multiple", async (req, res) => {
+    const { ids, monthly_publish, yearly_publish } = req.body;
+
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res
+        .status(400)
+        .send({ success: false, message: "No document IDs provided." });
+    }
+
+    // Determine which field to publish
+    const updateFields = {
+      published_at: new Date(),
+    };
+
+    if (monthly_publish === true) {
+      updateFields.monthly_publish = true;
+    }
+    if (yearly_publish === true) {
+      updateFields.yearly_publish = true;
+    }
+
+    // If neither flag is sent
+    if (!updateFields.monthly_publish && !updateFields.yearly_publish) {
+      return res
+        .status(400)
+        .send({ success: false, message: "No publish type specified." });
+    }
+
+    try {
+      const result = await lessonsCoveredCollection.updateMany(
+        { _id: { $in: ids.map((id) => new ObjectId(id)) } },
+        {
+          $set: updateFields,
+        }
+      );
+
+      res.send({
+        success: true,
+        modifiedCount: result.modifiedCount,
+        message: `${result.modifiedCount} records updated.`,
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(500).send({ success: false, message: "Server error." });
     }
   });
 

@@ -1,5 +1,6 @@
 const express = require("express");
 const { ObjectId } = require("mongodb");
+const studentEnrichmentStages = require("../config/studentEnrichmentStages");
 const router = express.Router();
 
 module.exports = (familiesCollection, studentsCollection, feesCollection) => {
@@ -66,6 +67,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
                     },
                   },
                 },
+                ...studentEnrichmentStages(),
               ],
               as: "childrenDocs",
             },
@@ -179,6 +181,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
                     },
                   },
                 },
+                ...studentEnrichmentStages(),
               ],
               as: "childrenDocs",
             },
@@ -228,6 +231,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
                     },
                   },
                 },
+                ...studentEnrichmentStages(),
               ],
               as: "childrenDocs",
             },
@@ -264,12 +268,22 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
           { $match: { email } },
           {
             $lookup: {
-              from: studentsCollection.collectionName, // get the actual collection name string
-              localField: "children",
-              foreignField: "uid",
+              from: studentsCollection.collectionName,
+              let: { childUids: "$children" },
+              pipeline: [
+                {
+                  $match: {
+                    $expr: {
+                      $in: ["$uid", "$$childUids"],
+                    },
+                  },
+                },
+                ...studentEnrichmentStages(),
+              ],
               as: "childrenDocs",
             },
           },
+
           // {
           //   $project: {
           //     name: 1,
@@ -389,6 +403,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
                     },
                   },
                 },
+                ...studentEnrichmentStages(),
               ],
               as: "childrenDocs",
             },
@@ -473,6 +488,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
                     },
                   },
                 },
+                ...studentEnrichmentStages(),
               ],
               as: "childrenDocs",
             },

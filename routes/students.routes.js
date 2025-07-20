@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const { ObjectId } = require("mongodb");
 const sendApprovalEmail = require("../config/sendApprovalEmail");
+const buildStudentAggregationPipeline = require("../config/buildStudentAggregationPipeline");
 
 // Accept the studentsCollection via parameter
 module.exports = (
@@ -12,61 +13,61 @@ module.exports = (
   groupsCollection
 ) => {
   // 🔁 Reusable aggregation pipeline function
-  const buildStudentAggregationPipeline = (match = {}) => [
-    { $match: match },
-    {
-      $addFields: {
-        deptObjectId: {
-          $cond: [
-            { $ne: ["$academic.dept_id", null] },
-            { $toObjectId: "$academic.dept_id" },
-            null,
-          ],
-        },
-        classObjectId: {
-          $cond: [
-            { $ne: ["$academic.class_id", null] },
-            { $toObjectId: "$academic.class_id" },
-            null,
-          ],
-        },
-      },
-    },
-    {
-      $lookup: {
-        from: "departments",
-        localField: "deptObjectId",
-        foreignField: "_id",
-        as: "departmentInfo",
-      },
-    },
-    {
-      $lookup: {
-        from: "classes",
-        localField: "classObjectId",
-        foreignField: "_id",
-        as: "classInfo",
-      },
-    },
-    {
-      $addFields: {
-        "academic.department": {
-          $arrayElemAt: ["$departmentInfo.dept_name", 0],
-        },
-        "academic.class": {
-          $arrayElemAt: ["$classInfo.class_name", 0],
-        },
-      },
-    },
-    {
-      $project: {
-        departmentInfo: 0,
-        classInfo: 0,
-        deptObjectId: 0,
-        classObjectId: 0,
-      },
-    },
-  ];
+  // const buildStudentAggregationPipeline = (match = {}) => [
+  //   { $match: match },
+  //   {
+  //     $addFields: {
+  //       deptObjectId: {
+  //         $cond: [
+  //           { $ne: ["$academic.dept_id", null] },
+  //           { $toObjectId: "$academic.dept_id" },
+  //           null,
+  //         ],
+  //       },
+  //       classObjectId: {
+  //         $cond: [
+  //           { $ne: ["$academic.class_id", null] },
+  //           { $toObjectId: "$academic.class_id" },
+  //           null,
+  //         ],
+  //       },
+  //     },
+  //   },
+  //   {
+  //     $lookup: {
+  //       from: "departments",
+  //       localField: "deptObjectId",
+  //       foreignField: "_id",
+  //       as: "departmentInfo",
+  //     },
+  //   },
+  //   {
+  //     $lookup: {
+  //       from: "classes",
+  //       localField: "classObjectId",
+  //       foreignField: "_id",
+  //       as: "classInfo",
+  //     },
+  //   },
+  //   {
+  //     $addFields: {
+  //       "academic.department": {
+  //         $arrayElemAt: ["$departmentInfo.dept_name", 0],
+  //       },
+  //       "academic.class": {
+  //         $arrayElemAt: ["$classInfo.class_name", 0],
+  //       },
+  //     },
+  //   },
+  //   {
+  //     $project: {
+  //       departmentInfo: 0,
+  //       classInfo: 0,
+  //       deptObjectId: 0,
+  //       classObjectId: 0,
+  //     },
+  //   },
+  // ];
 
   // 🔹 GET: All students with department/class names
   router.get("/", async (req, res) => {
@@ -154,11 +155,11 @@ module.exports = (
         $match: {
           $expr: {
             $and: [
-              { $eq: ["$academic.dept_id", cls.dept_id] }, // same dept
-              { $eq: ["$academic.class_id", cls._id.toString()] }, // same class
-              { $eq: ["$academic.session", cls.session] }, // same session
-              { $eq: ["$academic.time", cls.session_time] }, // same time
-              { $eq: ["$status", "approved"] }, // only approved students
+              { $eq: ["$academic.dept_id", cls.dept_id] },
+              { $eq: ["$academic.class_id", cls._id.toString()] },
+              { $eq: ["$academic.session", cls.session] },
+              { $eq: ["$academic.time", cls.session_time] },
+              { $in: ["$status", ["enrolled", "hold"]] },
             ],
           },
         },
