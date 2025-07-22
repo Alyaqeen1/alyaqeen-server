@@ -1,18 +1,42 @@
 const express = require("express");
 const { ObjectId } = require("mongodb");
+
+const handleAttendanceAlerts = require("../config/handleAttendanceAlerts");
 const router = express.Router();
 
-module.exports = (attendancesCollection) => {
+module.exports = (
+  attendancesCollection,
+  notificationsLogCollection,
+  studentsCollection
+) => {
   router.get("/", async (req, res) => {
     const result = await attendancesCollection.find().toArray();
     res.send(result);
   });
 
   router.post("/", async (req, res) => {
-    const newAttendance = req.body;
-    const result = await attendancesCollection.insertOne(newAttendance);
-    res.send(result);
+    try {
+      const newAttendance = req.body;
+      const result = await attendancesCollection.insertOne(newAttendance);
+
+      // Handle alerts for new attendance records
+      await handleAttendanceAlerts(
+        newAttendance,
+        notificationsLogCollection,
+        studentsCollection
+      );
+
+      res.send(result);
+    } catch (error) {
+      res.status(500).send({ message: "Error creating attendance record" });
+    }
   });
+
+  // router.post("/", async (req, res) => {
+  //   const newAttendance = req.body;
+  //   const result = await attendancesCollection.insertOne(newAttendance);
+  //   res.send(result);
+  // });
 
   router.get("/teacher/:teacherId/date/:date", async (req, res) => {
     try {
@@ -24,7 +48,6 @@ module.exports = (attendancesCollection) => {
       });
       res.send(result || null);
     } catch (err) {
-      console.error("Error in GET attendance by teacher & date:", err);
       res.status(500).send({ message: "Error fetching attendance record" });
     }
   });
@@ -32,16 +55,60 @@ module.exports = (attendancesCollection) => {
   router.patch("/:id", async (req, res) => {
     const id = req.params.id;
     if (!ObjectId.isValid(id)) {
-      return res.status(400).send({ message: "Invalid teacher ID format" });
+      return res.status(400).send({ message: "Invalid attendance ID format" });
     }
+
     const query = { _id: new ObjectId(id) };
     const { status } = req.body;
-    const updatedDoc = {
-      $set: { status },
-    };
-    const result = await attendancesCollection.updateOne(query, updatedDoc);
-    res.send(result);
+
+    try {
+      // Step 1: Update status
+      const result = await attendancesCollection.updateOne(query, {
+        $set: { status },
+      });
+
+      if (result.modifiedCount === 0) {
+        return res
+          .status(404)
+          .send({ message: "Attendance not found or status unchanged" });
+      }
+
+      // Step 2: Get updated document
+      const updatedAttendance = await attendancesCollection.findOne(query);
+
+      if (!updatedAttendance?.student_id) {
+        return res.status(400).send({ message: "Missing student_id" });
+      }
+
+      // Step 3: Run alerts logic
+      await handleAttendanceAlerts(
+        updatedAttendance,
+        notificationsLogCollection,
+        studentsCollection
+      );
+
+      // Step 4: Return updated data
+      res.send(updatedAttendance);
+    } catch (error) {
+      res
+        .status(500)
+        .send({ message: "Error updating attendance record", error });
+    }
   });
+
+  // router.patch("/:id", async (req, res) => {
+  //   const id = req.params.id;
+  //   if (!ObjectId.isValid(id)) {
+  //     return res.status(400).send({ message: "Invalid teacher ID format" });
+  //   }
+  //   const query = { _id: new ObjectId(id) };
+  //   const { status } = req.body;
+  //   const updatedDoc = {
+  //     $set: { status },
+  //   };
+  //   const result = await attendancesCollection.updateOne(query, updatedDoc);
+  //   res.send(result);
+  // });
 
   // PATCH time‑out + total_hours
   router.patch("/:id/timeout", async (req, res) => {
@@ -97,6 +164,36 @@ module.exports = (attendancesCollection) => {
 
     const result = await attendancesCollection.deleteOne(query);
     res.send(result);
+  });
+
+  router.get("/present-today/:type", async (req, res) => {
+    try {
+      const { type } = req.params;
+
+      // Only allow 'student' or 'staff'
+      if (type !== "student" && type !== "staff") {
+        return res
+          .status(400)
+          .send({ message: "Invalid type. Must be 'student' or 'staff'." });
+      }
+
+      const today = new Date().toISOString().split("T")[0];
+
+      const presentCount = await attendancesCollection.countDocuments({
+        attendance: type,
+        status: "present",
+        date: today,
+      });
+
+      res.send({
+        date: today,
+        type,
+        present_count: presentCount,
+      });
+    } catch (error) {
+      console.error("Error fetching today's present count:", error);
+      res.status(500).send({ message: "Internal Server Error" });
+    }
   });
 
   return router;

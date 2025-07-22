@@ -43,7 +43,6 @@ module.exports = (prayerTimesCollection) => {
 
       res.send({ message: "Prayer time updated", result });
     } catch (err) {
-      console.error(err);
       res.status(500).send({ error: "Failed to update prayer time." });
     }
   });

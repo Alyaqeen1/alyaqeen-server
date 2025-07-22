@@ -107,15 +107,11 @@ module.exports = (feesCollection, studentsCollection, familiesCollection) => {
           method,
         });
       } else {
-        console.log(
-          "✅ Payment saved, but no email sent for type:",
-          paymentType
-        );
+        // "✅ Payment saved, but no email sent for type:",
       }
 
       res.send(result);
     } catch (err) {
-      console.error("❌ Error in /fees route:", err);
       res.status(500).send({ message: "Internal server error" });
     }
   });
@@ -270,7 +266,6 @@ module.exports = (feesCollection, studentsCollection, familiesCollection) => {
 
       res.send(result);
     } catch (err) {
-      console.error("Error updating fee status:", err);
       res.status(500).json({ error: "Server error" });
     }
   });

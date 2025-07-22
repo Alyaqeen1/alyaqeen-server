@@ -60,7 +60,6 @@ module.exports = (lessonsCoveredCollection) => {
 
       res.send(result);
     } catch (error) {
-      console.error("Insert Error:", error);
       res.status(500).send({
         message: "Something went wrong while inserting the lesson.",
       });
@@ -286,7 +285,6 @@ module.exports = (lessonsCoveredCollection) => {
         .toArray();
       res.send(result);
     } catch (error) {
-      console.error("Error in monthly-summary:", error);
       res.status(500).send({
         error: "Internal server error",
         details: error.message,
@@ -520,7 +518,6 @@ module.exports = (lessonsCoveredCollection) => {
         .toArray();
       res.send(result);
     } catch (error) {
-      console.error("Error in yearly-summary:", error);
       res.status(500).send({ error: "Internal server error" });
     }
   });
@@ -753,7 +750,6 @@ module.exports = (lessonsCoveredCollection) => {
         .toArray();
       res.send(result.length > 0 ? result : []);
     } catch (error) {
-      console.error("Error in teacher monthly-summary:", error);
       res.status(500).send({
         error: "Internal server error",
         details: error.message,
@@ -978,7 +974,6 @@ module.exports = (lessonsCoveredCollection) => {
 
       return res.status(200).json(Array.isArray(result) ? result : []);
     } catch (error) {
-      console.error("Error:", error);
       return res.status(200).json([]);
     }
   });
@@ -1155,7 +1150,6 @@ module.exports = (lessonsCoveredCollection) => {
         .toArray();
       res.send(result.length > 0 ? result : []);
     } catch (error) {
-      console.error("Error in student monthly-summary:", error);
       res.status(500).send({
         error: "Internal server error",
         details: error.message,
@@ -1379,7 +1373,6 @@ module.exports = (lessonsCoveredCollection) => {
         .toArray();
       res.send(result.length > 0 ? result : []);
     } catch (error) {
-      console.error("Error in student yearly-summary:", error);
       res.status(500).send({
         error: "Internal server error",
         details: error.message,
@@ -1509,7 +1502,6 @@ module.exports = (lessonsCoveredCollection) => {
         .toArray();
       res.send(result);
     } catch (error) {
-      console.error("Error in teacher-students-progress:", error);
       res.status(500).send({ error: "Internal server error" });
     }
   });
@@ -1528,7 +1520,6 @@ module.exports = (lessonsCoveredCollection) => {
 
       res.send(result);
     } catch (error) {
-      console.error("Update Error:", error); // ✅ Log the error for debugging
       res.status(500).send({ error: "Update failed" });
     }
   });
@@ -1577,7 +1568,6 @@ module.exports = (lessonsCoveredCollection) => {
         message: `${result.modifiedCount} records updated.`,
       });
     } catch (err) {
-      console.error(err);
       res.status(500).send({ success: false, message: "Server error." });
     }
   });

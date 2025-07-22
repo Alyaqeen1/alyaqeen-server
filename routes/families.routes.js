@@ -98,7 +98,6 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
 
       res.send(result);
     } catch (err) {
-      console.error(err);
       res.status(500).send({ error: "Server error" });
     }
   });
@@ -154,7 +153,6 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
 
       res.send(result);
     } catch (err) {
-      console.error(err);
       res.status(500).send({ error: "Server error" });
     }
   });
@@ -204,7 +202,6 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
 
       res.send(result[0]);
     } catch (err) {
-      console.error(err);
       res.status(500).send({ error: "Server error" });
     }
   });
@@ -254,7 +251,6 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
 
       res.send(result[0]);
     } catch (err) {
-      console.error(err);
       res.status(500).send({ error: "Server error" });
     }
   });
@@ -302,7 +298,6 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
 
       res.send(result[0]);
     } catch (err) {
-      console.error(err);
       res.status(500).send({ error: "Server error" });
     }
   });
@@ -318,7 +313,6 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
       );
       res.send(result);
     } catch (err) {
-      console.error(err);
       res.status(500).send({ error: "Server error" });
     }
   });
@@ -373,7 +367,6 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
 
       res.send({ success: true, modifiedCount: familyResult.modifiedCount });
     } catch (error) {
-      console.error("Error updating family:", error);
       res.status(500).send({ error: "Failed to update family" });
     }
   });
@@ -459,7 +452,6 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
 
       res.send(result);
     } catch (err) {
-      console.error(err);
       res.status(500).send({ error: "Server error" });
     }
   });
@@ -511,7 +503,6 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
 
       res.send(result[0]);
     } catch (err) {
-      console.error(err);
       res.status(500).send({ error: "Server error" });
     }
   });

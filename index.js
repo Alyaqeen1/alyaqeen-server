@@ -23,6 +23,8 @@ const createGroupsRouter = require("./routes/groups.routes");
 const createAttendancesRouter = require("./routes/attendances.routes");
 const createMeritsRouter = require("./routes/merits.routes");
 const createLessonsCoveredRouter = require("./routes/lessons_covered.routes");
+const createNotificationsLogRouter = require("./routes/notifications_log.routes");
+const createHolidaysRouter = require("./routes/holidays.routes");
 
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
@@ -94,12 +96,16 @@ async function run() {
     const subjectsCollection = client.db("alyaqeenDb").collection("subjects");
     const groupsCollection = client.db("alyaqeenDb").collection("groups");
     const meritsCollection = client.db("alyaqeenDb").collection("merits");
+    const holidaysCollection = client.db("alyaqeenDb").collection("holidays");
     const lessonsCoveredCollection = client
       .db("alyaqeenDb")
       .collection("lessons-covered");
     const attendancesCollection = client
       .db("alyaqeenDb")
       .collection("attendances");
+    const notificationsLogCollection = client
+      .db("alyaqeenDb")
+      .collection("notifications-log");
     const notificationsCollection = client
       .db("alyaqeenDb")
       .collection("notifications");
@@ -201,7 +207,19 @@ async function run() {
     app.use("/subjects", createSubjectsRouter(subjectsCollection));
     app.use("/prayer-times", createPrayerTimesRouter(prayerTimesCollection));
     app.use("/groups", createGroupsRouter(groupsCollection));
-    app.use("/attendances", createAttendancesRouter(attendancesCollection));
+    app.use("/holidays", createHolidaysRouter(holidaysCollection));
+    app.use(
+      "/attendances",
+      createAttendancesRouter(
+        attendancesCollection,
+        notificationsLogCollection,
+        studentsCollection
+      )
+    );
+    app.use(
+      "/notifications-log",
+      createNotificationsLogRouter(notificationsLogCollection)
+    );
     app.use(
       "/lessons-covered",
       createLessonsCoveredRouter(lessonsCoveredCollection)

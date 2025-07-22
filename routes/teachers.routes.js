@@ -65,7 +65,6 @@ module.exports = (
           .send({ message: "No approved teachers found for this activity" });
       }
     } catch (error) {
-      console.error("Error fetching teachers by activity:", error);
       res.status(500).send({ message: "Internal server error" });
     }
   });
@@ -83,7 +82,6 @@ module.exports = (
         });
       }
     } catch (error) {
-      console.error("Error fetching teachers:", error);
       res.status(500).send({ message: "Internal Server Error" });
     }
   });
@@ -224,8 +222,42 @@ module.exports = (
         res.status(200).send({ message: "Teacher not found" });
       }
     } catch (err) {
-      console.error("Aggregation error:", err);
       res.status(500).send({ message: "Server Error" });
+    }
+  });
+
+  // Get total number of teachers with gender and activity breakdown
+  router.get("/count", async (req, res) => {
+    try {
+      const total = await teachersCollection.countDocuments();
+
+      const maleCount = await teachersCollection.countDocuments({
+        gender: "Male",
+      });
+      const femaleCount = await teachersCollection.countDocuments({
+        gender: "Female",
+      });
+
+      const activeCount = await teachersCollection.countDocuments({
+        activity: "active",
+      });
+      const inactiveCount = await teachersCollection.countDocuments({
+        activity: "inactive",
+      });
+
+      res.send({
+        total,
+        gender: {
+          male: maleCount,
+          female: femaleCount,
+        },
+        activity: {
+          active: activeCount,
+          inactive: inactiveCount,
+        },
+      });
+    } catch (error) {
+      res.status(500).send({ message: "Failed to count teachers", error });
     }
   });
 

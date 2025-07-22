@@ -77,8 +77,53 @@ module.exports = (
         .toArray();
       res.send(result);
     } catch (error) {
-      console.error("Error fetching all students:", error);
       res.status(500).send({ error: "Failed to fetch students" });
+    }
+  });
+
+  // Get total number of teachers with gender and activity breakdown
+  router.get("/count", async (req, res) => {
+    try {
+      const total = await studentsCollection.countDocuments();
+
+      const maleCount = await studentsCollection.countDocuments({
+        gender: "Male",
+      });
+      const femaleCount = await studentsCollection.countDocuments({
+        gender: "Female",
+      });
+
+      const activeCount = await studentsCollection.countDocuments({
+        activity: "active",
+      });
+      const inactiveCount = await studentsCollection.countDocuments({
+        activity: "inactive",
+      });
+
+      const weekdaysCount = await studentsCollection.countDocuments({
+        "academic.session": "weekdays",
+      });
+      const weekendCount = await studentsCollection.countDocuments({
+        "academic.session": "weekend",
+      });
+
+      res.send({
+        total,
+        gender: {
+          male: maleCount,
+          female: femaleCount,
+        },
+        activity: {
+          active: activeCount,
+          inactive: inactiveCount,
+        },
+        session: {
+          weekdays: weekdaysCount,
+          weekend: weekendCount,
+        },
+      });
+    } catch (error) {
+      res.status(500).send({ message: "Failed to count students", error });
     }
   });
 
@@ -94,7 +139,6 @@ module.exports = (
         .toArray();
       res.send(result);
     } catch (error) {
-      console.error("Error fetching students without enrolled:", error);
       res.status(500).send({ error: "Failed to fetch students" });
     }
   });
@@ -108,7 +152,6 @@ module.exports = (
         .toArray();
       res.send(result);
     } catch (error) {
-      console.error("Error fetching students by status:", error);
       res.status(500).send({ error: "Failed to fetch students" });
     }
   });
@@ -127,7 +170,6 @@ module.exports = (
 
       res.send(student[0]);
     } catch (error) {
-      console.error("Error fetching single student:", error);
       res.status(500).send({ error: "Failed to fetch student" });
     }
   });
@@ -146,7 +188,6 @@ module.exports = (
       const cls = await classesCollection.findOne({
         _id: new ObjectId(classId),
       });
-      console.log(cls);
 
       if (!cls) return res.status(404).send({ message: "Class not found" });
 
@@ -171,7 +212,6 @@ module.exports = (
 
       res.send(students);
     } catch (err) {
-      console.error("Error in /by-group/:classId →", err);
       res.status(500).send({ error: "Internal Server Error" });
     }
   });
@@ -185,7 +225,6 @@ module.exports = (
       const result = await studentsCollection.insertOne(newStudent);
       res.status(201).send(result);
     } catch (error) {
-      console.error(error);
       res.status(500).send({ message: "Internal Server Error" });
     }
   });
@@ -235,7 +274,6 @@ module.exports = (
 
       res.json(result);
     } catch (error) {
-      console.error("PATCH /students/:id failed:", error);
       res.status(500).json({ error: "Internal Server Error" });
     }
   });

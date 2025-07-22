@@ -12,153 +12,6 @@ module.exports = (
     res.send(result);
   });
 
-  // router.get("/with-details", async (req, res) => {
-  //   try {
-  //     const result = await meritsCollection
-  //       .aggregate([
-  //         // Initial conversion
-  //         {
-  //           $addFields: {
-  //             studentObjectId: { $toObjectId: "$student_id" },
-  //             teacherObjectId: { $toObjectId: "$teacher_id" },
-  //           },
-  //         },
-
-  //         // Student lookup
-  //         {
-  //           $lookup: {
-  //             from: "students",
-  //             localField: "studentObjectId",
-  //             foreignField: "_id",
-  //             as: "student",
-  //           },
-  //         },
-  //         { $unwind: "$student" },
-
-  //         // Debug stage 1 - check what we're working with
-  //         {
-  //           $addFields: {
-  //             debugBeforeLookup: {
-  //               dept_id: "$student.academic.dept_id",
-  //               dept_id_type: { $type: "$student.academic.dept_id" },
-  //               class_id: "$student.academic.class_id",
-  //               class_id_type: { $type: "$student.academic.class_id" },
-  //             },
-  //           },
-  //         },
-
-  //         // Department lookup with conversion
-  //         {
-  //           $lookup: {
-  //             from: "departments",
-  //             let: { deptId: "$student.academic.dept_id" },
-  //             pipeline: [
-  //               {
-  //                 $match: {
-  //                   $expr: {
-  //                     $eq: [
-  //                       "$_id",
-  //                       {
-  //                         $cond: [
-  //                           { $eq: [{ $type: "$$deptId" }, "string"] },
-  //                           { $toObjectId: "$$deptId" },
-  //                           "$$deptId",
-  //                         ],
-  //                       },
-  //                     ],
-  //                   },
-  //                 },
-  //               },
-  //             ],
-  //             as: "department",
-  //           },
-  //         },
-  //         {
-  //           $unwind: { path: "$department", preserveNullAndEmptyArrays: true },
-  //         },
-
-  //         // Class lookup with conversion
-  //         {
-  //           $lookup: {
-  //             from: "classes",
-  //             let: { classId: "$student.academic.class_id" },
-  //             pipeline: [
-  //               {
-  //                 $match: {
-  //                   $expr: {
-  //                     $eq: [
-  //                       "$_id",
-  //                       {
-  //                         $cond: [
-  //                           { $eq: [{ $type: "$$classId" }, "string"] },
-  //                           { $toObjectId: "$$classId" },
-  //                           "$$classId",
-  //                         ],
-  //                       },
-  //                     ],
-  //                   },
-  //                 },
-  //               },
-  //             ],
-  //             as: "class",
-  //           },
-  //         },
-  //         { $unwind: { path: "$class", preserveNullAndEmptyArrays: true } },
-
-  //         // Teacher lookup
-  //         {
-  //           $lookup: {
-  //             from: "teachers",
-  //             localField: "teacherObjectId",
-  //             foreignField: "_id",
-  //             as: "teacher",
-  //           },
-  //         },
-  //         { $unwind: { path: "$teacher", preserveNullAndEmptyArrays: true } },
-
-  //         // Debug stage 2 - check lookup results
-  //         {
-  //           $addFields: {
-  //             debugAfterLookup: {
-  //               departmentFound: { $ifNull: ["$department", "NOT FOUND"] },
-  //               classFound: { $ifNull: ["$class", "NOT FOUND"] },
-  //             },
-  //           },
-  //         },
-
-  //         // Final projection
-  //         {
-  //           $project: {
-  //             _id: 1,
-  //             student_id: 1,
-  //             teacher_id: 1,
-  //             behavior: 1,
-  //             incident: 1,
-  //             merit_points: 1,
-  //             date: 1,
-  //             student_name: "$student.name",
-  //             family_name: "$student.family_name",
-  //             department: {
-  //               $ifNull: ["$department.dept_name", "Unknown Department"],
-  //             },
-  //             class: {
-  //               $ifNull: ["$class.class_name", "Unknown Class"],
-  //             },
-  //             teacher_name: {
-  //               $ifNull: ["$teacher.name", "Unknown Teacher"],
-  //             },
-  //           },
-  //         },
-  //       ])
-  //       .toArray();
-
-  //     res.send(result);
-  //   } catch (error) {
-  //     console.error("Merits aggregation error:", error);
-  //     res.status(500).send({ message: "Server Error" });
-  //   }
-  // });
-
   router.get("/top-merit-students", async (req, res) => {
     try {
       const result = await meritsCollection
@@ -274,16 +127,9 @@ module.exports = (
 
       res.send(result);
     } catch (error) {
-      console.error("Top Merit Students Error:", error);
       res.status(500).send({ message: "Server Error" });
     }
   });
-
-  // router.post("/", async (req, res) => {
-  //   const newMerit = req.body;
-  //   const result = await meritsCollection.insertOne(newMerit);
-  //   res.send(result);
-  // });
 
   router.post("/", async (req, res) => {
     const newMerit = req.body;
@@ -338,7 +184,6 @@ module.exports = (
 
       res.send(result);
     } catch (error) {
-      console.error("Error adding merit and checking notification:", error);
       res.status(500).send({ message: "Server error" });
     }
   });
