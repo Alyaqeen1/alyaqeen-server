@@ -52,8 +52,10 @@ const cookieOptions = {
 
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const feeStructure = require("./config/feeStructure");
-
+// old
 const uri = `mongodb+srv://${process.env.DB_User}:${process.env.DB_Pass}@cluster0.dr5qw.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
+
+// const uri = `mongodb+srv://${process.env.DB_User}:${process.env.DB_Pass}@cluster0.ts2xohe.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
@@ -191,7 +193,13 @@ async function run() {
     );
     app.use(
       "/fees",
-      createFeesRouter(feesCollection, studentsCollection, familiesCollection)
+      createFeesRouter(
+        feesCollection,
+        studentsCollection,
+        familiesCollection,
+        departmentsCollection,
+        classesCollection
+      )
     );
     app.use(
       "/teachers",

@@ -5,7 +5,70 @@ const sendHoldEmail = require("../config/sendHoldEmail");
 const sendMonthlyFeeEmail = require("../config/sendMonthlyFeeEmail");
 const router = express.Router();
 
-module.exports = (feesCollection, studentsCollection, familiesCollection) => {
+const enrichStudents = async (
+  feeStudents,
+  studentsCollection,
+  departmentsCollection,
+  classesCollection
+) => {
+  // Get all student records
+  const studentIds = feeStudents.map((s) => new ObjectId(s.studentId));
+  const allStudents = await studentsCollection
+    .find({
+      _id: { $in: studentIds },
+    })
+    .toArray();
+
+  // Get all referenced departments and classes
+  const departmentIds = allStudents
+    .map((s) => s.academic?.dept_id)
+    .filter(Boolean)
+    .map((id) => new ObjectId(id));
+
+  const classIds = allStudents
+    .map((s) => s.academic?.class_id)
+    .filter(Boolean)
+    .map((id) => new ObjectId(id));
+
+  const [departments, classes] = await Promise.all([
+    departmentsCollection.find({ _id: { $in: departmentIds } }).toArray(),
+    classesCollection.find({ _id: { $in: classIds } }).toArray(),
+  ]);
+
+  // Create enriched students
+  return allStudents.map((student) => {
+    const feeInfo = feeStudents.find(
+      (s) => String(s.studentId) === String(student._id)
+    );
+
+    const department = departments.find(
+      (d) => String(d._id) === String(student.academic?.dept_id)
+    );
+
+    const classInfo = classes.find(
+      (c) => String(c._id) === String(student.academic?.class_id)
+    );
+
+    return {
+      ...student,
+      admissionFee: feeInfo?.admissionFee || 0,
+      monthly_fee: feeInfo?.monthlyFee || 0,
+      academic: {
+        ...student.academic,
+        department: department?.dept_name || "-",
+        class: classInfo?.class_name || "-",
+      },
+    };
+  });
+};
+
+module.exports = (
+  feesCollection,
+  studentsCollection,
+  familiesCollection,
+  departmentsCollection,
+  classesCollection
+) => {
   router.get("/", async (req, res) => {
     const result = await feesCollection.find().toArray();
     res.send(result);
@@ -87,17 +150,23 @@ module.exports = (feesCollection, studentsCollection, familiesCollection) => {
           method,
         });
       } else if (paymentType === "admission") {
-        const enrichedStudents = allStudents.map((student) => {
-          const feeInfo = feesData.students.find(
-            (s) => String(s.studentId) === String(student._id)
-          );
+        // const enrichedStudents = allStudents.map((student) => {
+        //   const feeInfo = feesData.students.find(
+        //     (s) => String(s.studentId) === String(student._id)
+        //   );
 
-          return {
-            ...student,
-            admissionFee: feeInfo?.admissionFee || 0,
-            monthly_fee: feeInfo?.monthlyFee || 0,
-          };
-        });
+        //   return {
+        //     ...student,
+        //     admissionFee: feeInfo?.admissionFee || 0,
+        //     monthly_fee: feeInfo?.monthlyFee || 0,
+        //   };
+        // });
+        const enrichedStudents = await enrichStudents(
+          feesData.students,
+          studentsCollection,
+          departmentsCollection,
+          classesCollection
+        );
 
         await sendEmailViaAPI({
           to: familyEmail,
@@ -151,83 +220,83 @@ module.exports = (feesCollection, studentsCollection, familiesCollection) => {
   //   December: 11,
   // };
 
-  router.post("/monthly-fees", async (req, res) => {
-    const feesData = req.body;
-    const { familyId, amount, fee_month, fee_year } = feesData;
+  // router.post("/monthly-fees", async (req, res) => {
+  //   const feesData = req.body;
+  //   const { familyId, amount, fee_month, fee_year } = feesData;
 
-    const family = await familiesCollection.findOne({
-      _id: new ObjectId(familyId),
-    });
+  //   const family = await familiesCollection.findOne({
+  //     _id: new ObjectId(familyId),
+  //   });
 
-    if (!family) return res.status(404).send({ message: "Family not found" });
+  //   if (!family) return res.status(404).send({ message: "Family not found" });
 
-    const childrenUids = family.children || [];
-    const students = await studentsCollection
-      .find({ uid: { $in: childrenUids } })
-      .toArray();
+  //   const childrenUids = family.children || [];
+  //   const students = await studentsCollection
+  //     .find({ uid: { $in: childrenUids } })
+  //     .toArray();
 
-    const monthIndex = new Date(`${fee_month} 1, ${fee_year}`).getMonth();
+  //   const monthIndex = new Date(`${fee_month} 1, ${fee_year}`).getMonth();
 
-    for (const student of students) {
-      const joiningDate = new Date(student.startingDate); // stored as ISO
-      const joiningMonthIndex = joiningDate.getMonth();
-      const joiningYear = joiningDate.getFullYear();
+  //   for (const student of students) {
+  //     const joiningDate = new Date(student.startingDate); // stored as ISO
+  //     const joiningMonthIndex = joiningDate.getMonth();
+  //     const joiningYear = joiningDate.getFullYear();
 
-      // Skip months before joining month
-      if (
-        fee_year < joiningYear ||
-        (fee_year === joiningYear && monthIndex < joiningMonthIndex)
-      ) {
-        return res.status(400).send({
-          message: `Cannot pay fee for ${fee_month} ${fee_year} before joining month.`,
-        });
-      }
+  //     // Skip months before joining month
+  //     if (
+  //       fee_year < joiningYear ||
+  //       (fee_year === joiningYear && monthIndex < joiningMonthIndex)
+  //     ) {
+  //       return res.status(400).send({
+  //         message: `Cannot pay fee for ${fee_month} ${fee_year} before joining month.`,
+  //       });
+  //     }
 
-      // 1. Check if selected month is already paid
-      const alreadyPaid = await feesCollection.findOne({
-        familyId,
-        fee_month,
-        fee_year,
-      });
-      if (alreadyPaid) {
-        return res.status(409).send({
-          message: `Fee already paid for ${fee_month} ${fee_year}.`,
-        });
-      }
+  //     // 1. Check if selected month is already paid
+  //     const alreadyPaid = await feesCollection.findOne({
+  //       familyId,
+  //       fee_month,
+  //       fee_year,
+  //     });
+  //     if (alreadyPaid) {
+  //       return res.status(409).send({
+  //         message: `Fee already paid for ${fee_month} ${fee_year}.`,
+  //       });
+  //     }
 
-      // 2. Check for previous unpaid months since joining
-      const allPaidMonths = await feesCollection.find({ familyId }).toArray();
+  //     // 2. Check for previous unpaid months since joining
+  //     const allPaidMonths = await feesCollection.find({ familyId }).toArray();
 
-      const paidMonthYearPairs = new Set(
-        allPaidMonths.map((f) => `${f.fee_month}-${f.fee_year}`)
-      );
+  //     const paidMonthYearPairs = new Set(
+  //       allPaidMonths.map((f) => `${f.fee_month}-${f.fee_year}`)
+  //     );
 
-      let tempDate = new Date(joiningDate);
-      const currentMonthDate = new Date(`${fee_month} 1, ${fee_year}`);
+  //     let tempDate = new Date(joiningDate);
+  //     const currentMonthDate = new Date(`${fee_month} 1, ${fee_year}`);
 
-      while (
-        tempDate < currentMonthDate &&
-        (tempDate.getFullYear() < fee_year ||
-          (tempDate.getFullYear() === fee_year &&
-            tempDate.getMonth() < monthIndex))
-      ) {
-        const key = `${tempDate.toLocaleString("default", {
-          month: "long",
-        })}-${tempDate.getFullYear()}`;
+  //     while (
+  //       tempDate < currentMonthDate &&
+  //       (tempDate.getFullYear() < fee_year ||
+  //         (tempDate.getFullYear() === fee_year &&
+  //           tempDate.getMonth() < monthIndex))
+  //     ) {
+  //       const key = `${tempDate.toLocaleString("default", {
+  //         month: "long",
+  //       })}-${tempDate.getFullYear()}`;
 
-        if (!paidMonthYearPairs.has(key)) {
-          return res.status(400).send({
-            message: `Unpaid month exists: ${key}. Please pay that first.`,
-          });
-        }
+  //       if (!paidMonthYearPairs.has(key)) {
+  //         return res.status(400).send({
+  //           message: `Unpaid month exists: ${key}. Please pay that first.`,
+  //         });
+  //       }
 
-        tempDate.setMonth(tempDate.getMonth() + 1);
-      }
-    }
+  //       tempDate.setMonth(tempDate.getMonth() + 1);
+  //     }
+  //   }
 
-    const result = await feesCollection.insertOne(feesData);
-    res.send(result);
-  });
+  //   const result = await feesCollection.insertOne(feesData);
+  //   res.send(result);
+  // });
 
   router.patch("/update-status-mode/:id", async (req, res) => {
     const { id } = req.params;
@@ -240,35 +309,107 @@ module.exports = (feesCollection, studentsCollection, familiesCollection) => {
     }
 
     try {
+      // 1. Get the fee document
       const fee = await feesCollection.findOne({ _id: new ObjectId(id) });
+      if (!fee) return res.status(404).json({ error: "Fee not found" });
 
-      if (!fee) {
-        return res.status(404).json({ error: "Fee document not found" });
-      }
+      // 2. Get family data
+      const family = await familiesCollection.findOne({
+        _id: new ObjectId(fee.familyId),
+      });
+      if (!family) return res.status(404).json({ error: "Family not found" });
 
-      const update = {
-        status,
-        paymentType,
-      };
+      // 3. Get full student records (same as POST route)
+      const studentIds = fee.students.map((s) => new ObjectId(s.studentId));
+      const allStudents = await studentsCollection
+        .find({
+          _id: { $in: studentIds },
+        })
+        .toArray();
 
-      // // If paymentType is admissionOnHold and admin marks as paid, convert it to admission
-      // if (fee.paymentType === "admissionOnHold") {
-      //   update.paymentType = "admission";
-      // } else if (paymentType) {
-      //   // In other cases, update paymentType only if provided
-      //   update.paymentType = paymentType;
-      // }
-
+      // 4. Simple update
       const result = await feesCollection.updateOne(
         { _id: new ObjectId(id) },
-        { $set: update }
+        { $set: { status, paymentType } }
       );
+
+      // 5. Send appropriate email (now with enriched students like POST route)
+      if (result.modifiedCount > 0 && status === "paid") {
+        // Create enriched students array (same as POST route)
+        const enrichedStudents = await enrichStudents(
+          fee.students,
+          studentsCollection,
+          departmentsCollection,
+          classesCollection
+        );
+
+        if (fee.paymentType === "admissionOnHold") {
+          await sendEmailViaAPI({
+            to: family.email,
+            parentName: family.name,
+            students: enrichedStudents, // Now using enriched data
+            totalAmount: fee.amount,
+            method: fee.method,
+          });
+        } else if (fee.paymentType === "monthlyOnHold") {
+          await sendMonthlyFeeEmail({
+            to: family.email,
+            parentName: family.name,
+            students: enrichedStudents, // Now using enriched data
+            totalAmount: fee.amount,
+            method: fee.method,
+            date: fee.date || new Date(),
+            isOnHold: false,
+          });
+        }
+      }
 
       res.send(result);
     } catch (err) {
       res.status(500).json({ error: "Server error" });
     }
   });
+
+  // router.patch("/update-status-mode/:id", async (req, res) => {
+  //   const { id } = req.params;
+  //   const { status, paymentType } = req.body;
+
+  //   if (!id || !status) {
+  //     return res
+  //       .status(400)
+  //       .json({ error: "Missing required fields (id or status)" });
+  //   }
+
+  //   try {
+  //     const fee = await feesCollection.findOne({ _id: new ObjectId(id) });
+
+  //     if (!fee) {
+  //       return res.status(404).json({ error: "Fee document not found" });
+  //     }
+
+  //     const update = {
+  //       status,
+  //       paymentType,
+  //     };
+
+  //     // // If paymentType is admissionOnHold and admin marks as paid, convert it to admission
+  //     // if (fee.paymentType === "admissionOnHold") {
+  //     //   update.paymentType = "admission";
+  //     // } else if (paymentType) {
+  //     //   // In other cases, update paymentType only if provided
+  //     //   update.paymentType = paymentType;
+  //     // }
+
+  //     const result = await feesCollection.updateOne(
+  //       { _id: new ObjectId(id) },
+  //       { $set: update }
+  //     );
+
+  //     res.send(result);
+  //   } catch (err) {
+  //     res.status(500).json({ error: "Server error" });
+  //   }
+  // });
   // delete
   router.delete("/:id", async (req, res) => {
     const { id } = req.params;
