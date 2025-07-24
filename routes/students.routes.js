@@ -216,6 +216,31 @@ module.exports = (
     }
   });
 
+  router.get("/by-activity/:activity", verifyToken, async (req, res) => {
+    const activity = req.params.activity;
+
+    try {
+      const students = await studentsCollection
+        .aggregate([
+          ...buildStudentAggregationPipeline({
+            activity: activity,
+            status: { $in: ["enrolled", "hold"] },
+          }),
+        ])
+        .toArray();
+
+      if (!students.length) {
+        return res.status(200).send({
+          message: "No enrolled or hold students found for this activity",
+        });
+      }
+
+      res.send(students);
+    } catch (error) {
+      res.status(500).send({ error: "Failed to fetch students by activity" });
+    }
+  });
+
   // Create new student
   router.post("/", async (req, res) => {
     const newStudent = req.body;
@@ -240,6 +265,20 @@ module.exports = (
     const result = await studentsCollection.updateOne(query, updatedDoc, {
       upsert: true,
     });
+    res.send(result);
+  });
+
+  router.patch("/update-activity/:id", async (req, res) => {
+    const studentId = req.params.id;
+    if (!ObjectId.isValid(studentId)) {
+      return res.status(400).send({ message: "Invalid student ID format" });
+    }
+    const query = { _id: new ObjectId(studentId) };
+    const { activity } = req.body;
+    const updatedDoc = {
+      $set: { activity },
+    };
+    const result = await studentsCollection.updateOne(query, updatedDoc);
     res.send(result);
   });
 
@@ -303,9 +342,7 @@ module.exports = (
       { $pull: { children: studentUid } }
     );
 
-    res.send({
-      message: "Student deleted and removed from family successfully",
-    });
+    res.send(result);
   });
 
   return router;
