@@ -72,12 +72,35 @@ module.exports = (
   // 🔹 GET: All students with department/class names
   router.get("/", async (req, res) => {
     try {
-      const result = await studentsCollection
-        .aggregate(buildStudentAggregationPipeline())
-        .toArray();
+      // First, verify the collection exists
+      const collectionExists = await studentsCollection.countDocuments();
+      if (collectionExists === 0) {
+        return res.status(404).send({ error: "Students collection is empty" });
+      }
+
+      // Debug: Log the pipeline before execution
+      const pipeline = buildStudentAggregationPipeline();
+      console.log("Aggregation Pipeline:", JSON.stringify(pipeline, null, 2));
+
+      // Execute the aggregation with error handling
+      const cursor = studentsCollection.aggregate(pipeline).limit(50);
+      const result = await cursor.toArray();
+
+      if (!result || result.length === 0) {
+        return res.status(404).send({
+          error: "No students found",
+          warning: "Pipeline executed successfully but returned no results",
+        });
+      }
+
       res.send(result);
     } catch (error) {
-      res.status(500).send({ error: "Failed to fetch students" });
+      console.error("Aggregation Error:", error);
+      res.status(500).send({
+        error: "Failed to fetch students",
+        details: error.message,
+        stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
+      });
     }
   });
 
@@ -218,26 +241,35 @@ module.exports = (
 
   router.get("/by-activity/:activity", verifyToken, async (req, res) => {
     const activity = req.params.activity;
+    const { search } = req.query; // Get search term from query parameters
 
     try {
+      // Base match criteria
+      const matchCriteria = {
+        activity: activity,
+        status: { $in: ["enrolled", "hold"] },
+      };
+
+      // Add name search if search term exists
+      if (search && search.trim() !== "") {
+        matchCriteria.name = { $regex: search, $options: "i" }; // Case-insensitive partial match
+      }
+
       const students = await studentsCollection
         .aggregate([
-          ...buildStudentAggregationPipeline({
-            activity: activity,
-            status: { $in: ["enrolled", "hold"] },
-          }),
+          ...buildStudentAggregationPipeline(matchCriteria),
+          { $sort: { name: 1 } }, // Sort by name alphabetically
         ])
         .toArray();
 
-      if (!students.length) {
-        return res.status(200).send({
-          message: "No enrolled or hold students found for this activity",
-        });
-      }
-
       res.send(students);
     } catch (error) {
-      res.status(500).send({ error: "Failed to fetch students by activity" });
+      console.error("Search error:", error);
+      res.status(500).send({
+        error: "Failed to fetch students",
+        details:
+          process.env.NODE_ENV === "development" ? error.message : undefined,
+      });
     }
   });
 

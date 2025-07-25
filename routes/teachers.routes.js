@@ -47,28 +47,31 @@ module.exports = (
     }
   });
   router.get("/by-activity/:activity", async (req, res) => {
-    const activity = req.params.activity;
-
-    const query = {
-      activity: activity,
-      status: "approved", // Only approved teachers
-    };
-
     try {
-      const result = await teachersCollection.find(query).toArray();
+      const { activity } = req.params;
+      const { search } = req.query;
 
-      if (result.length > 0) {
-        res.send(result);
-      } else {
-        res
-          .status(200)
-          .send({ message: "No approved teachers found for this activity" });
+      // Simple query object
+      const query = {
+        activity: activity,
+        status: "approved",
+      };
+
+      // Add search if provided
+      if (search) {
+        query.name = { $regex: search, $options: "i" }; // Case-insensitive search
       }
+
+      // Get results
+      const teachers = await teachersCollection.find(query).toArray();
+
+      // Return results
+      res.send(teachers);
     } catch (error) {
-      res.status(500).send({ message: "Internal server error" });
+      console.error(error);
+      res.status(500).send("Server error");
     }
   });
-
   router.get("/pending-rejected", async (req, res) => {
     try {
       const query = { status: { $in: ["pending", "rejected"] } };

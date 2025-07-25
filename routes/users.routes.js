@@ -13,6 +13,12 @@ module.exports = (usersCollection) => {
     const result = await usersCollection.findOne(query);
     res.send({ role: result?.role });
   });
+  router.get("/by-email/:email", async (req, res) => {
+    const email = req.params.email;
+    const query = { email };
+    const result = await usersCollection.findOne(query);
+    res.send(result);
+  });
 
   router.post("/", async (req, res) => {
     const newUser = req.body;
