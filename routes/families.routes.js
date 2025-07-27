@@ -197,7 +197,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
         .toArray();
 
       if (result.length === 0) {
-        return res.status(404).send({ message: "Family not found" });
+        return res.status(200).send({ message: "Family not found" });
       }
 
       res.send(result[0]);
@@ -246,7 +246,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
         .toArray();
 
       if (result.length === 0) {
-        return res.status(404).send({ message: "Family not found" });
+        return res.status(200).send({ message: "Family not found" });
       }
 
       res.send(result[0]);
@@ -293,7 +293,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
         .toArray();
 
       if (result.length === 0) {
-        return res.status(404).send({ message: "Family not found" });
+        return res.status(200).send({ message: "Family not found" });
       }
 
       res.send(result[0]);
@@ -498,7 +498,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
         .toArray();
 
       if (result.length === 0) {
-        return res.status(404).send({ message: "Family not found" });
+        return res.status(200).send({ message: "Family not found" });
       }
 
       res.send(result[0]);

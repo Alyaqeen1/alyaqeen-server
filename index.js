@@ -25,6 +25,7 @@ const createMeritsRouter = require("./routes/merits.routes");
 const createLessonsCoveredRouter = require("./routes/lessons_covered.routes");
 const createNotificationsLogRouter = require("./routes/notifications_log.routes");
 const createHolidaysRouter = require("./routes/holidays.routes");
+const createReviewsRouter = require("./routes/reviews.routes");
 
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
@@ -99,6 +100,7 @@ async function run() {
     const groupsCollection = client.db("alyaqeenDb").collection("groups");
     const meritsCollection = client.db("alyaqeenDb").collection("merits");
     const holidaysCollection = client.db("alyaqeenDb").collection("holidays");
+    const reviewsCollection = client.db("alyaqeenDb").collection("reviews");
     const lessonsCoveredCollection = client
       .db("alyaqeenDb")
       .collection("lessons-covered");
@@ -216,6 +218,7 @@ async function run() {
     app.use("/prayer-times", createPrayerTimesRouter(prayerTimesCollection));
     app.use("/groups", createGroupsRouter(groupsCollection));
     app.use("/holidays", createHolidaysRouter(holidaysCollection));
+    app.use("/reviews", createReviewsRouter(reviewsCollection));
     app.use(
       "/attendances",
       createAttendancesRouter(
