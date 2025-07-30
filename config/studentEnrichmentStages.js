@@ -1,22 +1,34 @@
 const studentEnrichmentStages = () => [
+  // Safely convert IDs to ObjectId if they exist
   {
     $addFields: {
       deptObjectId: {
         $cond: [
-          { $ne: ["$academic.dept_id", null] },
+          {
+            $and: [
+              { $ifNull: ["$academic.dept_id", false] },
+              { $ne: ["$academic.dept_id", ""] },
+            ],
+          },
           { $toObjectId: "$academic.dept_id" },
           null,
         ],
       },
       classObjectId: {
         $cond: [
-          { $ne: ["$academic.class_id", null] },
+          {
+            $and: [
+              { $ifNull: ["$academic.class_id", false] },
+              { $ne: ["$academic.class_id", ""] },
+            ],
+          },
           { $toObjectId: "$academic.class_id" },
           null,
         ],
       },
     },
   },
+  // Lookup department info if deptObjectId exists
   {
     $lookup: {
       from: "departments",
@@ -25,6 +37,7 @@ const studentEnrichmentStages = () => [
       as: "departmentInfo",
     },
   },
+  // Lookup class info if classObjectId exists
   {
     $lookup: {
       from: "classes",
@@ -33,16 +46,26 @@ const studentEnrichmentStages = () => [
       as: "classInfo",
     },
   },
+  // Safely add enriched fields
   {
     $addFields: {
       "academic.department": {
-        $arrayElemAt: ["$departmentInfo.dept_name", 0],
+        $ifNull: [
+          { $arrayElemAt: ["$departmentInfo.dept_name", 0] },
+          "$academic.department", // Keep existing if no lookup result
+          null,
+        ],
       },
       "academic.class": {
-        $arrayElemAt: ["$classInfo.class_name", 0],
+        $ifNull: [
+          { $arrayElemAt: ["$classInfo.class_name", 0] },
+          "$academic.class", // Keep existing if no lookup result
+          null,
+        ],
       },
     },
   },
+  // Clean up temporary fields
   {
     $project: {
       departmentInfo: 0,
