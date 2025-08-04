@@ -6,6 +6,13 @@ const sendLateFirstReminderEmail = async ({
   parentName = "Parent",
   studentName = "your child", // single student name string
 }) => {
+  if (process.env.EMAIL_SENDING_ENABLED !== "true") {
+    console.log(
+      "🚫 Email sending is disabled (test mode). Skipping email to:",
+      to
+    );
+    return;
+  }
   if (!to || !process.env.BREVO_USER || !process.env.BREVO_PASS) {
     console.error("❌ Missing email credentials or recipient address");
     return;

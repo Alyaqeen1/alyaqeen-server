@@ -2,6 +2,13 @@ require("dotenv").config();
 const SibApiV3Sdk = require("sib-api-v3-sdk");
 
 const sendApprovalEmail = async ({ to, name, studentName }) => {
+  if (process.env.EMAIL_SENDING_ENABLED !== "true") {
+    console.log(
+      "🚫 Email sending is disabled (test mode). Skipping email to:",
+      to
+    );
+    return;
+  }
   const defaultClient = SibApiV3Sdk.ApiClient.instance;
   const apiKey = defaultClient.authentications["api-key"];
   apiKey.apiKey = process.env.BREVO_PASS;
