@@ -224,6 +224,7 @@ module.exports = (
               { $eq: ["$academic.session", cls.session] },
               { $eq: ["$academic.time", cls.session_time] },
               { $in: ["$status", ["enrolled", "hold"]] },
+              { $eq: ["$activity", "active"] },
             ],
           },
         },

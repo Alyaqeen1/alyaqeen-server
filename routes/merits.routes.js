@@ -26,11 +26,13 @@ module.exports = (
             { "student.family_name": { $regex: search, $options: "i" } },
             { "student.email": { $regex: search, $options: "i" } },
           ],
+          "student.activity": "active", // ✅ Only active students when searching
         };
       } else {
         // Only show students with 50+ merit
         matchStage = {
           totalMerit: { $gte: 50 },
+          "student.activity": "active", // ✅ Only active students for top list
         };
       }
 
