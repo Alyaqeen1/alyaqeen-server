@@ -80,7 +80,6 @@ module.exports = (
 
       // Debug: Log the pipeline before execution
       const pipeline = buildStudentAggregationPipeline();
-      console.log("Aggregation Pipeline:", JSON.stringify(pipeline, null, 2));
 
       // Execute the aggregation with error handling
       const cursor = studentsCollection.aggregate(pipeline).limit(50);

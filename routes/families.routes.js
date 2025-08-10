@@ -393,7 +393,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
                     $expr: {
                       $and: [
                         { $in: ["$uid", "$$childUids"] },
-                        { $in: ["$status", ["enrolled", "hold"]] },
+                        { $in: ["$status", ["enrolled", "hold", "approved"]] },
                         { $eq: ["$activity", "active"] },
                       ],
                     },
@@ -478,7 +478,12 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
                     $expr: {
                       $and: [
                         { $in: ["$uid", "$$childUids"] },
-                        { $eq: ["$status", "enrolled"] }, // filter only approved
+                        {
+                          $or: [
+                            { $eq: ["$status", "enrolled"] },
+                            { $eq: ["$status", "approved"] },
+                          ],
+                        },
                       ],
                     },
                   },

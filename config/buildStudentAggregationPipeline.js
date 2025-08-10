@@ -2,13 +2,12 @@ const buildStudentAggregationPipeline = (match = {}) => [
   {
     $match: {
       ...match,
-      // Ensure we don't try to convert empty/null strings to ObjectId
       $and: [
         {
           $or: [
             { "academic.dept_id": { $exists: false } },
             { "academic.dept_id": null },
-            { "academic.dept_id": { $type: "string", $ne: "" } },
+            { "academic.dept_id": { $type: "string" } },
             { "academic.dept_id": { $type: "objectId" } },
           ],
         },
@@ -16,7 +15,7 @@ const buildStudentAggregationPipeline = (match = {}) => [
           $or: [
             { "academic.class_id": { $exists: false } },
             { "academic.class_id": null },
-            { "academic.class_id": { $type: "string", $ne: "" } },
+            { "academic.class_id": { $type: "string" } },
             { "academic.class_id": { $type: "objectId" } },
           ],
         },
@@ -30,7 +29,6 @@ const buildStudentAggregationPipeline = (match = {}) => [
           {
             $and: [
               { $ne: ["$academic.dept_id", null] },
-              { $ne: ["$academic.dept_id", ""] },
               {
                 $or: [
                   { $eq: [{ $type: "$academic.dept_id" }, "string"] },
@@ -39,16 +37,24 @@ const buildStudentAggregationPipeline = (match = {}) => [
               },
             ],
           },
-          { $convert: { input: "$academic.dept_id", to: "objectId" } },
+          {
+            $convert: {
+              input: "$academic.dept_id",
+              to: "objectId",
+              onError: null,
+              onNull: null,
+            },
+          },
           null,
         ],
       },
+
       classObjectId: {
         $cond: [
           {
             $and: [
               { $ne: ["$academic.class_id", null] },
-              { $ne: ["$academic.class_id", ""] },
+              { $ne: ["$academic.class_id", ""] }, // avoid empty strings
               {
                 $or: [
                   { $eq: [{ $type: "$academic.class_id" }, "string"] },
@@ -57,7 +63,14 @@ const buildStudentAggregationPipeline = (match = {}) => [
               },
             ],
           },
-          { $convert: { input: "$academic.class_id", to: "objectId" } },
+          {
+            $convert: {
+              input: "$academic.class_id",
+              to: "objectId",
+              onError: null,
+              onNull: null,
+            },
+          },
           null,
         ],
       },
