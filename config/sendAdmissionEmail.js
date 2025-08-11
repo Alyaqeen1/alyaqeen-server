@@ -9,13 +9,13 @@ const sendEmailViaAPI = async ({
   totalAmount,
   method = "Selected Method",
 }) => {
-  if (process.env.EMAIL_SENDING_ENABLED !== "true") {
-    console.log(
-      "🚫 Email sending is disabled (test mode). Skipping email to:",
-      to
-    );
-    return;
-  }
+  // if (process.env.EMAIL_SENDING_ENABLED !== "true") {
+  //   console.log(
+  //     "🚫 Email sending is disabled (test mode). Skipping email to:",
+  //     to
+  //   );
+  //   return;
+  // }
   const defaultClient = SibApiV3Sdk.ApiClient.instance;
   const apiKey = defaultClient.authentications["api-key"];
   apiKey.apiKey = process.env.BREVO_PASS;
@@ -91,6 +91,7 @@ const sendEmailViaAPI = async ({
   <p>Your student(s) have been successfully admitted and are now welcome to attend the academy.</p>
   <br/>
   <p>Thank you for choosing Alyaqeen. If you have any questions, please reply to this email.</p>
+ <p>JazakumAllahu khayran for your support.</p>
   <p>Warm regards,<br />Alyaqeen Team</p>
 `,
   };

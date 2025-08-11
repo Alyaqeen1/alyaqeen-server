@@ -13,13 +13,13 @@ const sendMonthlyFeeEmail = async ({
   date = new Date(),
   isOnHold = false,
 }) => {
-  if (process.env.EMAIL_SENDING_ENABLED !== "true") {
-    console.log(
-      "🚫 Email sending is disabled (test mode). Skipping email to:",
-      to
-    );
-    return;
-  }
+  // if (process.env.EMAIL_SENDING_ENABLED !== "true") {
+  //   console.log(
+  //     "🚫 Email sending is disabled (test mode). Skipping email to:",
+  //     to
+  //   );
+  //   return;
+  // }
   const defaultClient = SibApiV3Sdk.ApiClient.instance;
   const apiKey = defaultClient.authentications["api-key"];
   apiKey.apiKey = process.env.BREVO_PASS;
@@ -85,6 +85,7 @@ const sendMonthlyFeeEmail = async ({
       <p><strong>Total Amount:</strong> €${totalAmount.toFixed(2)}</p>
       <br/>
       <p>Thank you for supporting your child’s education. If you have any questions, feel free to reply to this email.</p>
+      <p>JazakumAllahu khayran for your support.</p>
       <p>Warm regards,<br/>Alyaqeen Team</p>
     `,
   };

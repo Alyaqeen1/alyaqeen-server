@@ -7,13 +7,13 @@ const sendHoldEmail = async ({
   studentNames = [], // expects an array of names
   method = "your selected method",
 }) => {
-  if (process.env.EMAIL_SENDING_ENABLED !== "true") {
-    console.log(
-      "🚫 Email sending is disabled (test mode). Skipping email to:",
-      to
-    );
-    return;
-  }
+  // if (process.env.EMAIL_SENDING_ENABLED !== "true") {
+  //   console.log(
+  //     "🚫 Email sending is disabled (test mode). Skipping email to:",
+  //     to
+  //   );
+  //   return;
+  // }
   if (!to || !process.env.BREVO_USER || !process.env.BREVO_PASS) {
     console.error("❌ Missing email credentials or recipient address");
     return;
@@ -52,6 +52,7 @@ const sendHoldEmail = async ({
       <p>If you have already initiated the transfer, please share the payment receipt or reference number with us by replying to this email.</p>
       <p>If you have any questions or need banking details again, feel free to contact us.</p>
       <br />
+      <p>JazakumAllahu khayran for your support.</p>
       <p>Warm regards,<br />The Alyaqeen Team</p>
     `,
   };
