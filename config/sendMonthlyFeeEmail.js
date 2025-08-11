@@ -33,9 +33,9 @@ const sendMonthlyFeeEmail = async ({
       const monthsHtml = monthsPaid
         .map(
           (m) =>
-            `<li>${getMonthName(m.month)} ${m.year}: €${m.discountedFee.toFixed(
+            `<li>${getMonthName(m.month)} ${m.year}: £${m.discountedFee.toFixed(
               2
-            )} (Original: €${m.monthlyFee.toFixed(2)})</li>`
+            )} (Original: £${m.monthlyFee.toFixed(2)})</li>`
         )
         .join("");
 
@@ -54,11 +54,11 @@ const sendMonthlyFeeEmail = async ({
   });
 
   const messageIntro = isOnHold
-    ? `<p>We have <strong>recorded</strong> your payment of <strong>€${totalAmount.toFixed(
+    ? `<p>We have <strong>recorded</strong> your payment of <strong>£${totalAmount.toFixed(
         2
       )}</strong> via <strong>${method}</strong> on ${formattedDate}.</p>
        <p><em>Your payment is currently under review and will be confirmed by our administration shortly.</em></p>`
-    : `<p>We have <strong>received</strong> your monthly fee payment of <strong>€${totalAmount.toFixed(
+    : `<p>We have <strong>received</strong> your monthly fee payment of <strong>£${totalAmount.toFixed(
         2
       )}</strong> via <strong>${method}</strong> on ${formattedDate}.</p>`;
 
@@ -82,7 +82,7 @@ const sendMonthlyFeeEmail = async ({
       <br/>
       <p><strong>Payment Breakdown:</strong></p>
       ${studentDetailsHtml}
-      <p><strong>Total Amount:</strong> €${totalAmount.toFixed(2)}</p>
+      <p><strong>Total Amount:</strong> £${totalAmount.toFixed(2)}</p>
       <br/>
       <p>Thank you for supporting your child’s education. If you have any questions, feel free to reply to this email.</p>
       <p>JazakumAllahu khayran for your support.</p>

@@ -58,8 +58,8 @@ const sendEmailViaAPI = async ({
         <li><strong>Time:</strong> ${
           sessionMap[time] ? sessionMap[time] : "-"
         }</li>
-        <li><strong>Admission Fee:</strong> €${admissionFee.toFixed(2)}</li>
-        <li><strong>First Month Fee:</strong> €${monthly_fee.toFixed(2)}</li>
+        <li><strong>Admission Fee:</strong> £${admissionFee.toFixed(2)}</li>
+        <li><strong>First Month Fee:</strong> £${monthly_fee.toFixed(2)}</li>
         <li><strong>Starting Date:</strong> ${formattedStartDate}</li>
       </ul>
       <br/>
@@ -81,12 +81,12 @@ const sendEmailViaAPI = async ({
     subject: "✅ Admission Fee Confirmation - Alyaqeen",
     htmlContent: `
   <p>Dear <strong>${parentName}</strong>,</p>
-  <p>We have received your admission payment of <strong>€${totalAmount.toFixed(
+  <p>We have received your admission payment of <strong>£${totalAmount.toFixed(
     2
   )}</strong> via <strong>${method} method</strong>.</p>
   <br/>
   ${studentDetailsHtml}
-  <p><strong>Total Amount Received:</strong> €${totalAmount.toFixed(2)}</p>
+  <p><strong>Total Amount Received:</strong> £${totalAmount.toFixed(2)}</p>
   <br/>
   <p>Your student(s) have been successfully admitted and are now welcome to attend the academy.</p>
   <br/>
