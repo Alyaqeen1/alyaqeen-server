@@ -2,13 +2,13 @@ require("dotenv").config();
 const SibApiV3Sdk = require("sib-api-v3-sdk");
 
 const sendApprovalEmail = async ({ to, name, studentName }) => {
-  if (process.env.EMAIL_SENDING_ENABLED !== "true") {
-    console.log(
-      "🚫 Email sending is disabled (test mode). Skipping email to:",
-      to
-    );
-    return;
-  }
+  // if (process.env.EMAIL_SENDING_ENABLED !== "true") {
+  //   console.log(
+  //     "🚫 Email sending is disabled (test mode). Skipping email to:",
+  //     to
+  //   );
+  //   return;
+  // }
   const defaultClient = SibApiV3Sdk.ApiClient.instance;
   const apiKey = defaultClient.authentications["api-key"];
   apiKey.apiKey = process.env.BREVO_PASS;
@@ -36,6 +36,7 @@ const sendApprovalEmail = async ({ to, name, studentName }) => {
            <p>If you need any help or have questions, feel free to reply to this email.</p>
            <p>Thank you for choosing Alyaqeen. We’re looking forward to welcoming your child on board!</p>
       <br />
+      <p>JazakumAllahu khayran for your support.</p>
       <p>Warm regards,<br />Alyaqeen Team</p>
     `,
   };
