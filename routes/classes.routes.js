@@ -5,7 +5,25 @@ const router = express.Router();
 module.exports = (classesCollection) => {
   router.get("/", async (req, res) => {
     const result = await classesCollection.find().toArray();
-    res.send(result);
+
+    // Custom sorting function that handles alphanumeric parts
+    const compareClassNames = (a, b) => {
+      // Extract the main part of the class name (before any hyphen)
+      const nameA = a.class_name.split(" - ")[0];
+      const nameB = b.class_name.split(" - ")[0];
+
+      // First compare alphabetically
+      if (nameA < nameB) return -1;
+      if (nameA > nameB) return 1;
+
+      // If names are equal, compare the full class name
+      return a.class_name.localeCompare(b.class_name);
+    };
+
+    // Sort the results
+    const sortedResults = result.sort(compareClassNames);
+
+    res.send(sortedResults);
   });
   router.get("/find-one", async (req, res) => {
     const { dept_id, class_id, session, time } = req.query;
