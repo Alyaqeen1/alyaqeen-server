@@ -448,6 +448,9 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
               },
             },
           },
+          {
+            $sort: { name: 1 },
+          },
           // 5. (Optional) Remove the temporary field
           { $unset: "familyIdString" },
         ])
