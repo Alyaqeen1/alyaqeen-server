@@ -241,7 +241,7 @@ module.exports = (
 
   router.get("/by-activity/:activity", verifyToken, async (req, res) => {
     const activity = req.params.activity;
-    const { search } = req.query; // Get search term from query parameters
+    const { search } = req.query;
 
     try {
       // Base match criteria
@@ -252,13 +252,25 @@ module.exports = (
 
       // Add name search if search term exists
       if (search && search.trim() !== "") {
-        matchCriteria.name = { $regex: search, $options: "i" }; // Case-insensitive partial match
+        matchCriteria.name = { $regex: search, $options: "i" };
       }
 
       const students = await studentsCollection
         .aggregate([
           ...buildStudentAggregationPipeline(matchCriteria),
-          { $sort: { createdAt: -1 } }, // Sort by createdAt descending (recent first)
+          {
+            $addFields: {
+              // Convert startingDate string to proper date object for sorting
+              parsedStartingDate: {
+                $dateFromString: {
+                  dateString: "$startingDate",
+                  format: "%Y-%m-%d", // Format: YYYY-MM-DD
+                },
+              },
+            },
+          },
+          { $sort: { parsedStartingDate: 1 } }, // 1 for ascending order
+          { $project: { parsedStartingDate: 0 } }, // Remove the temporary field
         ])
         .toArray();
 
