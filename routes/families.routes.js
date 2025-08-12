@@ -394,7 +394,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
                       $and: [
                         { $in: ["$uid", "$$childUids"] },
                         { $in: ["$status", ["enrolled", "hold", "approved"]] },
-                        { $eq: ["$activity", "active"] },
+                        // { $eq: ["$activity", "active"] },
                       ],
                     },
                   },

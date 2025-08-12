@@ -244,13 +244,11 @@ module.exports = (
     const { search } = req.query;
 
     try {
-      // Base match criteria
       const matchCriteria = {
         activity: activity,
         status: { $in: ["enrolled", "hold"] },
       };
 
-      // Add name search if search term exists
       if (search && search.trim() !== "") {
         matchCriteria.name = { $regex: search, $options: "i" };
       }
@@ -260,17 +258,27 @@ module.exports = (
           ...buildStudentAggregationPipeline(matchCriteria),
           {
             $addFields: {
-              // Convert startingDate string to proper date object for sorting
               parsedStartingDate: {
-                $dateFromString: {
-                  dateString: "$startingDate",
-                  format: "%Y-%m-%d", // Format: YYYY-MM-DD
+                $cond: {
+                  if: {
+                    $and: [
+                      { $ne: ["$startingDate", null] },
+                      { $ne: ["$startingDate", ""] },
+                    ],
+                  },
+                  then: {
+                    $dateFromString: {
+                      dateString: "$startingDate",
+                      format: "%Y-%m-%d",
+                    },
+                  },
+                  else: new Date("9999-12-31"), // far future date so nulls go last
                 },
               },
             },
           },
-          { $sort: { parsedStartingDate: 1 } }, // 1 for ascending order
-          { $project: { parsedStartingDate: 0 } }, // Remove the temporary field
+          { $sort: { parsedStartingDate: 1 } },
+          { $project: { parsedStartingDate: 0 } },
         ])
         .toArray();
 
