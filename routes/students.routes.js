@@ -258,7 +258,7 @@ module.exports = (
       const students = await studentsCollection
         .aggregate([
           ...buildStudentAggregationPipeline(matchCriteria),
-          { $sort: { name: 1 } }, // Sort by name alphabetically
+          { $sort: { createdAt: -1 } }, // Sort by createdAt descending (recent first)
         ])
         .toArray();
 
