@@ -82,7 +82,7 @@ module.exports = (
       const pipeline = buildStudentAggregationPipeline();
 
       // Execute the aggregation with error handling
-      const cursor = studentsCollection.aggregate(pipeline).limit(50);
+      const cursor = studentsCollection.aggregate(pipeline);
       const result = await cursor.toArray();
 
       if (!result || result.length === 0) {
@@ -277,7 +277,7 @@ module.exports = (
               },
             },
           },
-          { $sort: { parsedStartingDate: 1 } },
+          { $sort: { parsedStartingDate: -1 } },
           { $project: { parsedStartingDate: 0 } },
         ])
         .toArray();
