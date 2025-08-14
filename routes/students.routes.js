@@ -240,6 +240,13 @@ module.exports = (
   });
 
   router.get("/by-activity/:activity", verifyToken, async (req, res) => {
+    res.setHeader("Surrogate-Control", "no-store");
+    res.setHeader(
+      "Cache-Control",
+      "no-store, no-cache, must-revalidate, proxy-revalidate"
+    );
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
     const activity = req.params.activity;
     const { search } = req.query;
 
@@ -259,20 +266,34 @@ module.exports = (
           {
             $addFields: {
               parsedStartingDate: {
-                $cond: {
-                  if: {
-                    $and: [
-                      { $ne: ["$startingDate", null] },
-                      { $ne: ["$startingDate", ""] },
-                    ],
+                $let: {
+                  vars: {
+                    dateStr: "$startingDate",
                   },
-                  then: {
-                    $dateFromString: {
-                      dateString: "$startingDate",
-                      format: "%Y-%m-%d",
+                  in: {
+                    $cond: {
+                      if: {
+                        $and: [
+                          { $ne: ["$$dateStr", null] },
+                          { $ne: ["$$dateStr", ""] },
+                          {
+                            $regexMatch: {
+                              input: "$$dateStr",
+                              regex: /^\d{4}-\d{2}-\d{2}$/,
+                            },
+                          },
+                        ],
+                      },
+                      then: {
+                        $dateFromString: {
+                          dateString: "$$dateStr",
+                          format: "%Y-%m-%d",
+                          onError: new Date("9999-12-31"), // fallback for invalid dates
+                        },
+                      },
+                      else: new Date("9999-12-31"),
                     },
                   },
-                  else: new Date("9999-12-31"), // far future date so nulls go last
                 },
               },
             },
