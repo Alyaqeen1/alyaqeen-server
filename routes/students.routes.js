@@ -242,7 +242,6 @@ module.exports = (
   router.get("/by-activity/:activity", async (req, res) => {
     const activity = req.params.activity;
     const { search } = req.query;
-    console.log("appeared");
     try {
       const matchCriteria = {
         activity: activity,
