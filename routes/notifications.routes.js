@@ -18,7 +18,7 @@ module.exports = (notificationsCollection, verifyToken) => {
     res.send(notifications);
   });
 
-  router.get("/unread", verifyToken, async (req, res) => {
+  router.get("/unread", async (req, res) => {
     try {
       const result = await notificationsCollection
         .find({ isRead: false })

@@ -150,7 +150,7 @@ module.exports = (
   });
 
   // 🔹 GET: Students without enrolled or hold status
-  router.get("/without-enrolled", verifyToken, async (req, res) => {
+  router.get("/without-enrolled", async (req, res) => {
     try {
       const result = await studentsCollection
         .aggregate(
@@ -166,7 +166,7 @@ module.exports = (
   });
 
   // 🔹 GET: Students by specific status
-  router.get("/get-by-status/:status", verifyToken, async (req, res) => {
+  router.get("/get-by-status/:status", async (req, res) => {
     const status = req.params.status;
     try {
       const result = await studentsCollection
@@ -179,7 +179,7 @@ module.exports = (
   });
 
   // 🔹 GET: Single student by ID (with department/class info)
-  router.get("/by-id/:id", verifyToken, async (req, res) => {
+  router.get("/by-id/:id", async (req, res) => {
     const id = req.params.id;
     try {
       const student = await studentsCollection
