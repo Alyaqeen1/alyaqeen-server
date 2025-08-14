@@ -253,39 +253,17 @@ module.exports = (
         matchCriteria.name = { $regex: search, $options: "i" };
       }
 
-      // 🔍 Log incoming request details
-      console.log("=== /by-activity API hit ===");
-      console.log("Device/Browser:", req.headers["user-agent"]);
-      console.log("Activity param:", activity);
-      console.log("Search param:", search);
-      console.log("Match criteria:", JSON.stringify(matchCriteria, null, 2));
+      // // 🔍 Log incoming request details
+      // console.log("=== /by-activity API hit ===");
+      // console.log("Device/Browser:", req.headers["user-agent"]);
+      // console.log("Activity param:", activity);
+      // console.log("Search param:", search);
+      // console.log("Match criteria:", JSON.stringify(matchCriteria, null, 2));
 
       const students = await studentsCollection
         .aggregate([
           ...buildStudentAggregationPipeline(matchCriteria),
-          {
-            $addFields: {
-              parsedStartingDate: {
-                $cond: {
-                  if: {
-                    $and: [
-                      { $ne: ["$startingDate", null] },
-                      { $ne: ["$startingDate", ""] },
-                    ],
-                  },
-                  then: {
-                    $dateFromString: {
-                      dateString: "$startingDate",
-                      format: "%Y-%m-%d",
-                    },
-                  },
-                  else: new Date("9999-12-31"),
-                },
-              },
-            },
-          },
-          { $sort: { parsedStartingDate: -1 } },
-          { $project: { parsedStartingDate: 0 } },
+          // No parsedStartingDate or sorting here
         ])
         .toArray();
 
@@ -305,6 +283,73 @@ module.exports = (
       });
     }
   });
+
+  // router.get("/by-activity/:activity", verifyToken, async (req, res) => {
+  //   const activity = req.params.activity;
+  //   const { search } = req.query;
+
+  //   try {
+  //     const matchCriteria = {
+  //       activity: activity,
+  //       status: { $in: ["enrolled", "hold"] },
+  //     };
+
+  //     if (search && search.trim() !== "") {
+  //       matchCriteria.name = { $regex: search, $options: "i" };
+  //     }
+
+  //     // 🔍 Log incoming request details
+  //     console.log("=== /by-activity API hit ===");
+  //     console.log("Device/Browser:", req.headers["user-agent"]);
+  //     console.log("Activity param:", activity);
+  //     console.log("Search param:", search);
+  //     console.log("Match criteria:", JSON.stringify(matchCriteria, null, 2));
+
+  //     const students = await studentsCollection
+  //       .aggregate([
+  //         ...buildStudentAggregationPipeline(matchCriteria),
+  //         {
+  //           $addFields: {
+  //             parsedStartingDate: {
+  //               $cond: {
+  //                 if: {
+  //                   $and: [
+  //                     { $ne: ["$startingDate", null] },
+  //                     { $ne: ["$startingDate", ""] },
+  //                   ],
+  //                 },
+  //                 then: {
+  //                   $dateFromString: {
+  //                     dateString: "$startingDate",
+  //                     format: "%Y-%m-%d",
+  //                   },
+  //                 },
+  //                 else: new Date("9999-12-31"),
+  //               },
+  //             },
+  //           },
+  //         },
+  //         { $sort: { parsedStartingDate: -1 } },
+  //         { $project: { parsedStartingDate: 0 } },
+  //       ])
+  //       .toArray();
+
+  //     // 🔍 Log the result count and some sample data
+  //     console.log("Students found:", students.length);
+  //     if (students.length) {
+  //       console.log("First student sample:", students[0]);
+  //     }
+
+  //     res.send(students);
+  //   } catch (error) {
+  //     console.error("Search error:", error);
+  //     res.status(500).send({
+  //       error: "Failed to fetch students",
+  //       details:
+  //         process.env.NODE_ENV === "development" ? error.message : undefined,
+  //     });
+  //   }
+  // });
 
   // Create new student
   router.post("/", async (req, res) => {
