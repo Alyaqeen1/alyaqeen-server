@@ -9,13 +9,13 @@ const sendEmailViaAPI = async ({
   totalAmount,
   method = "Selected Method",
 }) => {
-  // if (process.env.EMAIL_SENDING_ENABLED !== "true") {
-  //   console.log(
-  //     "🚫 Email sending is disabled (test mode). Skipping email to:",
-  //     to
-  //   );
-  //   return;
-  // }
+  if (process.env.EMAIL_SENDING_ENABLED !== "true") {
+    console.log(
+      "🚫 Email sending is disabled (test mode). Skipping email to:",
+      to
+    );
+    return;
+  }
   const defaultClient = SibApiV3Sdk.ApiClient.instance;
   const apiKey = defaultClient.authentications["api-key"];
   apiKey.apiKey = process.env.BREVO_PASS;
