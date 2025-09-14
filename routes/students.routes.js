@@ -195,6 +195,22 @@ module.exports = (
       res.status(500).send({ error: "Failed to fetch student" });
     }
   });
+  // 🔹 GET: Student by email
+  router.get("/by-email/:email", async (req, res) => {
+    const { email } = req.params;
+    try {
+      const students = await studentsCollection
+        .find({ email }, { projection: { _id: 1, name: 1 } }) // only return _id and name
+        .toArray();
+      if (!students.length) {
+        return res.status(404).send({ message: "Student not found" });
+      }
+
+      res.send(students); // send array with only _id & name
+    } catch (error) {
+      res.status(500).send({ error: "Failed to fetch student by email" });
+    }
+  });
 
   // GET /students/by-group/:classId  (classId comes from classes collection)
 
