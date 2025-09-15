@@ -11,8 +11,81 @@ module.exports = (
   familiesCollection,
   classesCollection,
   groupsCollection,
-  getNextSequenceValue
+  countersCollection // Receive the collection
 ) => {
+  async function getNextSequenceValue(sequenceName) {
+    try {
+      // First try to find and update the counter
+      const result = await countersCollection.findOneAndUpdate(
+        { _id: sequenceName },
+        { $inc: { sequence_value: 1 } },
+        {
+          returnDocument: "after", // Use this for newer drivers
+          upsert: true,
+        }
+      );
+
+      // Handle different response formats based on driver version
+      if (result && result.value) {
+        // Newer driver versions (4.x+)
+        return result.value.sequence_value;
+      } else if (result && result.sequence_value !== undefined) {
+        // Some versions might return the document directly
+        return result.sequence_value;
+      } else if (
+        result &&
+        result.lastErrorObject &&
+        result.lastErrorObject.updatedExisting
+      ) {
+        // For older drivers (3.x), we need to fetch the current value
+        const currentCounter = await countersCollection.findOne({
+          _id: sequenceName,
+        });
+        return currentCounter.sequence_value;
+      } else {
+        // If all else fails, manually handle the counter
+        const currentCounter = await countersCollection.findOne({
+          _id: sequenceName,
+        });
+        if (!currentCounter) {
+          // Create the counter if it doesn't exist
+          await countersCollection.insertOne({
+            _id: sequenceName,
+            sequence_value: 1,
+          });
+          return 1;
+        }
+        return currentCounter.sequence_value;
+      }
+    } catch (error) {
+      // Fallback: manually handle the counter operation
+      try {
+        const currentCounter = await countersCollection.findOne({
+          _id: sequenceName,
+        });
+
+        if (!currentCounter) {
+          // Create counter with initial value 1
+          await countersCollection.insertOne({
+            _id: sequenceName,
+            sequence_value: 1,
+          });
+          return 1;
+        }
+
+        // Increment and update manually
+        const newValue = currentCounter.sequence_value + 1;
+        await countersCollection.updateOne(
+          { _id: sequenceName },
+          { $set: { sequence_value: newValue } }
+        );
+
+        return newValue;
+      } catch (fallbackError) {
+        throw new Error(`Failed to get sequence value for ${sequenceName}`);
+      }
+    }
+  }
   // 🔁 Reusable aggregation pipeline function
   // const buildStudentAggregationPipeline = (match = {}) => [
   //   { $match: match },
@@ -295,6 +368,20 @@ module.exports = (
           },
           { $sort: { parsedStartingDate: -1 } },
           { $project: { parsedStartingDate: 0 } },
+          {
+            $project: {
+              _id: 1, // optional if you want to keep the ID,
+              uid: 1,
+              name: 1,
+              email: 1,
+              academic: 1,
+              monthly_fee: 1,
+              status: 1,
+              activity: 1,
+              startingDate: 1,
+              student_id: 1,
+            },
+          },
         ])
         .toArray();
 

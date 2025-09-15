@@ -117,11 +117,11 @@ async function run() {
     const countersCollection = client.db("alyaqeenDb").collection("counters");
 
     // Initialize the counter if it doesn't exist
-    await countersCollection.updateOne(
-      { _id: "studentId" },
-      { $setOnInsert: { sequence_value: 0 } },
-      { upsert: true }
-    );
+    // await countersCollection.updateOne(
+    //   { _id: "studentId" },
+    //   { $setOnInsert: { sequence_value: 0 } },
+    //   { upsert: true }
+    // );
     app.post("/jwt", async (req, res) => {
       const email = req.body;
       const token = jwt.sign(email, process.env.JWT_SECRET, {
@@ -177,79 +177,6 @@ async function run() {
         res.status(500).send({ error: error.message });
       }
     });
-    async function getNextSequenceValue(sequenceName) {
-      try {
-        // First try to find and update the counter
-        const result = await countersCollection.findOneAndUpdate(
-          { _id: sequenceName },
-          { $inc: { sequence_value: 1 } },
-          {
-            returnDocument: "after", // Use this for newer drivers
-            upsert: true,
-          }
-        );
-
-        // Handle different response formats based on driver version
-        if (result && result.value) {
-          // Newer driver versions (4.x+)
-          return result.value.sequence_value;
-        } else if (result && result.sequence_value !== undefined) {
-          // Some versions might return the document directly
-          return result.sequence_value;
-        } else if (
-          result &&
-          result.lastErrorObject &&
-          result.lastErrorObject.updatedExisting
-        ) {
-          // For older drivers (3.x), we need to fetch the current value
-          const currentCounter = await countersCollection.findOne({
-            _id: sequenceName,
-          });
-          return currentCounter.sequence_value;
-        } else {
-          // If all else fails, manually handle the counter
-          const currentCounter = await countersCollection.findOne({
-            _id: sequenceName,
-          });
-          if (!currentCounter) {
-            // Create the counter if it doesn't exist
-            await countersCollection.insertOne({
-              _id: sequenceName,
-              sequence_value: 1,
-            });
-            return 1;
-          }
-          return currentCounter.sequence_value;
-        }
-      } catch (error) {
-        // Fallback: manually handle the counter operation
-        try {
-          const currentCounter = await countersCollection.findOne({
-            _id: sequenceName,
-          });
-
-          if (!currentCounter) {
-            // Create counter with initial value 1
-            await countersCollection.insertOne({
-              _id: sequenceName,
-              sequence_value: 1,
-            });
-            return 1;
-          }
-
-          // Increment and update manually
-          const newValue = currentCounter.sequence_value + 1;
-          await countersCollection.updateOne(
-            { _id: sequenceName },
-            { $set: { sequence_value: newValue } }
-          );
-
-          return newValue;
-        } catch (fallbackError) {
-          throw new Error(`Failed to get sequence value for ${sequenceName}`);
-        }
-      }
-    }
 
     app.use(
       "/students",
@@ -259,7 +186,7 @@ async function run() {
         familiesCollection,
         classesCollection,
         groupsCollection,
-        getNextSequenceValue
+        countersCollection
       )
     );
     app.use("/users", createUsersRouter(usersCollection));

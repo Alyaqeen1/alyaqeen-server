@@ -5,8 +5,15 @@ const router = express.Router();
 
 module.exports = (familiesCollection, studentsCollection, feesCollection) => {
   router.get("/", async (req, res) => {
-    const result = await familiesCollection.find().toArray();
-    res.send(result);
+    try {
+      const result = await familiesCollection
+        .find({}, { projection: { _id: 1, children: 1 } }) // <-- correct
+        .toArray();
+      res.send(result);
+    } catch (err) {
+      console.error(err);
+      res.status(500).send({ message: "Server error" });
+    }
   });
 
   router.get("/:id", async (req, res) => {
