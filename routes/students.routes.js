@@ -10,7 +10,8 @@ module.exports = (
   verifyToken,
   familiesCollection,
   classesCollection,
-  groupsCollection
+  groupsCollection,
+  getNextSequenceValue
 ) => {
   // 🔁 Reusable aggregation pipeline function
   // const buildStudentAggregationPipeline = (match = {}) => [
@@ -309,14 +310,26 @@ module.exports = (
   });
 
   // Create new student
+  // Create new student
   router.post("/", async (req, res) => {
     const newStudent = req.body;
 
     try {
+      // Get the next sequential student ID
+      const studentId = await getNextSequenceValue("studentId");
+
+      // Add the sequential ID to the student data
+      newStudent.student_id = studentId;
+
       // If not found, insert new student
       const result = await studentsCollection.insertOne(newStudent);
-      res.status(201).send(result);
+
+      res.status(201).send({
+        ...result,
+        student_id: studentId, // Include the sequential ID in the response
+      });
     } catch (error) {
+      console.error("Error creating student:", error);
       res.status(500).send({ message: "Internal Server Error" });
     }
   });
