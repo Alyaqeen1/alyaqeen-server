@@ -12,54 +12,36 @@ module.exports = (lessonsCoveredCollection) => {
 
   router.post("/", async (req, res) => {
     const newLesson = req.body;
-    const { month, year, student_id, subject_id, time_of_month } = newLesson;
+    const { month, year, student_id, time_of_month } = newLesson;
 
     // Validation
-    if (!month || !year || !student_id || !subject_id || !time_of_month) {
+    if (!month || !year || !student_id || !time_of_month) {
       return res.status(400).send({
-        error:
-          "month, year, student_id, subject_id, and time_of_month are required",
+        message: "month, year, student_id and time_of_month are required",
       });
     }
 
     try {
-      // Fetch existing lessons for the same student, subject, month, and year
-      const existingLessons = await lessonsCoveredCollection
-        .find({ month, year, student_id, subject_id })
-        .toArray();
-
-      // Check for duplicate time_of_month for this subject
-      const duplicate = existingLessons.find(
-        (l) => l.time_of_month === time_of_month
-      );
+      // Check if a report already exists for same student, same month/year, same time_of_month
+      const duplicate = await lessonsCoveredCollection.findOne({
+        student_id,
+        year,
+        month,
+        time_of_month,
+      });
 
       if (duplicate) {
         return res.status(400).send({
-          message: `A "${time_of_month}" lesson for this subject already exists for the selected student and month.`,
-        });
-      }
-
-      // Check if both "beginning" and "ending" already exist for this subject
-      const hasBeginning = existingLessons.some(
-        (l) => l.time_of_month === "beginning"
-      );
-      const hasEnding = existingLessons.some(
-        (l) => l.time_of_month === "ending"
-      );
-
-      if (hasBeginning && hasEnding) {
-        return res.status(400).send({
-          message: `Both "beginning" and "ending" lessons already exist for this subject and student in this month.`,
+          message: `A ${time_of_month} of the month report already exists for this student in ${month}/${year}.`,
         });
       }
 
       // Insert new lesson
-      const result = await lessonsCoveredCollection.insertOne({
-        ...newLesson,
-      });
+      const result = await lessonsCoveredCollection.insertOne(newLesson);
 
       res.send(result);
     } catch (error) {
+      console.error(error);
       res.status(500).send({
         message: "Something went wrong while inserting the lesson.",
       });
@@ -1393,15 +1375,15 @@ module.exports = (lessonsCoveredCollection) => {
       }
 
       const pipeline = [
-        {
-          $match: { teacher_id: teacher_id },
-        },
+        { $match: { teacher_id } },
+
+        // Convert student_id to ObjectId
         {
           $addFields: {
             student_id_obj: { $toObjectId: "$student_id" },
-            subject_id_obj: { $toObjectId: "$subject_id" },
           },
         },
+
         // Lookup student info
         {
           $lookup: {
@@ -1412,21 +1394,8 @@ module.exports = (lessonsCoveredCollection) => {
           },
         },
         { $unwind: "$student_info" },
-        {
-          $addFields: {
-            student_name: "$student_info.name",
-          },
-        },
-        // Lookup subject info
-        {
-          $lookup: {
-            from: "subjects",
-            localField: "subject_id_obj",
-            foreignField: "_id",
-            as: "subject_info",
-          },
-        },
-        { $unwind: "$subject_info" },
+        { $addFields: { student_name: "$student_info.name" } },
+
         // Optional filtering
         {
           $match: {
@@ -1437,60 +1406,74 @@ module.exports = (lessonsCoveredCollection) => {
             ...(year && { year }),
           },
         },
-        // Group by student, subject, month and year
+
+        // Group by student, month, year to combine beginning and ending
         {
           $group: {
             _id: {
               student_id: "$student_id",
-              student_name: "$student_name",
-              subject_id: "$subject_id",
-              subject_name: "$subject_info.subject_name", // Include subject_name in grouping
               month: "$month",
               year: "$year",
             },
-            entries: {
+            student_name: { $first: "$student_name" },
+            month: { $first: "$month" },
+            year: { $first: "$year" },
+            beginning: {
               $push: {
-                _id: "$_id",
-                time_of_month: "$time_of_month",
-                book_name: "$book_name",
-                qaidahPages: "$qaidahPages",
-                duasSurahs: "$duasSurahs",
-                islamicStudiesPages: "$islamicStudiesPages",
-                description: "$description",
-                date: "$date",
+                $cond: [
+                  { $eq: ["$time_of_month", "beginning"] },
+                  {
+                    _id: "$_id",
+                    lessons: "$lessons",
+                    description: "$description",
+                    date: "$date",
+                  },
+                  "$$REMOVE",
+                ],
+              },
+            },
+            ending: {
+              $push: {
+                $cond: [
+                  { $eq: ["$time_of_month", "ending"] },
+                  {
+                    _id: "$_id",
+                    lessons: "$lessons",
+                    description: "$description",
+                    date: "$date",
+                  },
+                  "$$REMOVE",
+                ],
               },
             },
           },
         },
-        // Sort entries by time_of_month (beginning first)
+
+        // Unwind the arrays (they should only have one element each)
         {
           $addFields: {
-            entries: {
-              $sortArray: {
-                input: "$entries",
-                sortBy: { time_of_month: 1 },
-              },
-            },
+            beginning: { $arrayElemAt: ["$beginning", 0] },
+            ending: { $arrayElemAt: ["$ending", 0] },
           },
         },
+
         // Final projection
         {
           $project: {
             _id: 0,
             student_id: "$_id.student_id",
-            student_name: "$_id.student_name",
-            subject_id: "$_id.subject_id",
-            subject_name: "$_id.subject_name", // Subject name at root level
-            month: "$_id.month",
-            year: "$_id.year",
-            entries: 1,
+            student_name: 1,
+            month: 1,
+            year: 1,
+            beginning: 1,
+            ending: 1,
           },
         },
-        // Sort by student name, subject, year and month
+
+        // Sort by student, year, month
         {
           $sort: {
             student_name: 1,
-            subject_name: 1,
             year: 1,
             month: 1,
           },
@@ -1502,28 +1485,45 @@ module.exports = (lessonsCoveredCollection) => {
         .toArray();
       res.send(result);
     } catch (error) {
+      console.error(error);
       res.status(500).send({ error: "Internal server error" });
     }
   });
-
   router.put("/:id", async (req, res) => {
-    const id = req.params.id;
-    const updatedLesson = req.body;
-
     try {
-      // Remove _id before update
-      delete updatedLesson._id;
+      const id = req.params.id;
+      const updatedData = req.body;
+
+      // Validate ObjectId format
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({ error: "Invalid ID format" });
+      }
+
+      // Remove _id from update data to prevent modification
+      delete updatedData._id;
+
+      // Create a proper update object with $set
+      const updateObject = { $set: updatedData };
+
       const result = await lessonsCoveredCollection.updateOne(
-        { _id: new ObjectId(id) }, // ✅ Important: Convert to ObjectId
-        { $set: updatedLesson }
+        { _id: new ObjectId(id) },
+        updateObject
       );
 
-      res.send(result);
+      if (result.matchedCount === 0) {
+        return res.status(404).send({ error: "Document not found" });
+      }
+
+      res.send({
+        success: true,
+        modifiedCount: result.modifiedCount,
+        message: "Update successful",
+      });
     } catch (error) {
-      res.status(500).send({ error: "Update failed" });
+      console.error("Update error:", error);
+      res.status(500).send({ error: "Update failed", details: error.message });
     }
   });
-
   // PATCH /api/lessons_covered/publish/:id
   // PATCH /publish-multiple
   router.patch("/publish-multiple", async (req, res) => {
@@ -1588,6 +1588,5 @@ module.exports = (lessonsCoveredCollection) => {
 
     res.send({ success: true, deletedCount: result.deletedCount });
   });
-
   return router;
 };
