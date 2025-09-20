@@ -12,17 +12,25 @@ module.exports = (lessonsCoveredCollection) => {
 
   router.post("/", async (req, res) => {
     const newLesson = req.body;
-    const { month, year, student_id, time_of_month } = newLesson;
+    const { month, year, student_id, time_of_month, class_id, lessons } =
+      newLesson;
 
-    // Validation
-    if (!month || !year || !student_id || !time_of_month) {
+    if (
+      !month ||
+      !year ||
+      !student_id ||
+      !time_of_month ||
+      !class_id ||
+      !lessons
+    ) {
       return res.status(400).send({
-        message: "month, year, student_id and time_of_month are required",
+        message:
+          "month, year, student, time of month, class, and lessons are required. Check again",
       });
     }
 
     try {
-      // Check if a report already exists for same student, same month/year, same time_of_month
+      // 🚫 Check duplicate (same student + same month/year + same time_of_month)
       const duplicate = await lessonsCoveredCollection.findOne({
         student_id,
         year,
@@ -32,18 +40,112 @@ module.exports = (lessonsCoveredCollection) => {
 
       if (duplicate) {
         return res.status(400).send({
-          message: `A ${time_of_month} of the month report already exists for this student in ${month}/${year}.`,
+          message: `A ${time_of_month} report already exists for this student in ${month}/${year}.`,
         });
       }
 
-      // Insert new lesson
-      const result = await lessonsCoveredCollection.insertOne(newLesson);
+      // ✅ If this is "end of month", check subject consistency with "beginning"
+      if (time_of_month === "ending") {
+        const beginningLesson = await lessonsCoveredCollection.findOne({
+          student_id,
+          year,
+          month,
+          time_of_month: "beginning",
+        });
 
+        if (beginningLesson) {
+          const beginningSubjects = Object.keys(beginningLesson.lessons || {});
+          const endSubjects = Object.keys(lessons);
+
+          // Check if the same subjects are present
+          const mismatch = endSubjects.filter(
+            (subj) => !beginningSubjects.includes(subj)
+          );
+
+          if (mismatch.length > 0) {
+            return res.status(400).send({
+              message: `Subject mismatch detected between beginning and end of the month.`,
+              details: {
+                beginningSubjects,
+                endSubjects,
+                wrongSubjects: mismatch,
+              },
+            });
+          }
+
+          // Check if qaidah_quran selection is consistent
+          if (lessons.qaidah_quran && beginningLesson.lessons.qaidah_quran) {
+            if (
+              lessons.qaidah_quran.selected !==
+              beginningLesson.lessons.qaidah_quran.selected
+            ) {
+              return res.status(400).send({
+                message: `Quran subject selection mismatch. Beginning was "${beginningLesson.lessons.qaidah_quran.selected}" but ending is "${lessons.qaidah_quran.selected}".`,
+              });
+            }
+          }
+        }
+      }
+
+      // ✅ Restrict page number lower than last record
+      const lastLessons = await lessonsCoveredCollection
+        .find({ student_id })
+        .sort({ year: -1, month: -1, time_of_month: -1 })
+        .limit(2)
+        .toArray();
+
+      if (lastLessons.length > 0) {
+        // Find the most recent ending report or the most recent report if no ending exists
+        let lastLessonWithEnding = lastLessons.find(
+          (lesson) => lesson.time_of_month === "ending"
+        );
+        let prevLesson = lastLessonWithEnding || lastLessons[0];
+
+        const wrongSubjects = [];
+
+        // Compare page numbers for each subject
+        for (const subjectKey of Object.keys(lessons)) {
+          if (prevLesson.lessons && prevLesson.lessons[subjectKey]) {
+            let newPage, prevPage;
+
+            // Handle different subject structures
+            if (subjectKey === "qaidah_quran" && lessons[subjectKey].data) {
+              newPage = parseInt(lessons[subjectKey].data.page || 0);
+              prevPage = parseInt(
+                prevLesson.lessons[subjectKey].data?.page || 0
+              );
+            } else {
+              newPage = parseInt(lessons[subjectKey].page || 0);
+              prevPage = parseInt(prevLesson.lessons[subjectKey].page || 0);
+            }
+
+            if (newPage < prevPage) {
+              wrongSubjects.push({
+                subject: subjectKey,
+                prevPage: prevPage,
+                newPage: newPage,
+              });
+            }
+          }
+        }
+
+        if (wrongSubjects.length > 0) {
+          return res.status(400).send({
+            message:
+              "Some subjects have lower page numbers than previous report.",
+            details: wrongSubjects,
+          });
+        }
+      }
+
+      // ✅ Insert new lesson
+      const result = await lessonsCoveredCollection.insertOne(newLesson);
       res.send(result);
     } catch (error) {
-      console.error(error);
+      console.error("Error inserting lesson:", error);
       res.status(500).send({
         message: "Something went wrong while inserting the lesson.",
+        error: error.message,
       });
     }
   });
@@ -1493,6 +1595,7 @@ module.exports = (lessonsCoveredCollection) => {
     try {
       const id = req.params.id;
       const updatedData = req.body;
+      const { lessons } = updatedData;
 
       // Validate ObjectId format
       if (!ObjectId.isValid(id)) {
@@ -1502,12 +1605,84 @@ module.exports = (lessonsCoveredCollection) => {
       // Remove _id from update data to prevent modification
       delete updatedData._id;
 
-      // Create a proper update object with $set
-      const updateObject = { $set: updatedData };
+      // Get the existing document
+      const existingLesson = await lessonsCoveredCollection.findOne({
+        _id: new ObjectId(id),
+      });
 
+      if (!existingLesson) {
+        return res.status(404).send({ error: "Document not found" });
+      }
+
+      // ✅ Page number restriction (only if lessons are being updated)
+      if (lessons) {
+        // Find the most recent previous record (excluding current document)
+        const previousRecords = await lessonsCoveredCollection
+          .find({
+            student_id: existingLesson.student_id,
+            _id: { $ne: new ObjectId(id) },
+            $or: [
+              { year: { $lt: existingLesson.year } },
+              {
+                year: existingLesson.year,
+                month: { $lt: existingLesson.month },
+              },
+              {
+                year: existingLesson.year,
+                month: existingLesson.month,
+                time_of_month: { $lt: existingLesson.time_of_month },
+              },
+            ],
+          })
+          .sort({ year: -1, month: -1, time_of_month: -1 })
+          .limit(1)
+          .toArray();
+
+        // Only validate if there are previous records
+        if (previousRecords.length > 0) {
+          const prevLesson = previousRecords[0];
+          const wrongSubjects = [];
+
+          // Compare page numbers for each subject
+          for (const subjectKey of Object.keys(lessons)) {
+            if (prevLesson.lessons && prevLesson.lessons[subjectKey]) {
+              let newPage, prevPage;
+
+              // Handle different subject structures
+              if (subjectKey === "qaidah_quran" && lessons[subjectKey].data) {
+                newPage = parseInt(lessons[subjectKey].data.page || 0);
+                prevPage = parseInt(
+                  prevLesson.lessons[subjectKey].data?.page || 0
+                );
+              } else {
+                newPage = parseInt(lessons[subjectKey].page || 0);
+                prevPage = parseInt(prevLesson.lessons[subjectKey].page || 0);
+              }
+
+              if (newPage < prevPage) {
+                wrongSubjects.push({
+                  subject: subjectKey,
+                  prevPage: prevPage,
+                  newPage: newPage,
+                });
+              }
+            }
+          }
+
+          if (wrongSubjects.length > 0) {
+            return res.status(400).send({
+              message:
+                "Some subjects have lower page numbers than previous report.",
+              details: wrongSubjects,
+            });
+          }
+        }
+      }
+
+      // Update the document
       const result = await lessonsCoveredCollection.updateOne(
         { _id: new ObjectId(id) },
-        updateObject
+        { $set: updatedData }
       );
 
       if (result.matchedCount === 0) {
