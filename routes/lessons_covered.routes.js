@@ -606,13 +606,13 @@ module.exports = (lessonsCoveredCollection) => {
     }
   });
 
-  // Teacher monthly progress - UPDATED VERSION with lesson name display
+  // Teacher monthly progress - UPDATED with gift_for_muslim support
   router.get("/teacher-monthly-summary/:teacher_id", async (req, res) => {
     try {
       const { teacher_id } = req.params;
       const { month, year } = req.query;
 
-      // Create match conditions
+      // Create match conditions - only unpublished monthly reports
       const matchConditions = {
         teacher_id: teacher_id,
         monthly_publish: false,
@@ -627,26 +627,13 @@ module.exports = (lessonsCoveredCollection) => {
           $match: matchConditions,
         },
 
-        // Convert string IDs to ObjectId with error handling for empty subject_id
+        // Convert string IDs to ObjectId
         {
           $addFields: {
             student_id: { $toObjectId: "$student_id" },
             class_id: { $toObjectId: "$class_id" },
             teacher_id: { $toObjectId: "$teacher_id" },
             department_id: { $toObjectId: "$department_id" },
-            // Handle empty subject_id gracefully
-            subject_id: {
-              $cond: {
-                if: {
-                  $and: [
-                    { $ne: ["$subject_id", ""] },
-                    { $ne: ["$subject_id", null] },
-                  ],
-                },
-                then: { $toObjectId: "$subject_id" },
-                else: null,
-              },
-            },
             original_id: { $toString: "$_id" },
           },
         },
@@ -665,10 +652,10 @@ module.exports = (lessonsCoveredCollection) => {
                 lessons: "$lessons",
                 original_id: "$original_id",
                 monthly_publish: "$monthly_publish",
+                type: "$type", // Include type in grouping
               },
             },
             class_id: { $first: "$class_id" },
-            subject_id: { $first: "$subject_id" },
             teacher_id: { $first: "$teacher_id" },
             department_id: { $first: "$department_id" },
             all_published: { $min: "$monthly_publish" },
@@ -690,7 +677,6 @@ module.exports = (lessonsCoveredCollection) => {
             month: "$_id.month",
             year: "$_id.year",
             class_id: 1,
-            subject_id: 1,
             teacher_id: 1,
             department_id: 1,
             entries: 1,
@@ -735,9 +721,17 @@ module.exports = (lessonsCoveredCollection) => {
             month: 1,
             year: 1,
             class_id: 1,
-            subject_id: 1,
             teacher_id: 1,
             department_id: 1,
+
+            // Determine type (use ending type if available, otherwise beginning)
+            type: {
+              $cond: [
+                { $ne: ["$ending.type", null] },
+                "$ending.type",
+                "$beginning.type",
+              ],
+            },
 
             // Qaidah/Quran progress
             qaidah_quran_progress: {
@@ -789,7 +783,6 @@ module.exports = (lessonsCoveredCollection) => {
                       },
                     ],
                   },
-                  // Level display as "beginning - ending"
                   level_display: {
                     $cond: [
                       {
@@ -818,7 +811,6 @@ module.exports = (lessonsCoveredCollection) => {
                       "N/A",
                     ],
                   },
-                  // Lesson name display as "beginning - ending"
                   lesson_name_display: {
                     $cond: [
                       {
@@ -853,7 +845,7 @@ module.exports = (lessonsCoveredCollection) => {
               ],
             },
 
-            // Islamic Studies progress
+            // Islamic Studies progress (only for normal type)
             islamic_studies_progress: {
               $cond: [
                 {
@@ -864,6 +856,7 @@ module.exports = (lessonsCoveredCollection) => {
                     "$ending.lessons",
                     "$beginning.lessons.islamic_studies",
                     "$ending.lessons.islamic_studies",
+                    { $ne: ["$ending.type", "gift_muslim"] }, // Only for normal type
                   ],
                 },
                 {
@@ -883,7 +876,6 @@ module.exports = (lessonsCoveredCollection) => {
                       },
                     ],
                   },
-                  // Book display as "beginning - ending"
                   book_display: {
                     $cond: [
                       {
@@ -912,7 +904,6 @@ module.exports = (lessonsCoveredCollection) => {
                       "N/A",
                     ],
                   },
-                  // Lesson name display as "beginning - ending"
                   lesson_name_display: {
                     $cond: [
                       {
@@ -946,7 +937,7 @@ module.exports = (lessonsCoveredCollection) => {
               ],
             },
 
-            // Dua/Surah progress
+            // Dua/Surah progress (only for normal type)
             dua_surah_progress: {
               $cond: [
                 {
@@ -957,6 +948,7 @@ module.exports = (lessonsCoveredCollection) => {
                     "$ending.lessons",
                     "$beginning.lessons.dua_surah",
                     "$ending.lessons.dua_surah",
+                    { $ne: ["$ending.type", "gift_muslim"] }, // Only for normal type
                   ],
                 },
                 {
@@ -1008,7 +1000,6 @@ module.exports = (lessonsCoveredCollection) => {
                       },
                     ],
                   },
-                  // Book display as "beginning - ending"
                   book_display: {
                     $cond: [
                       {
@@ -1034,7 +1025,6 @@ module.exports = (lessonsCoveredCollection) => {
                       "N/A",
                     ],
                   },
-                  // Level display as "beginning - ending"
                   level_display: {
                     $cond: [
                       {
@@ -1060,7 +1050,6 @@ module.exports = (lessonsCoveredCollection) => {
                       "N/A",
                     ],
                   },
-                  // Lesson name display as "beginning - ending"
                   lesson_name_display: {
                     $cond: [
                       {
@@ -1081,6 +1070,116 @@ module.exports = (lessonsCoveredCollection) => {
                           {
                             $ifNull: [
                               "$ending.lessons.dua_surah.lesson_name",
+                              "N/A",
+                            ],
+                          },
+                        ],
+                      },
+                      "N/A",
+                    ],
+                  },
+                },
+                null,
+              ],
+            },
+
+            // Gift for Muslim progress (only for gift_muslim type)
+            gift_for_muslim_progress: {
+              $cond: [
+                {
+                  $and: [
+                    "$beginning",
+                    "$ending",
+                    "$beginning.lessons",
+                    "$ending.lessons",
+                    "$beginning.lessons.gift_for_muslim",
+                    "$ending.lessons.gift_for_muslim",
+                    { $eq: ["$ending.type", "gift_muslim"] }, // Only for gift_muslim type
+                  ],
+                },
+                {
+                  page_progress: {
+                    $subtract: [
+                      {
+                        $ifNull: [
+                          { $toInt: "$ending.lessons.gift_for_muslim.page" },
+                          0,
+                        ],
+                      },
+                      {
+                        $ifNull: [
+                          { $toInt: "$beginning.lessons.gift_for_muslim.page" },
+                          0,
+                        ],
+                      },
+                    ],
+                  },
+                  target_progress: {
+                    $subtract: [
+                      {
+                        $ifNull: [
+                          { $toInt: "$ending.lessons.gift_for_muslim.target" },
+                          0,
+                        ],
+                      },
+                      {
+                        $ifNull: [
+                          {
+                            $toInt: "$beginning.lessons.gift_for_muslim.target",
+                          },
+                          0,
+                        ],
+                      },
+                    ],
+                  },
+                  level_display: {
+                    $cond: [
+                      {
+                        $and: [
+                          "$beginning.lessons.gift_for_muslim.level",
+                          "$ending.lessons.gift_for_muslim.level",
+                        ],
+                      },
+                      {
+                        $concat: [
+                          {
+                            $ifNull: [
+                              "$beginning.lessons.gift_for_muslim.level",
+                              "N/A",
+                            ],
+                          },
+                          " - ",
+                          {
+                            $ifNull: [
+                              "$ending.lessons.gift_for_muslim.level",
+                              "N/A",
+                            ],
+                          },
+                        ],
+                      },
+                      "N/A",
+                    ],
+                  },
+                  lesson_name_display: {
+                    $cond: [
+                      {
+                        $and: [
+                          "$beginning.lessons.gift_for_muslim.lesson_name",
+                          "$ending.lessons.gift_for_muslim.lesson_name",
+                        ],
+                      },
+                      {
+                        $concat: [
+                          {
+                            $ifNull: [
+                              "$beginning.lessons.gift_for_muslim.lesson_name",
+                              "N/A",
+                            ],
+                          },
+                          " - ",
+                          {
+                            $ifNull: [
+                              "$ending.lessons.gift_for_muslim.lesson_name",
                               "N/A",
                             ],
                           },
@@ -1118,7 +1217,7 @@ module.exports = (lessonsCoveredCollection) => {
           },
         },
 
-        // Lookup related data with null handling for subject_id
+        // Lookup related data
         {
           $lookup: {
             from: "students",
@@ -1139,17 +1238,6 @@ module.exports = (lessonsCoveredCollection) => {
           },
         },
         { $unwind: { path: "$class_info", preserveNullAndEmptyArrays: true } },
-        {
-          $lookup: {
-            from: "subjects",
-            localField: "subject_id",
-            foreignField: "_id",
-            as: "subject_info",
-          },
-        },
-        {
-          $unwind: { path: "$subject_info", preserveNullAndEmptyArrays: true },
-        },
 
         // Final projection
         {
@@ -1160,11 +1248,12 @@ module.exports = (lessonsCoveredCollection) => {
             teacher_id: 1,
             month: 1,
             year: 1,
+            type: 1,
             class_name: "$class_info.class_name",
-            subject_name: { $ifNull: ["$subject_info.subject_name", "N/A"] },
             qaidah_quran_progress: 1,
             islamic_studies_progress: 1,
             dua_surah_progress: 1,
+            gift_for_muslim_progress: 1,
             hasBeginning: 1,
             hasEnding: 1,
             isUnpublished: 1,
@@ -1185,7 +1274,7 @@ module.exports = (lessonsCoveredCollection) => {
     }
   });
 
-  // Teacher yearly progress - UPDATED VERSION
+  // Teacher yearly progress - UPDATED with gift_for_muslim support
   router.get("/teacher-yearly-summary/:teacher_id", async (req, res) => {
     try {
       const { teacher_id } = req.params;
@@ -1211,19 +1300,6 @@ module.exports = (lessonsCoveredCollection) => {
             student_id: { $toObjectId: "$student_id" },
             class_id: { $toObjectId: "$class_id" },
             teacher_id: { $toObjectId: "$teacher_id" },
-            // Handle empty subject_id gracefully
-            subject_id: {
-              $cond: {
-                if: {
-                  $and: [
-                    { $ne: ["$subject_id", ""] },
-                    { $ne: ["$subject_id", null] },
-                  ],
-                },
-                then: { $toObjectId: "$subject_id" },
-                else: null,
-              },
-            },
           },
         },
         {
@@ -1232,12 +1308,12 @@ module.exports = (lessonsCoveredCollection) => {
               student_id: "$student_id",
               month: "$month",
               class_id: "$class_id",
-              subject_id: "$subject_id",
             },
             entries: {
               $push: {
                 time_of_month: "$time_of_month",
                 lessons: "$lessons",
+                type: "$type", // Include type in grouping
               },
             },
             document_ids: { $addToSet: "$_id" },
@@ -1249,7 +1325,6 @@ module.exports = (lessonsCoveredCollection) => {
             student_id: "$_id.student_id",
             month: "$_id.month",
             class_id: "$_id.class_id",
-            subject_id: "$_id.subject_id",
             document_ids: 1,
             beginning: {
               $arrayElemAt: [
@@ -1287,8 +1362,14 @@ module.exports = (lessonsCoveredCollection) => {
             student_id: 1,
             month: 1,
             class_id: 1,
-            subject_id: 1,
             document_ids: 1,
+            type: {
+              $cond: [
+                { $ne: ["$ending.type", null] },
+                "$ending.type",
+                "$beginning.type",
+              ],
+            },
 
             // Calculate monthly progress for each lesson type with proper null handling
             qaidah_quran_monthly: {
@@ -1355,6 +1436,7 @@ module.exports = (lessonsCoveredCollection) => {
                     "$ending.lessons",
                     "$beginning.lessons.islamic_studies",
                     "$ending.lessons.islamic_studies",
+                    { $ne: ["$ending.type", "gift_muslim"] }, // Only for normal type
                   ],
                 },
                 {
@@ -1389,6 +1471,7 @@ module.exports = (lessonsCoveredCollection) => {
                     "$ending.lessons",
                     "$beginning.lessons.dua_surah",
                     "$ending.lessons.dua_surah",
+                    { $ne: ["$ending.type", "gift_muslim"] }, // Only for normal type
                   ],
                 },
                 {
@@ -1449,6 +1532,62 @@ module.exports = (lessonsCoveredCollection) => {
               ],
             },
 
+            gift_for_muslim_monthly: {
+              $cond: [
+                {
+                  $and: [
+                    "$beginning",
+                    "$ending",
+                    "$beginning.lessons",
+                    "$ending.lessons",
+                    "$beginning.lessons.gift_for_muslim",
+                    "$ending.lessons.gift_for_muslim",
+                    { $eq: ["$ending.type", "gift_muslim"] }, // Only for gift_muslim type
+                  ],
+                },
+                {
+                  page_progress: {
+                    $subtract: [
+                      {
+                        $ifNull: [
+                          { $toInt: "$ending.lessons.gift_for_muslim.page" },
+                          0,
+                        ],
+                      },
+                      {
+                        $ifNull: [
+                          { $toInt: "$beginning.lessons.gift_for_muslim.page" },
+                          0,
+                        ],
+                      },
+                    ],
+                  },
+                  target_progress: {
+                    $subtract: [
+                      {
+                        $ifNull: [
+                          { $toInt: "$ending.lessons.gift_for_muslim.target" },
+                          0,
+                        ],
+                      },
+                      {
+                        $ifNull: [
+                          {
+                            $toInt: "$beginning.lessons.gift_for_muslim.target",
+                          },
+                          0,
+                        ],
+                      },
+                    ],
+                  },
+                },
+                {
+                  page_progress: 0,
+                  target_progress: 0,
+                },
+              ],
+            },
+
             hasBeginning: { $ne: ["$beginning", null] },
           },
         },
@@ -1457,7 +1596,7 @@ module.exports = (lessonsCoveredCollection) => {
             _id: {
               student_id: "$student_id",
               class_id: "$class_id",
-              subject_id: "$subject_id",
+              type: "$type", // Group by type as well
               year: { $literal: parseInt(year) },
             },
             processedDocumentIds: { $addToSet: "$document_ids" },
@@ -1484,6 +1623,13 @@ module.exports = (lessonsCoveredCollection) => {
               $sum: "$dua_surah_monthly.dua_number_progress",
             },
 
+            gift_for_muslim_pages_yearly: {
+              $sum: "$gift_for_muslim_monthly.page_progress",
+            },
+            gift_for_muslim_targets_yearly: {
+              $sum: "$gift_for_muslim_monthly.target_progress",
+            },
+
             months_with_ending: { $sum: 1 },
             months_with_both: {
               $sum: {
@@ -1497,7 +1643,7 @@ module.exports = (lessonsCoveredCollection) => {
             _id: 0,
             student_id: "$_id.student_id",
             class_id: "$_id.class_id",
-            subject_id: "$_id.subject_id",
+            type: "$_id.type",
             year: "$_id.year",
             processedDocumentIds: {
               $reduce: {
@@ -1512,6 +1658,8 @@ module.exports = (lessonsCoveredCollection) => {
             dua_surah_pages_yearly: 1,
             dua_surah_targets_yearly: 1,
             dua_surah_numbers_yearly: 1,
+            gift_for_muslim_pages_yearly: 1,
+            gift_for_muslim_targets_yearly: 1,
             months_with_ending: 1,
             months_with_both: 1,
           },
@@ -1537,30 +1685,21 @@ module.exports = (lessonsCoveredCollection) => {
         },
         { $unwind: { path: "$class_info", preserveNullAndEmptyArrays: true } },
         {
-          $lookup: {
-            from: "subjects",
-            localField: "subject_id",
-            foreignField: "_id",
-            as: "subject_info",
-          },
-        },
-        {
-          $unwind: { path: "$subject_info", preserveNullAndEmptyArrays: true },
-        },
-        {
           $project: {
             student_id: 1,
             student_name: "$student_info.name",
             year: 1,
+            type: 1,
             processedDocumentIds: 1,
             class_name: "$class_info.class_name",
-            subject_name: { $ifNull: ["$subject_info.subject_name", "N/A"] },
             qaidah_quran_yearly: 1,
             qaidah_quran_lines_yearly: 1,
             islamic_studies_yearly: 1,
             dua_surah_pages_yearly: 1,
             dua_surah_targets_yearly: 1,
             dua_surah_numbers_yearly: 1,
+            gift_for_muslim_pages_yearly: 1,
+            gift_for_muslim_targets_yearly: 1,
             months_with_ending: 1,
             months_with_both: 1,
           },
@@ -1576,6 +1715,7 @@ module.exports = (lessonsCoveredCollection) => {
       return res.status(200).json([]);
     }
   });
+
   // student monthly summary
   router.get("/student-monthly-summary", async (req, res) => {
     try {
