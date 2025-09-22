@@ -172,7 +172,7 @@ module.exports = (
       res.status(500).send({ message: "Internal server error" });
     }
   });
-  // Add this route to your existing fees routes
+
   router.get("/student-summary/:studentId", async (req, res) => {
     try {
       const { studentId } = req.params;
@@ -181,7 +181,7 @@ module.exports = (
         return res.status(400).send({ message: "Student ID is required" });
       }
 
-      // 1. Get student details
+      // 1. Get the student details
       const student = await studentsCollection.findOne({
         _id: new ObjectId(studentId),
       });
@@ -190,7 +190,7 @@ module.exports = (
         return res.status(404).send({ message: "Student not found" });
       }
 
-      // 2. Get all monthly fees for this student
+      // 2. Get all monthly fees for this student (both paid and pending)
       const allFees = await feesCollection
         .find({
           "students.studentId": studentId,
@@ -198,52 +198,132 @@ module.exports = (
         })
         .toArray();
 
-      // 3. Total Paid Monthly (all paid months)
-      let totalPaid = 0;
+      // 3. Extract all paid months for this student
+      const paidMonths = new Set();
+      let totalMonthlyPaid = 0;
+      const monthlyPayments = [];
+
       allFees.forEach((fee) => {
-        fee.students.forEach((s) => {
-          if (s.studentId === studentId && Array.isArray(s.monthsPaid)) {
-            s.monthsPaid.forEach((mp) => {
-              totalPaid +=
-                mp.discountedFee > 0 ? mp.discountedFee : mp.monthlyFee;
+        fee.students.forEach((feeStudent) => {
+          if (feeStudent.studentId === studentId && feeStudent.monthsPaid) {
+            feeStudent.monthsPaid.forEach((monthPaid) => {
+              const monthKey = `${monthPaid.year}-${monthPaid.month
+                .toString()
+                .padStart(2, "0")}`;
+              paidMonths.add(monthKey);
+
+              const paymentAmount =
+                monthPaid.discountedFee > 0
+                  ? monthPaid.discountedFee
+                  : monthPaid.monthlyFee;
+              totalMonthlyPaid += paymentAmount;
+
+              monthlyPayments.push({
+                month: monthKey,
+                amount: paymentAmount,
+                paymentDate: fee.timestamp,
+                status: fee.status,
+                paymentType: fee.paymentType,
+                feeId: fee._id,
+              });
             });
           }
         });
       });
 
-      // 4. Use getUnpaidFees to calculate unpaid months
-      const unpaidData = getUnpaidFees({
+      // 4. Calculate unpaid months using getUnpaidFees
+      const unpaidFees = getUnpaidFees({
         students: [student],
         fees: allFees,
         feeChoice: "standard",
         discount: 0,
+        startFromMonth: "2025-10", // new
       });
 
-      // 5. Filter unpaid months from September 2025 onward
-      const filterFromMonth = new Date("2025-09-01");
-      let unpaidMonthly = 0;
-      let outstandingBalance = 0;
+      // 5. Calculate outstanding amount and unpaid months details
+      let outstandingAmount = 0;
+      const unpaidMonthsDetails = [];
 
-      unpaidData.forEach((monthObj) => {
-        const monthDate = new Date(`${monthObj.month}-01`);
-        if (monthDate >= filterFromMonth) {
-          monthObj.students.forEach((stu) => {
-            if (stu.studentId === studentId) {
-              unpaidMonthly += stu.monthsUnpaid.length;
-              outstandingBalance += stu.subtotal;
-            }
-          });
+      unpaidFees.forEach((unpaidFee) => {
+        unpaidFee.students.forEach((unpaidStudent) => {
+          if (unpaidStudent.studentId === studentId) {
+            unpaidStudent.monthsUnpaid.forEach((monthUnpaid) => {
+              outstandingAmount += monthUnpaid.discountedFee;
+              unpaidMonthsDetails.push({
+                month: monthUnpaid.month,
+                monthlyFee: monthUnpaid.monthlyFee,
+                discountedFee: monthUnpaid.discountedFee,
+                status: "unpaid",
+              });
+            });
+          }
+        });
+      });
+
+      // 6. Get the last paid month
+      const sortedPayments = monthlyPayments.sort(
+        (a, b) => new Date(b.month) - new Date(a.month)
+      );
+      const lastPaidMonth =
+        sortedPayments.length > 0 ? sortedPayments[0].month : null;
+
+      // 7. Count consecutive unpaid months from last paid month
+      let consecutiveUnpaidMonths = 0;
+      if (lastPaidMonth) {
+        const lastPaidDate = new Date(`${lastPaidMonth}-01`);
+        const currentDate = new Date();
+
+        let currentMonth = new Date(lastPaidDate);
+        currentMonth.setMonth(currentMonth.getMonth() + 1); // Start from next month after last paid
+
+        while (currentMonth <= currentDate) {
+          const monthKey = format(currentMonth, "yyyy-MM");
+          if (!paidMonths.has(monthKey)) {
+            consecutiveUnpaidMonths++;
+          } else {
+            break; // Stop counting if we find a paid month
+          }
+          currentMonth.setMonth(currentMonth.getMonth() + 1);
         }
-      });
+      }
 
-      // 6. Send simplified summary
-      res.send({
-        studentId,
-        studentName: student.name,
-        totalPaidMonthly: parseFloat(totalPaid.toFixed(2)),
-        unpaidMonthly,
-        outstandingBalance: parseFloat(outstandingBalance.toFixed(2)),
-      });
+      // 8. Prepare the response (full original structure)
+      const result = {
+        student: {
+          _id: student._id,
+          name: student.name,
+          monthly_fee: student.monthly_fee || 0,
+          startingDate: student.startingDate,
+        },
+        summary: {
+          totalMonthlyPaid: parseFloat(totalMonthlyPaid.toFixed(2)),
+          outstandingAmount: parseFloat(outstandingAmount.toFixed(2)),
+          totalMonthsPaid: paidMonths.size,
+          totalMonthsUnpaid: unpaidMonthsDetails.length,
+          consecutiveUnpaidMonths,
+          lastPaidMonth,
+        },
+        paidMonths: monthlyPayments.sort(
+          (a, b) => new Date(b.month) - new Date(a.month)
+        ),
+        unpaidMonths: unpaidMonthsDetails.sort(
+          (a, b) => new Date(b.month) - new Date(a.month)
+        ),
+        allPayments: allFees
+          .map((fee) => ({
+            _id: fee._id,
+            amount: fee.amount,
+            status: fee.status,
+            paymentType: fee.paymentType,
+            timestamp: fee.timestamp,
+            studentPortion:
+              fee.students.find((s) => s.studentId === studentId)?.subtotal ||
+              0,
+          }))
+          .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)),
+      };
+
+      res.send(result);
     } catch (error) {
       console.error("Error in student fee summary:", error);
       res.status(500).send({ message: "Internal server error" });
@@ -251,20 +331,20 @@ module.exports = (
   });
 
   // You'll also need to include the getUnpaidFees function in this file
-  function getUnpaidFees({ students, fees, feeChoice, discount = 0 }) {
-    const now = new Date();
-    const currentMonth = now.getMonth() + 1;
-    const currentYear = now.getFullYear();
-    const currentDate = now.getDate();
-    const cutoffDay = 10;
-    const cutoffDay2 = 1;
-
-    const earliestYear = 2025;
-    const earliestMonth = 9;
+  function getUnpaidFees({
+    students,
+    fees,
+    feeChoice,
+    discount = 0,
+    startFromMonth,
+  }) {
+    const [startYear, startMonth] = startFromMonth
+      ? startFromMonth.split("-").map(Number)
+      : [0, 0];
 
     const monthlyPaidMap = {};
 
-    // Build payment map from fee records
+    // Build payment map from fee records (same as before)
     for (const fee of fees || []) {
       if (
         (fee.paymentType === "monthly" ||
@@ -273,14 +353,6 @@ module.exports = (
       ) {
         for (const stu of fee.students || []) {
           const studentId = stu?.studentId?.toString?.();
-
-          if (fee?.month) {
-            const paidMonth = fee.month;
-            if (studentId && paidMonth) {
-              monthlyPaidMap[`${studentId}_${paidMonth}`] = true;
-            }
-          }
-
           if (Array.isArray(stu.monthsPaid)) {
             for (const { month, year } of stu.monthsPaid) {
               const monthStr = `${year}-${month.toString().padStart(2, "0")}`;
@@ -297,13 +369,11 @@ module.exports = (
       const studentId = student._id?.toString?.();
       const { name, monthly_fee, startingDate } = student;
 
-      const startDate = new Date(startingDate);
-      if (!studentId || !isValid(startDate)) continue;
-
-      const joinDay = startDate.getDate();
       const fee = monthly_fee || 0;
 
-      const addUnpaidMonth = (monthStr) => {
+      const addUnpaidMonth = (monthStr, year, month) => {
+        if (year < startYear || (year === startYear && month < startMonth))
+          return; // skip months before startFromMonth
         const key = `${studentId}_${monthStr}`;
         if (monthlyPaidMap[key]) return;
 
@@ -338,69 +408,29 @@ module.exports = (
         grouped[monthStr].studentsMap[studentId].subtotal += discountedFee;
       };
 
-      if (feeChoice === "fullMonth" && joinDay > cutoffDay) {
-        let billingEndDate = addDays(startDate, 30);
-        while (isBefore(billingEndDate, now)) {
-          const monthStr = format(billingEndDate, "yyyy-MM");
-          addUnpaidMonth(monthStr);
-          billingEndDate = addDays(billingEndDate, 30);
-        }
-      } else {
-        let payableMonth = startDate.getMonth() + 2;
-        let payableYear = startDate.getFullYear();
-        if (payableMonth > 12) {
-          payableMonth = 1;
-          payableYear++;
-        }
+      // calculate months (same as your current logic)
+      let currentDate = new Date();
+      let payableMonth = new Date(startingDate);
+      payableMonth.setDate(1);
 
-        while (
-          payableYear < currentYear ||
-          (payableYear === currentYear && payableMonth <= currentMonth)
-        ) {
-          if (
-            payableYear < earliestYear ||
-            (payableYear === earliestYear && payableMonth < earliestMonth)
-          ) {
-            payableMonth++;
-            if (payableMonth > 12) {
-              payableMonth = 1;
-              payableYear++;
-            }
-            continue;
-          }
-
-          const skipCurrentMonth =
-            payableYear === currentYear &&
-            payableMonth === currentMonth &&
-            currentDate < cutoffDay2;
-
-          if (!skipCurrentMonth) {
-            const monthStr = `${payableYear}-${payableMonth
-              .toString()
-              .padStart(2, "0")}`;
-            addUnpaidMonth(monthStr);
-          }
-
-          payableMonth++;
-          if (payableMonth > 12) {
-            payableMonth = 1;
-            payableYear++;
-          }
-        }
+      while (payableMonth <= currentDate) {
+        const year = payableMonth.getFullYear();
+        const month = payableMonth.getMonth() + 1;
+        const monthStr = `${year}-${month.toString().padStart(2, "0")}`;
+        addUnpaidMonth(monthStr, year, month);
+        payableMonth.setMonth(payableMonth.getMonth() + 1);
       }
     }
 
-    return Object.entries(grouped).map(([month, data]) => {
-      return {
-        month,
-        totalAmount: parseFloat(data.totalAmount.toFixed(2)),
-        studentNames: Array.from(data.studentNames).join(", "),
-        students: Object.values(data.studentsMap).map((stu) => ({
-          ...stu,
-          subtotal: parseFloat(stu.subtotal.toFixed(2)),
-        })),
-      };
-    });
+    return Object.entries(grouped).map(([month, data]) => ({
+      month,
+      totalAmount: parseFloat(data.totalAmount.toFixed(2)),
+      studentNames: Array.from(data.studentNames).join(", "),
+      students: Object.values(data.studentsMap).map((stu) => ({
+        ...stu,
+        subtotal: parseFloat(stu.subtotal.toFixed(2)),
+      })),
+    }));
   }
 
   router.get("/by-status/:status", async (req, res) => {
