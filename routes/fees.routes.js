@@ -218,10 +218,42 @@ module.exports = (
                   : monthPaid.monthlyFee;
               totalMonthlyPaid += paymentAmount;
 
+              // Convert to month name format
+              const monthNames = [
+                "January",
+                "February",
+                "March",
+                "April",
+                "May",
+                "June",
+                "July",
+                "August",
+                "September",
+                "October",
+                "November",
+                "December",
+              ];
+              const monthName =
+                monthNames[parseInt(monthPaid.month) - 1] || monthPaid.month;
+              const displayMonth = `${monthName} ${monthPaid.year}`;
+
+              // Format payment date - use fee.date if available, otherwise use N/A
+              let formattedPaymentDate = "N/A";
+              if (fee.date) {
+                // If date is already formatted like "2025-08-11", convert to DD-MM-YYYY
+                const dateParts = fee.date.split("-");
+                if (dateParts.length === 3) {
+                  formattedPaymentDate = `${dateParts[2]}-${dateParts[1]}-${dateParts[0]}`;
+                } else {
+                  formattedPaymentDate = fee.date; // Use as-is if already in different format
+                }
+              }
+
               monthlyPayments.push({
-                month: monthKey,
+                month: monthKey, // Keep original for sorting
+                displayMonth: displayMonth, // New field for display
                 amount: paymentAmount,
-                paymentDate: fee.timestamp,
+                paymentDate: formattedPaymentDate, // Use the formatted date
                 status: fee.status,
                 paymentType: fee.paymentType,
                 feeId: fee._id,
@@ -237,24 +269,50 @@ module.exports = (
         fees: allFees,
         feeChoice: "standard",
         discount: 0,
-        startFromMonth: "2025-10", // new
       });
 
       // 5. Calculate outstanding amount and unpaid months details
       let outstandingAmount = 0;
       const unpaidMonthsDetails = [];
+      const september2025 = new Date("2025-09-01");
 
       unpaidFees.forEach((unpaidFee) => {
         unpaidFee.students.forEach((unpaidStudent) => {
           if (unpaidStudent.studentId === studentId) {
             unpaidStudent.monthsUnpaid.forEach((monthUnpaid) => {
-              outstandingAmount += monthUnpaid.discountedFee;
-              unpaidMonthsDetails.push({
-                month: monthUnpaid.month,
-                monthlyFee: monthUnpaid.monthlyFee,
-                discountedFee: monthUnpaid.discountedFee,
-                status: "unpaid",
-              });
+              const monthDate = new Date(`${monthUnpaid.month}-01`);
+              // Only include months from September 2025 onwards
+              if (monthDate >= september2025) {
+                outstandingAmount += monthUnpaid.discountedFee;
+
+                // Convert unpaid months to display format too
+                const monthNames = [
+                  "January",
+                  "February",
+                  "March",
+                  "April",
+                  "May",
+                  "June",
+                  "July",
+                  "August",
+                  "September",
+                  "October",
+                  "November",
+                  "December",
+                ];
+                const monthYear = monthUnpaid.month.split("-");
+                const monthName =
+                  monthNames[parseInt(monthYear[1]) - 1] || monthYear[1];
+                const displayMonth = `${monthName} ${monthYear[0]}`;
+
+                unpaidMonthsDetails.push({
+                  month: monthUnpaid.month,
+                  displayMonth: displayMonth,
+                  monthlyFee: monthUnpaid.monthlyFee,
+                  discountedFee: monthUnpaid.discountedFee,
+                  status: "unpaid",
+                });
+              }
             });
           }
         });
@@ -267,27 +325,71 @@ module.exports = (
       const lastPaidMonth =
         sortedPayments.length > 0 ? sortedPayments[0].month : null;
 
-      // 7. Count consecutive unpaid months from last paid month
+      // 7. Count consecutive unpaid months from last paid month (only from September 2025)
       let consecutiveUnpaidMonths = 0;
       if (lastPaidMonth) {
         const lastPaidDate = new Date(`${lastPaidMonth}-01`);
         const currentDate = new Date();
 
         let currentMonth = new Date(lastPaidDate);
-        currentMonth.setMonth(currentMonth.getMonth() + 1); // Start from next month after last paid
+        currentMonth.setMonth(currentMonth.getMonth() + 1);
 
         while (currentMonth <= currentDate) {
           const monthKey = format(currentMonth, "yyyy-MM");
-          if (!paidMonths.has(monthKey)) {
-            consecutiveUnpaidMonths++;
-          } else {
-            break; // Stop counting if we find a paid month
+          const monthDate = new Date(monthKey + "-01");
+
+          // Only count months from September 2025 onwards
+          if (monthDate >= september2025) {
+            if (!paidMonths.has(monthKey)) {
+              consecutiveUnpaidMonths++;
+            } else {
+              break;
+            }
           }
           currentMonth.setMonth(currentMonth.getMonth() + 1);
         }
       }
 
-      // 8. Prepare the response (full original structure)
+      // 8. Format all payment dates in allPayments array
+      const formattedAllPayments = allFees
+        .map((fee) => {
+          // Use fee.date if available, otherwise use N/A
+          let formattedDate = "N/A";
+          if (fee.date) {
+            const dateParts = fee.date.split("-");
+            if (dateParts.length === 3) {
+              formattedDate = `${dateParts[2]}-${dateParts[1]}-${dateParts[0]}`;
+            } else {
+              formattedDate = fee.date;
+            }
+          }
+
+          return {
+            _id: fee._id,
+            amount: fee.amount,
+            status: fee.status,
+            paymentType: fee.paymentType,
+            timestamp: formattedDate, // Use the formatted date
+            studentPortion:
+              fee.students.find((s) => s.studentId === studentId)?.subtotal ||
+              0,
+          };
+        })
+        .sort((a, b) => {
+          // Sort by original timestamp if available, otherwise by _id
+          const feeA = allFees.find(
+            (f) => f._id.toString() === a._id.toString()
+          );
+          const feeB = allFees.find(
+            (f) => f._id.toString() === b._id.toString()
+          );
+          return (
+            new Date(feeB.timestamp || feeB._id.getTimestamp()) -
+            new Date(feeA.timestamp || feeA._id.getTimestamp())
+          );
+        });
+
+      // 9. Prepare the response with formatted dates
       const result = {
         student: {
           _id: student._id,
@@ -301,26 +403,29 @@ module.exports = (
           totalMonthsPaid: paidMonths.size,
           totalMonthsUnpaid: unpaidMonthsDetails.length,
           consecutiveUnpaidMonths,
-          lastPaidMonth,
+          lastPaidMonth: lastPaidMonth
+            ? formatDisplayMonth(lastPaidMonth)
+            : null,
         },
-        paidMonths: monthlyPayments.sort(
-          (a, b) => new Date(b.month) - new Date(a.month)
-        ),
-        unpaidMonths: unpaidMonthsDetails.sort(
-          (a, b) => new Date(b.month) - new Date(a.month)
-        ),
-        allPayments: allFees
-          .map((fee) => ({
-            _id: fee._id,
-            amount: fee.amount,
-            status: fee.status,
-            paymentType: fee.paymentType,
-            timestamp: fee.timestamp,
-            studentPortion:
-              fee.students.find((s) => s.studentId === studentId)?.subtotal ||
-              0,
-          }))
-          .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)),
+        paidMonths: monthlyPayments
+          .sort((a, b) => new Date(b.month) - new Date(a.month))
+          .map((payment) => ({
+            month: payment.displayMonth,
+            amount: payment.amount,
+            paymentDate: payment.paymentDate, // Already formatted
+            status: payment.status,
+            paymentType: payment.paymentType,
+            feeId: payment.feeId,
+          })),
+        unpaidMonths: unpaidMonthsDetails
+          .sort((a, b) => new Date(b.month) - new Date(a.month))
+          .map((unpaid) => ({
+            month: unpaid.displayMonth,
+            monthlyFee: unpaid.monthlyFee,
+            discountedFee: unpaid.discountedFee,
+            status: unpaid.status,
+          })),
+        allPayments: formattedAllPayments,
       };
 
       res.send(result);
@@ -330,6 +435,28 @@ module.exports = (
     }
   });
 
+  // Helper function to format month for display
+  function formatDisplayMonth(monthKey) {
+    const monthNames = [
+      "January",
+      "February",
+      "March",
+      "April",
+      "May",
+      "June",
+      "July",
+      "August",
+      "September",
+      "October",
+      "November",
+      "December",
+    ];
+    const parts = monthKey.split("-");
+    const year = parts[0];
+    const month = parseInt(parts[1]);
+    const monthName = monthNames[month - 1] || month;
+    return `${monthName} ${year}`;
+  }
   // You'll also need to include the getUnpaidFees function in this file
   function getUnpaidFees({
     students,
