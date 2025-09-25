@@ -524,6 +524,210 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
       res.status(500).send({ error: "Server error" });
     }
   });
+  // Add this route to your families.js file
+  router.get("/unpaid-families/:month/:year", async (req, res) => {
+    try {
+      const { month, year } = req.params;
+
+      const monthNum = parseInt(month, 10);
+      const yearNum = parseInt(year, 10);
+
+      if (isNaN(monthNum) || monthNum < 1 || monthNum > 12) {
+        return res
+          .status(400)
+          .send({ error: "Invalid month. Must be between 1-12" });
+      }
+
+      if (isNaN(yearNum) || yearNum < 2000 || yearNum > 2100) {
+        return res.status(400).send({ error: "Invalid year" });
+      }
+
+      const families = await familiesCollection
+        .aggregate([
+          {
+            $lookup: {
+              from: studentsCollection.collectionName,
+              let: { childUids: "$children" },
+              pipeline: [
+                {
+                  $match: {
+                    $expr: {
+                      $and: [
+                        { $in: ["$uid", "$$childUids"] },
+                        { $in: ["$status", ["enrolled", "hold"]] },
+                        { $eq: ["$activity", "active"] },
+                      ],
+                    },
+                  },
+                },
+              ],
+              as: "childrenDocs",
+            },
+          },
+          { $match: { "childrenDocs.0": { $exists: true } } },
+        ])
+        .toArray();
+
+      const familyIds = families.map((f) => f._id.toString());
+      const allFamilyFees = await feesCollection
+        .find({ familyId: { $in: familyIds } })
+        .toArray();
+
+      const result = [];
+
+      for (const family of families) {
+        const familyFees = allFamilyFees.filter(
+          (fee) => fee.familyId === family._id.toString()
+        );
+
+        const unpaidStudents = [];
+        let familyHasUnpaid = false;
+
+        for (const student of family.childrenDocs) {
+          const studentStart = new Date(student.startingDate);
+          const targetDate = new Date(yearNum, monthNum - 1);
+
+          if (
+            targetDate <
+            new Date(studentStart.getFullYear(), studentStart.getMonth())
+          )
+            continue;
+
+          // DEBUG: Check student data
+          // console.log(`Checking student: ${student.name}, UID: ${student.uid}`);
+
+          // Collect all fee records for this student for the target month
+          const studentFeeRecords = familyFees.flatMap((fee) =>
+            (fee.students || [])
+              .filter((s) => {
+                // Try multiple matching strategies
+                const matches =
+                  s.studentId === student.uid ||
+                  s.name?.toLowerCase() === student.name?.toLowerCase() ||
+                  s.studentId === student._id?.toString();
+
+                // if (matches) {
+                //   console.log(`Matched fee record for ${student.name}:`, {
+                //     feeStudentId: s.studentId,
+                //     feeStudentName: s.name,
+                //     dbStudentUid: student.uid,
+                //     dbStudentId: student._id,
+                //     dbStudentName: student.name,
+                //   });
+                // }
+                return matches;
+              })
+              .map((s) => {
+                const monthsPaid = (s.monthsPaid || []).filter(
+                  (mp) =>
+                    parseInt(mp.month, 10) === monthNum &&
+                    parseInt(mp.year, 10) === yearNum
+                );
+
+                return {
+                  feeId: fee._id.toString(),
+                  status: fee.status,
+                  monthsPaid,
+                  paymentDate:
+                    fee.date || fee.timestamp?.$date || fee.timestamp,
+                  paymentMethod: fee.method,
+                  debug: {
+                    feeStudentId: s.studentId,
+                    feeStudentName: s.name,
+                    dbStudentUid: student.uid,
+                    monthsPaidCount: monthsPaid.length,
+                  },
+                };
+              })
+              .filter((r) => r.monthsPaid.length > 0)
+          );
+
+          // console.log(
+          //   `Fee records found for ${student.name}:`,
+          //   studentFeeRecords.length
+          // );
+
+          let feeStatus = "unpaid";
+          let paidAmount = 0;
+          let dueAmount = student.monthly_fee || 50;
+          let feeId = null;
+          let paymentDate = null;
+          let paymentMethod = null;
+
+          if (studentFeeRecords.length > 0) {
+            const latestRecord =
+              studentFeeRecords[studentFeeRecords.length - 1];
+            const monthPayment = latestRecord.monthsPaid[0];
+
+            const due =
+              monthPayment.discountedFee ??
+              monthPayment.monthlyFee ??
+              dueAmount;
+            const paid = monthPayment.paid ?? 0;
+
+            dueAmount = due;
+            paidAmount = paid;
+            feeId = latestRecord.feeId;
+            paymentDate = latestRecord.paymentDate;
+            paymentMethod = latestRecord.paymentMethod;
+
+            if (paidAmount >= dueAmount) {
+              feeStatus = "paid";
+            } else if (paidAmount > 0 && paidAmount < dueAmount) {
+              feeStatus = "partial";
+            } else {
+              feeStatus = "unpaid";
+            }
+          }
+
+          // ✅ FIXED: Only add to unpaidStudents ONCE
+          if (feeStatus !== "paid") {
+            familyHasUnpaid = true;
+            unpaidStudents.push({
+              studentId: student._id,
+              studentName: student.name,
+              monthlyFee: dueAmount,
+              paidAmount,
+              remainingAmount: dueAmount - paidAmount,
+              status: feeStatus,
+              feeId,
+              paymentDate,
+              paymentMethod,
+            });
+            // console.log(
+            //   `Marking as ${feeStatus.toUpperCase()}: ${
+            //     student.name
+            //   } for ${monthNum}/${yearNum}`
+            // );
+          } else {
+            // console.log(
+            //   `Marking as PAID: ${student.name} for ${monthNum}/${yearNum}`
+            // );
+          }
+        }
+
+        if (familyHasUnpaid && unpaidStudents.length > 0) {
+          result.push({
+            familyId: family._id.toString(),
+            familyName: family.name,
+            familyEmail: family.email,
+            unpaidStudents,
+            totalUnpaidAmount: unpaidStudents.reduce(
+              (sum, s) => sum + s.remainingAmount,
+              0
+            ),
+            month: `${yearNum}-${monthNum.toString().padStart(2, "0")}`,
+          });
+        }
+      }
+
+      result.sort((a, b) => a.familyName.localeCompare(b.familyName));
+      res.send(result);
+    } catch (err) {
+      console.error("Error in unpaid-families route:", err);
+      res.status(500).send({ error: "Server error" });
+    }
+  });
 
   return router;
 };
