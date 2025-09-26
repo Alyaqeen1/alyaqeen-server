@@ -808,6 +808,78 @@ module.exports = (
     }
   });
 
+  // PATCH /partial-payment/:id
+
+  router.patch("/update-payment/:id", async (req, res) => {
+    const { id } = req.params;
+    const { payments } = req.body; // payments: [{ studentId, month, year, amount }]
+
+    if (!payments || !Array.isArray(payments) || payments.length === 0) {
+      return res.status(400).send({ message: "Payments array is required" });
+    }
+
+    try {
+      const fee = await feesCollection.findOne({ _id: new ObjectId(id) });
+      if (!fee) return res.status(404).send({ message: "Fee not found" });
+
+      const students = fee.students.map((s) => {
+        const studentPayments = payments.filter(
+          (p) => String(p.studentId) === String(s.studentId)
+        );
+
+        studentPayments.forEach((p) => {
+          // Update the month entry in student
+          let monthEntry = s.monthsPaid.find(
+            (m) =>
+              String(m.month) === String(p.month) &&
+              String(m.year) === String(p.year)
+          );
+
+          if (monthEntry) {
+            monthEntry.paid = p.amount;
+          }
+        });
+
+        // Recalculate subtotal
+        s.subtotal = s.monthsPaid.reduce((sum, m) => sum + (m.paid || 0), 0);
+        return s;
+      });
+
+      // Recalculate totals for fee
+      const totalPaid = students.reduce((sum, s) => sum + (s.subtotal || 0), 0);
+      const remaining = Math.max((fee.expectedTotal || 0) - totalPaid, 0); // NEVER negative
+      const newStatus =
+        remaining <= 0
+          ? "paid"
+          : remaining < (fee.expectedTotal || 0)
+          ? "partial"
+          : "unpaid";
+
+      // Update first element of payments array ONLY
+      if (fee.payments && fee.payments.length > 0) {
+        fee.payments[0].amount = payments[0].amount;
+      }
+
+      const updatedFee = await feesCollection.findOneAndUpdate(
+        { _id: new ObjectId(id) },
+        {
+          $set: {
+            students,
+            remaining,
+            status: newStatus,
+            payments: fee.payments,
+          },
+        },
+        { returnDocument: "after" }
+      );
+
+      res.send({ message: "Payment updated successfully", updatedFee });
+    } catch (err) {
+      console.error("Payment update error:", err);
+      res.status(500).send({ message: "Internal server error" });
+    }
+  });
+
   // delete
   router.delete("/:id", async (req, res) => {
     const { id } = req.params;
