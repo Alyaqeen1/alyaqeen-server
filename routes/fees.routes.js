@@ -72,6 +72,21 @@ module.exports = (
     const result = await feesCollection.find().toArray();
     res.send(result);
   });
+  // Get all fees that have payments, sorted by timestamp descending
+  router.get("/with-payments", async (req, res) => {
+    try {
+      const result = await feesCollection
+        .find({ payments: { $exists: true, $ne: [] } }) // only docs with non-empty payments
+        .sort({ timestamp: -1 }) // sort by timestamp descending
+        .toArray();
+
+      res.send(result);
+    } catch (err) {
+      console.error("Error fetching fees with payments:", err);
+      res.status(500).send({ message: "Internal server error" });
+    }
+  });
+
   router.get("/:id", async (req, res) => {
     const id = req.params.id;
     const query = { _id: new ObjectId(id) };
@@ -630,10 +645,17 @@ module.exports = (
     const result = await feesCollection.find(query).toArray();
     res.send(result);
   });
+
   router.get("/by-id/:id", async (req, res) => {
     const id = req.params.id;
     const query = { familyId: id };
     const result = await feesCollection.find(query).toArray();
+    res.send(result);
+  });
+  router.get("/by-fee-id/:id", async (req, res) => {
+    const id = req.params.id;
+    const query = { _id: new ObjectId(id) };
+    const result = await feesCollection.findOne(query);
     res.send(result);
   });
 
@@ -706,6 +728,83 @@ module.exports = (
       res.send(result);
     } catch (err) {
       res.status(500).json({ error: "Server error" });
+    }
+  });
+
+  // Update fee (partial payment or corrections)
+  router.patch("/update/:id", async (req, res) => {
+    const { id } = req.params;
+    const {
+      partialAmount,
+      partialMethod,
+      partialDate,
+      studentIds,
+      month,
+      year,
+    } = req.body;
+
+    try {
+      const fee = await feesCollection.findOne({ _id: new ObjectId(id) });
+      if (!fee) return res.status(404).send({ message: "Fee not found" });
+
+      // ✅ Add new payment record
+      const newPayment = {
+        amount: partialAmount,
+        method: partialMethod || "Unknown",
+        date: partialDate || new Date(),
+      };
+
+      // ✅ Update each selected student's monthsPaid
+      const students = fee.students.map((s) => {
+        if (studentIds.includes(String(s.studentId))) {
+          let monthEntry = s.monthsPaid.find(
+            (m) =>
+              String(m.month) === String(month) &&
+              String(m.year) === String(year)
+          );
+
+          if (monthEntry) {
+            monthEntry.paid += partialAmount / studentIds.length; // split equally
+          } else {
+            s.monthsPaid.push({
+              month,
+              year,
+              monthlyFee: s.monthlyFee || 50,
+              discountedFee: s.discountedFee || s.monthlyFee || 50,
+              paid: partialAmount / studentIds.length,
+            });
+          }
+
+          // Recalc subtotal
+          s.subtotal = s.monthsPaid.reduce((sum, m) => sum + (m.paid || 0), 0);
+        }
+        return s;
+      });
+
+      // ✅ Recalculate totals
+      const totalPaid = students.reduce((sum, s) => sum + (s.subtotal || 0), 0);
+      const remaining = (fee.expectedTotal || 0) - totalPaid;
+      const newStatus =
+        remaining <= 0
+          ? "paid"
+          : remaining < (fee.expectedTotal || 0)
+          ? "partial"
+          : "unpaid";
+
+      // ✅ Update in DB
+      const updatedFee = await feesCollection.findOneAndUpdate(
+        { _id: new ObjectId(id) },
+        {
+          $set: { students, remaining, status: newStatus },
+          $push: { payments: newPayment },
+        },
+        { returnDocument: "after" }
+      );
+
+      res.send({ message: "Partial payment added", updatedFee });
+    } catch (err) {
+      console.error("Update fee error:", err);
+      res.status(500).send({ message: "Internal server error" });
     }
   });
 
