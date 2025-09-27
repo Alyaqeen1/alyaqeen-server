@@ -731,7 +731,7 @@ module.exports = (
     }
   });
 
-  // Update fee (partial payment or corrections)
+  // Update fee (partial payment for both monthly and admission)
   router.patch("/update/:id", async (req, res) => {
     const { id } = req.params;
     const {
@@ -747,56 +747,166 @@ module.exports = (
       const fee = await feesCollection.findOne({ _id: new ObjectId(id) });
       if (!fee) return res.status(404).send({ message: "Fee not found" });
 
-      // ✅ Add new payment record
+      // Get family to check for discounts
+      const family = await familiesCollection.findOne({
+        _id: new ObjectId(fee.familyId),
+      });
+      const discountPercent = family?.discount ? Number(family.discount) : 0;
+
+      // ✅ Add new payment record to root payments array
       const newPayment = {
-        amount: partialAmount,
+        amount: Number(partialAmount),
         method: partialMethod || "Unknown",
-        date: partialDate || new Date(),
+        date: partialDate || new Date().toISOString().slice(0, 10),
       };
 
-      // ✅ Update each selected student's monthsPaid
+      // ✅ Update students based on payment type
       const students = fee.students.map((s) => {
         if (studentIds.includes(String(s.studentId))) {
-          let monthEntry = s.monthsPaid.find(
-            (m) =>
-              String(m.month) === String(month) &&
-              String(m.year) === String(year)
-          );
+          if (
+            fee.paymentType === "monthly" ||
+            fee.paymentType === "monthlyOnHold"
+          ) {
+            // Handle monthly payments
+            let monthEntry = s.monthsPaid?.find(
+              (m) =>
+                String(m.month) === String(month) &&
+                String(m.year) === String(year)
+            );
 
-          if (monthEntry) {
-            monthEntry.paid += partialAmount / studentIds.length; // split equally
-          } else {
-            s.monthsPaid.push({
-              month,
-              year,
-              monthlyFee: s.monthlyFee || 50,
-              discountedFee: s.discountedFee || s.monthlyFee || 50,
-              paid: partialAmount / studentIds.length,
-            });
+            if (monthEntry) {
+              monthEntry.paid =
+                Number(monthEntry.paid || 0) +
+                Number(partialAmount) / studentIds.length;
+            } else {
+              if (!s.monthsPaid) s.monthsPaid = [];
+
+              const baseFee = s.monthlyFee || s.monthly_fee || 50;
+              const discountedFee =
+                discountPercent > 0
+                  ? Number(
+                      (baseFee - (baseFee * discountPercent) / 100).toFixed(2)
+                    )
+                  : Number(baseFee);
+
+              s.monthsPaid.push({
+                month,
+                year,
+                monthlyFee: Number(baseFee),
+                discountedFee: Number(discountedFee),
+                paid: Number(partialAmount) / studentIds.length,
+              });
+            }
+
+            // Recalc subtotal for monthly
+            s.subtotal =
+              s.monthsPaid?.reduce((sum, m) => sum + (m.paid || 0), 0) || 0;
+          } else if (
+            fee.paymentType === "admission" ||
+            fee.paymentType === "admissionOnHold"
+          ) {
+            // Handle admission payments - FIXED for your data structure
+            const admissionFee = s.admissionFee || 20;
+            const baseMonthlyFee = s.monthlyFee || s.monthly_fee || 50;
+            const discountedMonthlyFee =
+              discountPercent > 0
+                ? Number(
+                    (
+                      baseMonthlyFee -
+                      (baseMonthlyFee * discountPercent) / 100
+                    ).toFixed(2)
+                  )
+                : Number(baseMonthlyFee);
+
+            // Calculate amount per student
+            const amountPerStudent = Number(partialAmount) / studentIds.length;
+
+            // For admission fees, we need to update the payments array within the student
+            if (!s.payments) s.payments = [];
+
+            // Find if there's an existing payment for today
+            const today = partialDate || new Date().toISOString().slice(0, 10);
+            const existingPaymentIndex = s.payments.findIndex(
+              (p) => p.date === today
+            );
+
+            if (existingPaymentIndex !== -1) {
+              // Update existing payment
+              s.payments[existingPaymentIndex].amount =
+                Number(s.payments[existingPaymentIndex].amount || 0) +
+                amountPerStudent;
+            } else {
+              // Add new payment - but we need to determine if it's admission or monthly portion
+              // Since admission is already paid first, any additional payment goes to monthly portion
+              const currentAdmissionPaid =
+                s.payments.filter((p) => p.amount === admissionFee).length > 0
+                  ? admissionFee
+                  : 0;
+              const currentMonthlyPaid = s.subtotal - currentAdmissionPaid;
+
+              // If admission not fully paid, pay admission first
+              if (currentAdmissionPaid < admissionFee) {
+                const admissionNeeded = admissionFee - currentAdmissionPaid;
+                const admissionPayment = Math.min(
+                  amountPerStudent,
+                  admissionNeeded
+                );
+                const monthlyPayment = amountPerStudent - admissionPayment;
+
+                if (admissionPayment > 0) {
+                  s.payments.push({
+                    amount: Number(admissionPayment),
+                    date: today,
+                    method: partialMethod || "Unknown",
+                  });
+                }
+
+                if (monthlyPayment > 0) {
+                  s.payments.push({
+                    amount: Number(monthlyPayment),
+                    date: today,
+                    method: partialMethod || "Unknown",
+                  });
+                }
+              } else {
+                // Admission already paid, all goes to monthly
+                s.payments.push({
+                  amount: Number(amountPerStudent),
+                  date: today,
+                  method: partialMethod || "Unknown",
+                });
+              }
+            }
+
+            // Recalc subtotal from payments array
+            s.subtotal = s.payments.reduce(
+              (sum, p) => sum + (p.amount || 0),
+              0
+            );
           }
-
-          // Recalc subtotal
-          s.subtotal = s.monthsPaid.reduce((sum, m) => sum + (m.paid || 0), 0);
         }
         return s;
       });
 
       // ✅ Recalculate totals
       const totalPaid = students.reduce((sum, s) => sum + (s.subtotal || 0), 0);
-      const remaining = (fee.expectedTotal || 0) - totalPaid;
+      const remaining = Math.max(0, (fee.expectedTotal || 0) - totalPaid);
       const newStatus =
-        remaining <= 0
-          ? "paid"
-          : remaining < (fee.expectedTotal || 0)
-          ? "partial"
-          : "unpaid";
+        remaining <= 0 ? "paid" : totalPaid > 0 ? "partial" : "unpaid";
+
+      // ✅ Update root payments array (add the new payment)
+      const updatedRootPayments = [...(fee.payments || []), newPayment];
 
       // ✅ Update in DB
       const updatedFee = await feesCollection.findOneAndUpdate(
         { _id: new ObjectId(id) },
         {
-          $set: { students, remaining, status: newStatus },
-          $push: { payments: newPayment },
+          $set: {
+            students,
+            remaining: Number(remaining.toFixed(2)),
+            status: newStatus,
+            payments: updatedRootPayments,
+          },
         },
         { returnDocument: "after" }
       );
@@ -807,12 +917,10 @@ module.exports = (
       res.status(500).send({ message: "Internal server error" });
     }
   });
-
   // PATCH /partial-payment/:id
-
   router.patch("/update-payment/:id", async (req, res) => {
     const { id } = req.params;
-    const { payments } = req.body; // payments: [{ studentId, month, year, amount }]
+    const { payments } = req.body;
 
     if (!payments || !Array.isArray(payments) || payments.length === 0) {
       return res.status(400).send({ message: "Payments array is required" });
@@ -822,58 +930,170 @@ module.exports = (
       const fee = await feesCollection.findOne({ _id: new ObjectId(id) });
       if (!fee) return res.status(404).send({ message: "Fee not found" });
 
+      // Get family for discount calculation
+      const family = await familiesCollection.findOne({
+        _id: new ObjectId(fee.familyId),
+      });
+      const discountPercent = family?.discount ? Number(family.discount) : 0;
+
       const students = fee.students.map((s) => {
         const studentPayments = payments.filter(
           (p) => String(p.studentId) === String(s.studentId)
         );
 
-        studentPayments.forEach((p) => {
-          // Update the month entry in student
-          let monthEntry = s.monthsPaid.find(
-            (m) =>
-              String(m.month) === String(p.month) &&
-              String(m.year) === String(p.year)
+        if (
+          fee.paymentType === "monthly" ||
+          fee.paymentType === "monthlyOnHold"
+        ) {
+          // Handle monthly payments - UPDATE existing amounts
+          studentPayments.forEach((p) => {
+            let monthEntry = s.monthsPaid?.find(
+              (m) =>
+                String(m.month) === String(p.month) &&
+                String(m.year) === String(p.year)
+            );
+
+            if (monthEntry) {
+              // UPDATE the existing payment amount
+              monthEntry.paid = Number(p.amount);
+
+              // Ensure discounted fee is calculated correctly
+              const baseFee = monthEntry.monthlyFee || s.monthlyFee || 50;
+              if (discountPercent > 0) {
+                monthEntry.discountedFee = Number(
+                  (baseFee - (baseFee * discountPercent) / 100).toFixed(2)
+                );
+              } else {
+                monthEntry.discountedFee = Number(baseFee);
+              }
+            } else {
+              // Create new month entry if it doesn't exist
+              if (!s.monthsPaid) s.monthsPaid = [];
+
+              const baseFee = s.monthlyFee || 50;
+              const discountedFee =
+                discountPercent > 0
+                  ? Number(
+                      (baseFee - (baseFee * discountPercent) / 100).toFixed(2)
+                    )
+                  : Number(baseFee);
+
+              s.monthsPaid.push({
+                month: p.month,
+                year: p.year,
+                monthlyFee: baseFee,
+                discountedFee: discountedFee,
+                paid: Number(p.amount),
+              });
+            }
+          });
+
+          // Recalculate subtotal from monthsPaid
+          s.subtotal =
+            s.monthsPaid?.reduce((sum, m) => sum + (m.paid || 0), 0) || 0;
+        } else if (
+          fee.paymentType === "admission" ||
+          fee.paymentType === "admissionOnHold"
+        ) {
+          // Handle admission payments - UPDATE amounts
+          const admissionFee = s.admissionFee || 20;
+          const baseMonthlyFee = s.monthlyFee || s.monthly_fee || 50;
+          const discountedMonthlyFee =
+            discountPercent > 0
+              ? Number(
+                  (
+                    baseMonthlyFee -
+                    (baseMonthlyFee * discountPercent) / 100
+                  ).toFixed(2)
+                )
+              : Number(baseMonthlyFee);
+
+          // Calculate total payment for this student
+          const totalPaid = studentPayments.reduce(
+            (sum, p) => sum + Number(p.amount),
+            0
           );
 
-          if (monthEntry) {
-            monthEntry.paid = p.amount;
-          }
-        });
+          // UPDATE the payments array
+          s.payments = [];
 
-        // Recalculate subtotal
-        s.subtotal = s.monthsPaid.reduce((sum, m) => sum + (m.paid || 0), 0);
+          // Add admission payment (always £20 first)
+          const admissionPayment = Math.min(totalPaid, admissionFee);
+          if (admissionPayment > 0) {
+            s.payments.push({
+              amount: Number(admissionPayment),
+              date:
+                fee.payments?.[0]?.date ||
+                new Date().toISOString().slice(0, 10),
+              method: fee.payments?.[0]?.method || "Unknown",
+            });
+          }
+
+          // Add monthly portion with remaining amount
+          const monthlyPayment = Math.max(0, totalPaid - admissionPayment);
+          if (monthlyPayment > 0) {
+            s.payments.push({
+              amount: Number(monthlyPayment),
+              date:
+                fee.payments?.[0]?.date ||
+                new Date().toISOString().slice(0, 10),
+              method: fee.payments?.[0]?.method || "Unknown",
+            });
+          }
+
+          // Update subtotal (sum of all payments)
+          s.subtotal = s.payments.reduce(
+            (sum, payment) => sum + (payment.amount || 0),
+            0
+          );
+          s.discountedFee = discountedMonthlyFee;
+        }
+
         return s;
       });
 
       // Recalculate totals for fee
       const totalPaid = students.reduce((sum, s) => sum + (s.subtotal || 0), 0);
-      const remaining = Math.max((fee.expectedTotal || 0) - totalPaid, 0); // NEVER negative
+      const remaining = Math.max(0, (fee.expectedTotal || 0) - totalPaid);
       const newStatus =
-        remaining <= 0
-          ? "paid"
-          : remaining < (fee.expectedTotal || 0)
-          ? "partial"
-          : "unpaid";
+        remaining <= 0 ? "paid" : totalPaid > 0 ? "partial" : "unpaid";
 
-      // Update first element of payments array ONLY
-      if (fee.payments && fee.payments.length > 0) {
-        fee.payments[0].amount = payments[0].amount;
-      }
+      // UPDATE root payments array with new total amount
+      const totalPaymentAmount = payments.reduce(
+        (sum, p) => sum + Number(p.amount),
+        0
+      );
+      const updatedPayments = [
+        {
+          amount: Number(totalPaymentAmount),
+          date:
+            fee.payments?.[0]?.date || new Date().toISOString().slice(0, 10),
+          method: fee.payments?.[0]?.method || "Unknown",
+        },
+      ];
 
       const updatedFee = await feesCollection.findOneAndUpdate(
         { _id: new ObjectId(id) },
         {
           $set: {
             students,
-            remaining,
+            remaining: Number(remaining.toFixed(2)),
             status: newStatus,
-            payments: fee.payments,
+            payments: updatedPayments,
           },
         },
         { returnDocument: "after" }
       );
 
-      res.send({ message: "Payment updated successfully", updatedFee });
+      res.send({
+        message: "Payment updated successfully",
+        updatedFee,
+        changes: {
+          previousAmount: fee.payments?.[0]?.amount || 0,
+          newAmount: totalPaymentAmount,
+          statusChanged: fee.status !== newStatus,
+        },
+      });
     } catch (err) {
       console.error("Payment update error:", err);
       res.status(500).send({ message: "Internal server error" });

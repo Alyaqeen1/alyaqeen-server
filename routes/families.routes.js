@@ -542,6 +542,10 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
         return res.status(400).send({ error: "Invalid year" });
       }
 
+      const targetMonthKey = `${yearNum}-${monthNum
+        .toString()
+        .padStart(2, "0")}`;
+
       const families = await familiesCollection
         .aggregate([
           {
@@ -570,7 +574,12 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
 
       const familyIds = families.map((f) => f._id.toString());
       const allFamilyFees = await feesCollection
-        .find({ familyId: { $in: familyIds } })
+        .find({
+          familyId: { $in: familyIds },
+          paymentType: {
+            $in: ["monthly", "monthlyOnHold", "admission", "admissionOnHold"],
+          },
+        })
         .toArray();
 
       const result = [];
@@ -587,65 +596,44 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
           const studentStart = new Date(student.startingDate);
           const targetDate = new Date(yearNum, monthNum - 1);
 
+          // Skip if target month is before student's joining month
           if (
             targetDate <
             new Date(studentStart.getFullYear(), studentStart.getMonth())
-          )
+          ) {
             continue;
+          }
 
-          // DEBUG: Check student data
-          // console.log(`Checking student: ${student.name}, UID: ${student.uid}`);
+          // Check if this is the student's joining month
+          const isJoiningMonth =
+            studentStart.getFullYear() === yearNum &&
+            studentStart.getMonth() + 1 === monthNum;
 
-          // Collect all fee records for this student for the target month
           const studentFeeRecords = familyFees.flatMap((fee) =>
             (fee.students || [])
               .filter((s) => {
-                // Try multiple matching strategies
                 const matches =
                   s.studentId === student.uid ||
                   s.name?.toLowerCase() === student.name?.toLowerCase() ||
                   s.studentId === student._id?.toString();
-
-                // if (matches) {
-                //   console.log(`Matched fee record for ${student.name}:`, {
-                //     feeStudentId: s.studentId,
-                //     feeStudentName: s.name,
-                //     dbStudentUid: student.uid,
-                //     dbStudentId: student._id,
-                //     dbStudentName: student.name,
-                //   });
-                // }
                 return matches;
               })
-              .map((s) => {
-                const monthsPaid = (s.monthsPaid || []).filter(
-                  (mp) =>
-                    parseInt(mp.month, 10) === monthNum &&
-                    parseInt(mp.year, 10) === yearNum
-                );
-
-                return {
-                  feeId: fee._id.toString(),
-                  status: fee.status,
-                  monthsPaid,
-                  paymentDate:
-                    fee.date || fee.timestamp?.$date || fee.timestamp,
-                  paymentMethod: fee.method,
-                  debug: {
-                    feeStudentId: s.studentId,
-                    feeStudentName: s.name,
-                    dbStudentUid: student.uid,
-                    monthsPaidCount: monthsPaid.length,
-                  },
-                };
-              })
-              .filter((r) => r.monthsPaid.length > 0)
+              .map((s) => ({
+                feeId: fee._id.toString(),
+                paymentType: fee.paymentType,
+                status: fee.status,
+                monthsPaid: s.monthsPaid || [],
+                payments: s.payments || [], // This contains the separate payments
+                admissionFee: s.admissionFee || 20,
+                monthlyFee: s.monthlyFee || s.monthly_fee || 50,
+                discountedFee: s.discountedFee || s.monthlyFee || 50,
+                joiningMonth: s.joiningMonth,
+                joiningYear: s.joiningYear,
+                subtotal: s.subtotal || 0,
+                paymentDate: fee.date || fee.timestamp?.$date || fee.timestamp,
+                paymentMethod: fee.method,
+              }))
           );
-
-          // console.log(
-          //   `Fee records found for ${student.name}:`,
-          //   studentFeeRecords.length
-          // );
 
           let feeStatus = "unpaid";
           let paidAmount = 0;
@@ -653,34 +641,110 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
           let feeId = null;
           let paymentDate = null;
           let paymentMethod = null;
+          let paymentType = null;
+
+          // Apply family discount if exists
+          if (family.discount) {
+            const discountPercent = Number(family.discount);
+            dueAmount = dueAmount - (dueAmount * discountPercent) / 100;
+          }
 
           if (studentFeeRecords.length > 0) {
-            const latestRecord =
-              studentFeeRecords[studentFeeRecords.length - 1];
-            const monthPayment = latestRecord.monthsPaid[0];
+            // Check for admission fee payment first (if this is the joining month)
+            if (isJoiningMonth) {
+              const admissionFeeRecord = studentFeeRecords.find(
+                (fee) =>
+                  fee.paymentType === "admission" ||
+                  fee.paymentType === "admissionOnHold"
+              );
 
-            const due =
-              monthPayment.discountedFee ??
-              monthPayment.monthlyFee ??
-              dueAmount;
-            const paid = monthPayment.paid ?? 0;
+              if (admissionFeeRecord) {
+                // FIXED: Calculate monthly portion from payments array
+                const monthlyPayment =
+                  admissionFeeRecord.payments?.find(
+                    (p) =>
+                      p.amount ===
+                      admissionFeeRecord.subtotal -
+                        admissionFeeRecord.admissionFee
+                  ) || admissionFeeRecord.payments?.[1]; // Second payment is monthly portion
 
-            dueAmount = due;
-            paidAmount = paid;
-            feeId = latestRecord.feeId;
-            paymentDate = latestRecord.paymentDate;
-            paymentMethod = latestRecord.paymentMethod;
+                const monthlyPortionPaid =
+                  monthlyPayment?.amount ||
+                  admissionFeeRecord.subtotal - admissionFeeRecord.admissionFee;
 
-            if (paidAmount >= dueAmount) {
-              feeStatus = "paid";
-            } else if (paidAmount > 0 && paidAmount < dueAmount) {
-              feeStatus = "partial";
-            } else {
-              feeStatus = "unpaid";
+                const expectedMonthlyPortion =
+                  admissionFeeRecord.discountedFee || dueAmount;
+
+                paidAmount = monthlyPortionPaid;
+                dueAmount = expectedMonthlyPortion;
+                feeId = admissionFeeRecord.feeId;
+                paymentDate = admissionFeeRecord.paymentDate;
+                paymentMethod = admissionFeeRecord.paymentMethod;
+                paymentType = admissionFeeRecord.paymentType;
+
+                if (monthlyPortionPaid >= expectedMonthlyPortion) {
+                  feeStatus = "paid";
+                } else if (monthlyPortionPaid > 0) {
+                  feeStatus = "partial";
+                } else {
+                  feeStatus = "unpaid";
+                }
+
+                console.log(`Admission fee analysis for ${student.name}:`, {
+                  admissionFee: admissionFeeRecord.admissionFee,
+                  subtotal: admissionFeeRecord.subtotal,
+                  monthlyPortionPaid,
+                  expectedMonthlyPortion,
+                  feeStatus,
+                  payments: admissionFeeRecord.payments,
+                });
+              }
+            }
+
+            // If not joining month or no admission record found, check monthly payments
+            if (!isJoiningMonth || (isJoiningMonth && feeStatus === "unpaid")) {
+              const monthlyFeeRecords = studentFeeRecords.filter(
+                (fee) =>
+                  fee.paymentType === "monthly" ||
+                  fee.paymentType === "monthlyOnHold"
+              );
+
+              // Find payment for the specific month
+              for (const record of monthlyFeeRecords) {
+                const monthPayment = record.monthsPaid.find(
+                  (mp) =>
+                    parseInt(mp.month, 10) === monthNum &&
+                    parseInt(mp.year, 10) === yearNum
+                );
+
+                if (monthPayment) {
+                  const due =
+                    monthPayment.discountedFee ??
+                    monthPayment.monthlyFee ??
+                    dueAmount;
+                  const paid = monthPayment.paid ?? 0;
+
+                  dueAmount = due;
+                  paidAmount = paid;
+                  feeId = record.feeId;
+                  paymentDate = record.paymentDate;
+                  paymentMethod = record.paymentMethod;
+                  paymentType = record.paymentType;
+
+                  if (paidAmount >= dueAmount) {
+                    feeStatus = "paid";
+                  } else if (paidAmount > 0) {
+                    feeStatus = "partial";
+                  } else {
+                    feeStatus = "unpaid";
+                  }
+                  break;
+                }
+              }
             }
           }
 
-          // ✅ FIXED: Only add to unpaidStudents ONCE
+          // Only add to unpaidStudents if not fully paid
           if (feeStatus !== "paid") {
             familyHasUnpaid = true;
             unpaidStudents.push({
@@ -688,21 +752,15 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
               studentName: student.name,
               monthlyFee: dueAmount,
               paidAmount,
-              remainingAmount: dueAmount - paidAmount,
+              remainingAmount: Math.max(0, dueAmount - paidAmount),
               status: feeStatus,
               feeId,
               paymentDate,
               paymentMethod,
+              paymentType:
+                paymentType || (isJoiningMonth ? "admission" : "monthly"),
+              isJoiningMonth,
             });
-            // console.log(
-            //   `Marking as ${feeStatus.toUpperCase()}: ${
-            //     student.name
-            //   } for ${monthNum}/${yearNum}`
-            // );
-          } else {
-            // console.log(
-            //   `Marking as PAID: ${student.name} for ${monthNum}/${yearNum}`
-            // );
           }
         }
 
@@ -711,12 +769,13 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
             familyId: family._id.toString(),
             familyName: family.name,
             familyEmail: family.email,
+            familyDiscount: family.discount || 0,
             unpaidStudents,
             totalUnpaidAmount: unpaidStudents.reduce(
               (sum, s) => sum + s.remainingAmount,
               0
             ),
-            month: `${yearNum}-${monthNum.toString().padStart(2, "0")}`,
+            month: targetMonthKey,
           });
         }
       }
