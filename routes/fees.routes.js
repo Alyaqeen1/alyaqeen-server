@@ -205,7 +205,7 @@ module.exports = (
         return res.status(404).send({ message: "Student not found" });
       }
 
-      // 2. Get ALL fees for this student (including admission fees that contain first month fee)
+      // 2. Get ALL fees for this student
       const allFees = await feesCollection
         .find({
           "students.studentId": studentId,
@@ -215,133 +215,178 @@ module.exports = (
         })
         .toArray();
 
-      // 3. Extract all paid months for this student (from both monthly and admission fees)
+      // 3. Extract all paid months and calculate payments correctly
       const paidMonths = new Set();
       let totalMonthlyPaid = 0;
       const monthlyPayments = [];
+      const allStudentPayments = [];
 
       allFees.forEach((fee) => {
-        fee.students.forEach((feeStudent) => {
-          if (feeStudent.studentId === studentId) {
-            // Handle monthly fees (with monthsPaid array)
-            if (feeStudent.monthsPaid) {
-              feeStudent.monthsPaid.forEach((monthPaid) => {
-                const monthKey = `${monthPaid.year}-${monthPaid.month
-                  .toString()
-                  .padStart(2, "0")}`;
-                paidMonths.add(monthKey);
+        const feeStudent = fee.students.find((s) => s.studentId === studentId);
+        if (!feeStudent) return;
 
-                const paymentAmount =
-                  monthPaid.discountedFee > 0
-                    ? monthPaid.discountedFee
-                    : monthPaid.monthlyFee;
-                totalMonthlyPaid += paymentAmount;
+        // Helper function to get payment date for a specific student in a fee
+        // Helper function to get payment date for a specific student in a fee
+        const getPaymentDate = (fee, feeStudent) => {
+          // 1. NEW SYSTEM: Student-level payments
+          if (
+            Array.isArray(feeStudent?.payments) &&
+            feeStudent.payments.length > 0
+          ) {
+            const sorted = feeStudent.payments
+              .filter((p) => p.date)
+              .sort((a, b) => new Date(a.date) - new Date(b.date));
+            if (sorted.length > 0) return sorted[0].date;
+          }
 
-                const monthNames = [
-                  "January",
-                  "February",
-                  "March",
-                  "April",
-                  "May",
-                  "June",
-                  "July",
-                  "August",
-                  "September",
-                  "October",
-                  "November",
-                  "December",
-                ];
-                const monthName =
-                  monthNames[parseInt(monthPaid.month) - 1] || monthPaid.month;
-                const displayMonth = `${monthName} ${monthPaid.year}`;
+          // 2. NEW SYSTEM: Fee-level payments
+          if (Array.isArray(fee?.payments) && fee.payments.length > 0) {
+            const sorted = fee.payments
+              .filter((p) => p.date)
+              .sort((a, b) => new Date(a.date) - new Date(b.date));
+            if (sorted.length > 0) return sorted[0].date;
+          }
 
-                let formattedPaymentDate = "N/A";
-                if (fee.date) {
-                  const dateParts = fee.date.split("-");
-                  if (dateParts.length === 3) {
-                    formattedPaymentDate = `${dateParts[2]}-${dateParts[1]}-${dateParts[0]}`;
-                  } else {
-                    formattedPaymentDate = fee.date;
-                  }
-                }
+          // 3. OLD SYSTEM: fee.date (if it exists explicitly)
+          if (fee.date) {
+            return fee.date;
+          }
 
-                monthlyPayments.push({
-                  month: monthKey,
-                  displayMonth: displayMonth,
-                  amount: paymentAmount,
-                  paymentDate: formattedPaymentDate,
-                  status: fee.status,
-                  paymentType: fee.paymentType,
-                  feeId: fee._id,
-                  isFirstMonth: false, // Regular monthly payment
-                });
-              });
-            }
+          // ❌ REMOVE timestamp-to-date conversion
+          // Old LMS "timestamp" is just document creation, not payment date
 
-            // Handle admission fees (extract first month fee)
-            if (
-              (fee.paymentType === "admission" ||
-                fee.paymentType === "admissionOnHold") &&
-              feeStudent.joiningMonth &&
-              feeStudent.joiningYear
-            ) {
-              const monthKey = `${
-                feeStudent.joiningYear
-              }-${feeStudent.joiningMonth.toString().padStart(2, "0")}`;
+          // 4. Old LMS: no real date available
+          return "N/A";
+        };
 
-              // Only add if this month hasn't been paid already via monthly fee
+        const paymentDate = getPaymentDate(fee, feeStudent);
+
+        // Handle monthly fees
+        if (
+          fee.paymentType === "monthly" ||
+          fee.paymentType === "monthlyOnHold"
+        ) {
+          if (feeStudent.monthsPaid) {
+            feeStudent.monthsPaid.forEach((monthPaid) => {
+              const monthKey = `${monthPaid.year}-${monthPaid.month
+                .toString()
+                .padStart(2, "0")}`;
+
+              // Only process if not already processed (avoid duplicates)
               if (!paidMonths.has(monthKey)) {
                 paidMonths.add(monthKey);
 
-                const monthlyFeeAmount = feeStudent.monthlyFee || 0;
-                totalMonthlyPaid += monthlyFeeAmount;
-
-                const monthNames = [
-                  "January",
-                  "February",
-                  "March",
-                  "April",
-                  "May",
-                  "June",
-                  "July",
-                  "August",
-                  "September",
-                  "October",
-                  "November",
-                  "December",
-                ];
-                const monthName =
-                  monthNames[parseInt(feeStudent.joiningMonth) - 1] ||
-                  feeStudent.joiningMonth;
-                const displayMonth = `${monthName} ${feeStudent.joiningYear}`;
-
-                let formattedPaymentDate = "N/A";
-                if (fee.date) {
-                  const dateParts = fee.date.split("-");
-                  if (dateParts.length === 3) {
-                    formattedPaymentDate = `${dateParts[2]}-${dateParts[1]}-${dateParts[0]}`;
-                  } else {
-                    formattedPaymentDate = fee.date;
-                  }
-                }
+                const paymentAmount =
+                  monthPaid.paid ||
+                  monthPaid.discountedFee ||
+                  monthPaid.monthlyFee ||
+                  0;
+                totalMonthlyPaid += paymentAmount;
 
                 monthlyPayments.push({
                   month: monthKey,
-                  displayMonth: displayMonth,
-                  amount: monthlyFeeAmount,
-                  paymentDate: formattedPaymentDate,
+                  displayMonth: formatDisplayMonth(monthKey),
+                  amount: paymentAmount,
+                  paymentDate: paymentDate, // This will be "N/A" for old data, actual date for new data
                   status: fee.status,
                   paymentType: fee.paymentType,
                   feeId: fee._id,
-                  isFirstMonth: true, // Mark as first month from admission
+                  isFirstMonth: false,
                 });
+              }
+            });
+          }
+        }
+
+        // Handle admission fees
+        if (
+          fee.paymentType === "admission" ||
+          fee.paymentType === "admissionOnHold"
+        ) {
+          // Extract first month payment from admission fee
+          if (feeStudent.joiningMonth && feeStudent.joiningYear) {
+            const monthKey = `${
+              feeStudent.joiningYear
+            }-${feeStudent.joiningMonth.toString().padStart(2, "0")}`;
+
+            // Calculate how much was actually paid for the first month
+            let firstMonthPaid = 0;
+
+            // For NEW SYSTEM: If there are individual payments array, sum them up
+            if (feeStudent.payments && Array.isArray(feeStudent.payments)) {
+              firstMonthPaid = feeStudent.payments.reduce(
+                (sum, payment) => sum + (payment.amount || 0),
+                0
+              );
+            } else {
+              // For OLD SYSTEM: Fallback to subtotal or monthly fee
+              firstMonthPaid =
+                feeStudent.subtotal || feeStudent.monthlyFee || 0;
+            }
+
+            // Only consider the monthly fee portion (not admission fee)
+            if (
+              fee.status === "paid" &&
+              firstMonthPaid >= (feeStudent.monthlyFee || 0)
+            ) {
+              if (!paidMonths.has(monthKey)) {
+                paidMonths.add(monthKey);
+                totalMonthlyPaid += feeStudent.monthlyFee || 0;
+
+                monthlyPayments.push({
+                  month: monthKey,
+                  displayMonth: formatDisplayMonth(monthKey),
+                  amount: feeStudent.monthlyFee || 0,
+                  paymentDate: paymentDate, // This will be "N/A" for old data, actual date for new data
+                  status: fee.status,
+                  paymentType: fee.paymentType,
+                  feeId: fee._id,
+                  isFirstMonth: true,
+                });
+              }
+            } else if (fee.status === "partial") {
+              // For partial payments, we need to determine how much of the monthly fee was paid
+              const monthlyFee = feeStudent.monthlyFee || 0;
+              const admissionFee = feeStudent.admissionFee || 0;
+              const totalExpected = monthlyFee + admissionFee;
+              const totalPaid = firstMonthPaid;
+
+              // If paid amount covers admission fee + some monthly fee
+              if (totalPaid > admissionFee) {
+                const monthlyPortionPaid = totalPaid - admissionFee;
+                if (!paidMonths.has(monthKey)) {
+                  paidMonths.add(monthKey);
+                  totalMonthlyPaid += monthlyPortionPaid;
+
+                  monthlyPayments.push({
+                    month: monthKey,
+                    displayMonth: formatDisplayMonth(monthKey),
+                    amount: monthlyPortionPaid,
+                    paymentDate: paymentDate, // This will be "N/A" for old data, actual date for new data
+                    status: "partial",
+                    paymentType: fee.paymentType,
+                    feeId: fee._id,
+                    isFirstMonth: true,
+                    note: `Partial payment (${monthlyPortionPaid} of ${monthlyFee})`,
+                  });
+                }
               }
             }
           }
+        }
+
+        // Track all payments for this student
+        allStudentPayments.push({
+          _id: fee._id,
+          amount: feeStudent.subtotal || 0,
+          status: fee.status,
+          paymentType: fee.paymentType,
+          timestamp: paymentDate, // This will be "N/A" for old data, actual date for new data
+          studentPortion: feeStudent.subtotal || 0,
         });
       });
 
-      // 4. Calculate unpaid months using getUnpaidFees (only use monthly fees for this)
+      // 4. Calculate unpaid months
       const monthlyOnlyFees = allFees.filter(
         (fee) =>
           fee.paymentType === "monthly" || fee.paymentType === "monthlyOnHold"
@@ -365,34 +410,43 @@ module.exports = (
             unpaidStudent.monthsUnpaid.forEach((monthUnpaid) => {
               const monthDate = new Date(`${monthUnpaid.month}-01`);
               if (monthDate >= september2025) {
-                outstandingAmount += monthUnpaid.discountedFee;
+                // Check if this month was partially paid
+                const monthKey = monthUnpaid.month;
+                const paidMonth = monthlyPayments.find(
+                  (p) => p.month === monthKey
+                );
 
-                const monthNames = [
-                  "January",
-                  "February",
-                  "March",
-                  "April",
-                  "May",
-                  "June",
-                  "July",
-                  "August",
-                  "September",
-                  "October",
-                  "November",
-                  "December",
-                ];
-                const monthYear = monthUnpaid.month.split("-");
-                const monthName =
-                  monthNames[parseInt(monthYear[1]) - 1] || monthYear[1];
-                const displayMonth = `${monthName} ${monthYear[0]}`;
+                if (paidMonth && paidMonth.status === "partial") {
+                  // Calculate remaining amount for partially paid month
+                  const remaining =
+                    monthUnpaid.discountedFee - paidMonth.amount;
+                  if (remaining > 0) {
+                    outstandingAmount += remaining;
 
-                unpaidMonthsDetails.push({
-                  month: monthUnpaid.month,
-                  displayMonth: displayMonth,
-                  monthlyFee: monthUnpaid.monthlyFee,
-                  discountedFee: monthUnpaid.discountedFee,
-                  status: "unpaid",
-                });
+                    unpaidMonthsDetails.push({
+                      month: monthUnpaid.month,
+                      displayMonth: formatDisplayMonth(monthUnpaid.month),
+                      monthlyFee: monthUnpaid.monthlyFee,
+                      discountedFee: monthUnpaid.discountedFee,
+                      paidAmount: paidMonth.amount,
+                      remainingAmount: remaining,
+                      status: "partial",
+                    });
+                  }
+                } else if (!paidMonths.has(monthKey)) {
+                  // Fully unpaid month
+                  outstandingAmount += monthUnpaid.discountedFee;
+
+                  unpaidMonthsDetails.push({
+                    month: monthUnpaid.month,
+                    displayMonth: formatDisplayMonth(monthUnpaid.month),
+                    monthlyFee: monthUnpaid.monthlyFee,
+                    discountedFee: monthUnpaid.discountedFee,
+                    paidAmount: 0,
+                    remainingAmount: monthUnpaid.discountedFee,
+                    status: "unpaid",
+                  });
+                }
               }
             });
           }
@@ -420,7 +474,8 @@ module.exports = (
           const monthDate = new Date(monthKey + "-01");
 
           if (monthDate >= september2025) {
-            if (!paidMonths.has(monthKey)) {
+            const paidMonth = monthlyPayments.find((p) => p.month === monthKey);
+            if (!paidMonth || paidMonth.status === "partial") {
               consecutiveUnpaidMonths++;
             } else {
               break;
@@ -430,42 +485,22 @@ module.exports = (
         }
       }
 
-      // 8. Format all payment dates in allPayments array
-      const formattedAllPayments = allFees
-        .map((fee) => {
-          let formattedDate = "N/A";
-          if (fee.date) {
-            const dateParts = fee.date.split("-");
-            if (dateParts.length === 3) {
-              formattedDate = `${dateParts[2]}-${dateParts[1]}-${dateParts[0]}`;
-            } else {
-              formattedDate = fee.date;
-            }
-          }
-
-          return {
-            _id: fee._id,
-            amount: fee.amount,
-            status: fee.status,
-            paymentType: fee.paymentType,
-            timestamp: formattedDate,
-            studentPortion:
-              fee.students.find((s) => s.studentId === studentId)?.subtotal ||
-              0,
-          };
-        })
+      // 8. Sort all payments by date (handle "N/A" dates by putting them at the end)
+      const formattedAllPayments = allStudentPayments
         .sort((a, b) => {
-          const feeA = allFees.find(
-            (f) => f._id.toString() === a._id.toString()
-          );
-          const feeB = allFees.find(
-            (f) => f._id.toString() === b._id.toString()
-          );
-          return (
-            new Date(feeB.timestamp || feeB._id.getTimestamp()) -
-            new Date(feeA.timestamp || feeA._id.getTimestamp())
-          );
-        });
+          if (a.timestamp === "N/A" && b.timestamp === "N/A") return 0;
+          if (a.timestamp === "N/A") return 1; // Put N/A dates at the end
+          if (b.timestamp === "N/A") return -1; // Put actual dates first
+          return new Date(b.timestamp) - new Date(a.timestamp);
+        })
+        .map((payment) => ({
+          _id: payment._id,
+          amount: payment.amount,
+          status: payment.status,
+          paymentType: payment.paymentType,
+          timestamp: payment.timestamp,
+          studentPortion: payment.studentPortion,
+        }));
 
       // 9. Prepare the response
       const result = {
@@ -490,11 +525,12 @@ module.exports = (
           .map((payment) => ({
             month: payment.displayMonth,
             amount: payment.amount,
-            paymentDate: payment.paymentDate,
+            paymentDate: payment.paymentDate, // Will show actual date for new data, "N/A" for old data
             status: payment.status,
             paymentType: payment.paymentType,
             feeId: payment.feeId,
             isFirstMonth: payment.isFirstMonth || false,
+            note: payment.note || null,
           })),
         unpaidMonths: unpaidMonthsDetails
           .sort((a, b) => new Date(b.month) - new Date(a.month))
@@ -502,6 +538,8 @@ module.exports = (
             month: unpaid.displayMonth,
             monthlyFee: unpaid.monthlyFee,
             discountedFee: unpaid.discountedFee,
+            paidAmount: unpaid.paidAmount || 0,
+            remainingAmount: unpaid.remainingAmount,
             status: unpaid.status,
           })),
         allPayments: formattedAllPayments,
@@ -514,8 +552,9 @@ module.exports = (
     }
   });
 
-  // Helper function to format month for display
+  // Helper function to format month display
   function formatDisplayMonth(monthKey) {
+    const [year, month] = monthKey.split("-");
     const monthNames = [
       "January",
       "February",
@@ -530,12 +569,10 @@ module.exports = (
       "November",
       "December",
     ];
-    const parts = monthKey.split("-");
-    const year = parts[0];
-    const month = parseInt(parts[1]);
-    const monthName = monthNames[month - 1] || month;
+    const monthName = monthNames[parseInt(month) - 1] || month;
     return `${monthName} ${year}`;
   }
+
   // You'll also need to include the getUnpaidFees function in this file
   function getUnpaidFees({
     students,
