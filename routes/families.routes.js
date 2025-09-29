@@ -337,6 +337,114 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
     res.send(result);
   });
   // update family
+  // router.patch("/update-by-admin/:id", async (req, res) => {
+  //   try {
+  //     const id = req.params.id;
+  //     if (!ObjectId.isValid(id)) {
+  //       return res.status(400).send({ error: "Invalid ID format" });
+  //     }
+
+  //     const query = { _id: new ObjectId(id) };
+  //     const { name, children, discount } = req.body;
+
+  //     if (!Array.isArray(children)) {
+  //       return res.status(400).json({ error: "Invalid children array" });
+  //     }
+
+  //     // 🔹 Fetch family to get current state and family details
+  //     const familyDoc = await familiesCollection.findOne(query);
+  //     if (!familyDoc) {
+  //       return res.status(404).json({ error: "Family not found" });
+  //     }
+
+  //     // 🔹 Auto-detect added and removed children
+  //     const currentChildren = familyDoc.children || [];
+  //     const newlyAddedChildren = children.filter(
+  //       (child) => !currentChildren.includes(child)
+  //     );
+  //     const removedChildren = currentChildren.filter(
+  //       (child) => !children.includes(child)
+  //     );
+
+  //     // ✅ Check if newly added children already belong to other families
+  //     if (newlyAddedChildren.length > 0) {
+  //       const existingStudents = await studentsCollection
+  //         .find({
+  //           uid: { $in: newlyAddedChildren },
+  //           parentUid: { $exists: true, $ne: "" }, // Check if they have a parentUid
+  //           parentUid: { $ne: familyDoc.uid }, // Exclude if they already belong to this family
+  //         })
+  //         .toArray();
+
+  //       if (existingStudents.length > 0) {
+  //         return res.status(400).json({
+  //           error: "Some students already belong to other families",
+  //           conflictedStudents: existingStudents.map((student) => ({
+  //             uid: student.uid,
+  //             name: student.name,
+  //             currentFamily: student.family_name,
+  //             parentUid: student.parentUid,
+  //           })),
+  //           message:
+  //             `Please remove the students from their $student.family_name first`,
+  //         });
+  //       }
+  //     }
+
+  //     // Update family document
+  //     const updatedDoc = {
+  //       $set: {
+  //         name,
+  //         discount: Number(discount) || 0,
+  //         children,
+  //         updatedAt: new Date(),
+  //       },
+  //     };
+
+  //     const familyResult = await familiesCollection.updateOne(
+  //       query,
+  //       updatedDoc
+  //     );
+
+  //     // ✅ Handle newly added students - Set family fields
+  //     if (newlyAddedChildren.length > 0) {
+  //       await studentsCollection.updateMany(
+  //         { uid: { $in: newlyAddedChildren } },
+  //         {
+  //           $set: {
+  //             email: familyDoc.email,
+  //             family_name: familyDoc.name,
+  //             parentUid: familyDoc.uid,
+  //           },
+  //         }
+  //       );
+  //     }
+
+  //     // ✅ Handle removed students - Clear family fields
+  //     if (removedChildren.length > 0) {
+  //       await studentsCollection.updateMany(
+  //         { uid: { $in: removedChildren } },
+  //         {
+  //           $set: {
+  //             email: "",
+  //             family_name: "",
+  //             parentUid: "",
+  //           },
+  //         }
+  //       );
+  //     }
+
+  //     res.send({
+  //       success: true,
+  //       modifiedCount: familyResult.modifiedCount,
+  //       addedCount: newlyAddedChildren.length,
+  //       removedCount: removedChildren.length,
+  //     });
+  //   } catch (error) {
+  //     console.error("Update family error:", error);
+  //     res.status(500).send({ error: "Failed to update family" });
+  //   }
+  // });
 
   router.patch("/update-by-admin/:id", async (req, res) => {
     try {

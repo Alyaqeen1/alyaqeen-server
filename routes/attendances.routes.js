@@ -51,6 +51,117 @@ module.exports = (
       res.status(500).send({ message: "Error fetching attendance record" });
     }
   });
+  // Get aggregated attendance statistics for single student
+  router.get("/student/:studentId/summary", async (req, res) => {
+    try {
+      const { studentId } = req.params;
+
+      if (!studentId) {
+        return res.status(400).send({ message: "Student ID is required" });
+      }
+
+      const aggregation = await attendancesCollection
+        .aggregate([
+          {
+            $match: {
+              student_id: studentId,
+            },
+          },
+          {
+            $group: {
+              _id: "$status",
+              count: { $sum: 1 },
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              total: { $sum: "$count" },
+              statusCounts: {
+                $push: {
+                  status: "$_id",
+                  count: "$count",
+                },
+              },
+            },
+          },
+          {
+            $project: {
+              _id: 0,
+              total: 1,
+              present: {
+                $ifNull: [
+                  {
+                    $arrayElemAt: [
+                      {
+                        $filter: {
+                          input: "$statusCounts",
+                          as: "item",
+                          cond: { $eq: ["$$item.status", "present"] },
+                        },
+                      },
+                      0,
+                    ],
+                  },
+                  { count: 0 },
+                ],
+              },
+              absent: {
+                $ifNull: [
+                  {
+                    $arrayElemAt: [
+                      {
+                        $filter: {
+                          input: "$statusCounts",
+                          as: "item",
+                          cond: { $eq: ["$$item.status", "absent"] },
+                        },
+                      },
+                      0,
+                    ],
+                  },
+                  { count: 0 },
+                ],
+              },
+              late: {
+                $ifNull: [
+                  {
+                    $arrayElemAt: [
+                      {
+                        $filter: {
+                          input: "$statusCounts",
+                          as: "item",
+                          cond: { $eq: ["$$item.status", "late"] },
+                        },
+                      },
+                      0,
+                    ],
+                  },
+                  { count: 0 },
+                ],
+              },
+            },
+          },
+        ])
+        .toArray();
+
+      // Format the response
+      const result = aggregation[0] || {
+        total: 0,
+        present: { count: 0 },
+        absent: { count: 0 },
+        late: { count: 0 },
+      };
+
+      res.send(result);
+    } catch (err) {
+      console.error("Error fetching attendance summary:", err);
+      res.status(500).send({
+        message: "Error fetching attendance summary",
+        error: err.message,
+      });
+    }
+  });
 
   router.patch("/:id", async (req, res) => {
     const id = req.params.id;
