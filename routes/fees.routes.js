@@ -34,7 +34,7 @@ const enrichStudents = async (
     classesCollection.find({ _id: { $in: classIds } }).toArray(),
   ]);
 
-  // Create enriched students
+  // Create enriched students - PRESERVE FEE DATA
   return allStudents.map((student) => {
     const feeInfo = feeStudents.find(
       (s) => String(s.studentId) === String(student._id)
@@ -50,8 +50,12 @@ const enrichStudents = async (
 
     return {
       ...student,
+      // ✅ PRESERVE ALL FEE DATA FROM ORIGINAL
+      ...feeInfo,
       admissionFee: feeInfo?.admissionFee || 0,
+      monthlyFee: feeInfo?.monthlyFee || 0,
       monthly_fee: feeInfo?.monthlyFee || 0,
+      subtotal: feeInfo?.subtotal || 0,
       academic: {
         ...student.academic,
         department: department?.dept_name || "-",
@@ -93,7 +97,6 @@ module.exports = (
     const result = await feesCollection.findOne(query);
     res.send(result);
   });
-
   router.post("/", async (req, res) => {
     const feesData = req.body;
     const {
@@ -105,6 +108,8 @@ module.exports = (
     } = feesData;
 
     try {
+      console.log("📨 Starting fee creation process...");
+
       // 1. Get the family document
       const family = await familiesCollection.findOne({
         _id: new ObjectId(familyId),
@@ -143,48 +148,137 @@ module.exports = (
       // 5. Save fee document
       const result = await feesCollection.insertOne(feesData);
 
+      // ✅ FIXED: Calculate actual values from payments array
+      const paidAmount =
+        feesData.payments?.reduce(
+          (sum, payment) => sum + (payment.amount || 0),
+          0
+        ) || 0;
+      const paymentMethod = feesData.payments?.[0]?.method || method;
+      const paymentDate =
+        feesData.payments?.[0]?.date || new Date().toISOString().slice(0, 10);
+      const remainingAmount = feesData.remaining || 0;
+
+      // ✅ FIXED: Monthly email with correct data
+      // 5. Send Monthly Email with month info
       if (paymentType === "monthly" || paymentType === "monthlyOnHold") {
-        await sendMonthlyFeeEmail({
-          to: familyEmail,
-          parentName: familyName,
-          students: feesData.students,
-          totalAmount: amount,
-          method,
-          date: feesData.timestamp,
-          isOnHold: paymentType === "monthlyOnHold", // 👈 this decides the message & subject
-        });
+        try {
+          // Prepare students data for email
+          const studentsForEmail = feesData.students.map((s) => ({
+            name: s.name,
+            monthsPaid: (s.monthsPaid || []).map((m) => ({
+              month: m.month,
+              year: m.year,
+              monthlyFee: m.monthlyFee,
+              discountedFee: m.discountedFee,
+              paid: m.paid,
+            })),
+            subtotal: s.subtotal,
+          }));
+
+          await sendMonthlyFeeEmail({
+            to: familyEmail,
+            parentName: familyName,
+            students: studentsForEmail,
+            totalAmount: paidAmount,
+            method: paymentMethod,
+            paymentDate: paymentDate,
+            isOnHold: paymentType === "monthlyOnHold",
+            remainingAmount: remainingAmount,
+          });
+
+          console.log("✅ Monthly fee email sent successfully");
+        } catch (emailError) {
+          console.error("❌ Monthly fee email failed:", emailError);
+        }
       }
 
       // 6. Send Email based on type
       if (paymentType === "admissionOnHold") {
-        await sendHoldEmail({
-          to: familyEmail,
-          parentName: familyName,
-          studentNames: allStudents.map((s) => s.name),
-          method,
-        });
+        console.log("📧 Sending admission on hold email...");
+        try {
+          await sendHoldEmail({
+            to: familyEmail,
+            parentName: familyName,
+            studentNames: allStudents.map((s) => s.name),
+            method: paymentMethod,
+          });
+          console.log("✅ Hold email sent successfully");
+        } catch (emailError) {
+          console.error("❌ Hold email failed:", emailError);
+        }
       } else if (paymentType === "admission") {
-        const enrichedStudents = await enrichStudents(
-          feesData.students,
-          studentsCollection,
-          departmentsCollection,
-          classesCollection
-        );
+        console.log("📧 Processing admission email...");
+        try {
+          const enrichedStudents = await enrichStudents(
+            feesData.students,
+            studentsCollection,
+            departmentsCollection,
+            classesCollection
+          );
 
-        await sendEmailViaAPI({
-          to: familyEmail,
-          parentName: familyName,
-          students: enrichedStudents,
-          totalAmount: amount,
-          method,
-        });
+          // ✅ FIXED: Ensure we have the fee data from original students
+          const studentBreakdown = enrichedStudents.map((enrichedStudent) => {
+            // Find the original fee data for this student
+            const originalStudent = feesData.students.find(
+              (s) => String(s.studentId) === String(enrichedStudent._id)
+            );
+
+            const admissionFee = originalStudent?.admissionFee || 20;
+            const monthlyFee = originalStudent?.monthlyFee || 50;
+            const totalPaid = originalStudent?.subtotal || 0;
+
+            // Calculate how much was paid for admission vs monthly
+            const admissionPaid = Math.min(totalPaid, admissionFee);
+            const monthlyPaid = Math.max(0, totalPaid - admissionFee);
+            const admissionRemaining = Math.max(
+              0,
+              admissionFee - admissionPaid
+            );
+            const monthlyRemaining = Math.max(0, monthlyFee - monthlyPaid);
+            const studentRemaining = admissionRemaining + monthlyRemaining;
+
+            return {
+              ...enrichedStudent, // Academic info
+              admissionFee, // From original fee data
+              monthlyFee, // From original fee data
+              subtotal: totalPaid, // From original fee data
+              admissionPaid,
+              monthlyPaid,
+              admissionRemaining,
+              monthlyRemaining,
+              studentRemaining,
+            };
+          });
+
+          console.log("📧 Sending admission email...");
+          await sendEmailViaAPI({
+            to: familyEmail,
+            parentName: familyName,
+            students: studentBreakdown,
+            totalAmount: paidAmount,
+            method: paymentMethod,
+            paymentDate: paymentDate,
+            remainingAmount: remainingAmount,
+            studentBreakdown: studentBreakdown,
+          });
+          console.log("✅ Admission email sent successfully");
+        } catch (admissionError) {
+          console.error("❌ Admission email process failed:", admissionError);
+          // Don't fail the request if email fails
+        }
       } else {
-        // "✅ Payment saved, but no email sent for type:",
+        console.log("ℹ️ No email sent for payment type:", paymentType);
       }
 
+      console.log("🎉 Fee creation process completed successfully");
       res.send(result);
     } catch (err) {
-      res.status(500).send({ message: "Internal server error" });
+      console.error("💥 CRITICAL ERROR in fee creation:", err);
+      res.status(500).send({
+        message: "Internal server error",
+        error: err.message,
+      });
     }
   });
 
@@ -780,15 +874,23 @@ module.exports = (
       year,
     } = req.body;
 
+    console.log("📥 Received payment:", {
+      month,
+      year,
+      partialAmount,
+      studentIds,
+      monthType: typeof month,
+      yearType: typeof year,
+    });
+
     try {
       const fee = await feesCollection.findOne({ _id: new ObjectId(id) });
       if (!fee) return res.status(404).send({ message: "Fee not found" });
 
-      // Get family to check for discounts
+      // Get family for email
       const family = await familiesCollection.findOne({
         _id: new ObjectId(fee.familyId),
       });
-      const discountPercent = family?.discount ? Number(family.discount) : 0;
 
       // ✅ Add new payment record to root payments array
       const newPayment = {
@@ -797,6 +899,17 @@ module.exports = (
         date: partialDate || new Date().toISOString().slice(0, 10),
       };
 
+      // ✅ NORMALIZE MONTH/YEAR: Ensure consistent format
+      const normalizedMonth = String(month).padStart(2, "0");
+      const normalizedYear = Number(year);
+
+      console.log("🎯 Normalized:", {
+        originalMonth: month,
+        normalizedMonth,
+        originalYear: year,
+        normalizedYear,
+      });
+
       // ✅ Update students based on payment type
       const students = fee.students.map((s) => {
         if (studentIds.includes(String(s.studentId))) {
@@ -804,21 +917,40 @@ module.exports = (
             fee.paymentType === "monthly" ||
             fee.paymentType === "monthlyOnHold"
           ) {
-            // Handle monthly payments
-            let monthEntry = s.monthsPaid?.find(
-              (m) =>
-                String(m.month) === String(month) &&
-                String(m.year) === String(year)
+            // ✅ FIXED: Proper month comparison with logging
+            if (!s.monthsPaid) s.monthsPaid = [];
+
+            console.log(
+              "🔍 Searching for month in:",
+              s.monthsPaid.map((m) => ({
+                month: m.month,
+                year: m.year,
+                type: typeof m.month,
+              }))
             );
 
-            if (monthEntry) {
-              monthEntry.paid =
-                Number(monthEntry.paid || 0) +
-                Number(partialAmount) / studentIds.length;
-            } else {
-              if (!s.monthsPaid) s.monthsPaid = [];
+            let monthEntry = s.monthsPaid.find(
+              (m) =>
+                String(m.month).padStart(2, "0") === normalizedMonth &&
+                Number(m.year) === normalizedYear
+            );
 
+            console.log("📋 Month entry found:", monthEntry);
+
+            if (monthEntry) {
+              // ✅ UPDATE existing month entry
+              const oldPaid = monthEntry.paid || 0;
+              monthEntry.paid =
+                oldPaid + Number(partialAmount) / studentIds.length;
+              console.log(
+                `💰 Updated month ${normalizedMonth}/${normalizedYear}: ${oldPaid} → ${monthEntry.paid}`
+              );
+            } else {
+              // ✅ CREATE new month entry (only if it doesn't exist)
               const baseFee = s.monthlyFee || s.monthly_fee || 50;
+              const discountPercent = family?.discount
+                ? Number(family.discount)
+                : 0;
               const discountedFee =
                 discountPercent > 0
                   ? Number(
@@ -826,18 +958,23 @@ module.exports = (
                     )
                   : Number(baseFee);
 
-              s.monthsPaid.push({
-                month,
-                year,
+              const newMonthEntry = {
+                month: normalizedMonth,
+                year: normalizedYear,
                 monthlyFee: Number(baseFee),
-                discountedFee: Number(discountedFee),
+                discountedFee: discountedFee,
                 paid: Number(partialAmount) / studentIds.length,
-              });
+              };
+
+              s.monthsPaid.push(newMonthEntry);
+              console.log(`🆕 Created new month entry:`, newMonthEntry);
             }
 
             // Recalc subtotal for monthly
-            s.subtotal =
-              s.monthsPaid?.reduce((sum, m) => sum + (m.paid || 0), 0) || 0;
+            s.subtotal = s.monthsPaid.reduce(
+              (sum, m) => sum + (m.paid || 0),
+              0
+            );
           } else if (
             fee.paymentType === "admission" ||
             fee.paymentType === "admissionOnHold"
@@ -948,7 +1085,115 @@ module.exports = (
         { returnDocument: "after" }
       );
 
-      res.send({ message: "Partial payment added", updatedFee });
+      // ✅ SEND EMAIL FOR PARTIAL PAYMENT
+      if (family && family.email) {
+        try {
+          console.log("📧 Sending partial payment email...");
+
+          const paymentMethod =
+            partialMethod || updatedFee.payments?.[0]?.method || "Unknown";
+          const paymentDate =
+            partialDate || new Date().toISOString().slice(0, 10);
+
+          if (
+            fee.paymentType === "monthly" ||
+            fee.paymentType === "monthlyOnHold"
+          ) {
+            console.log("🔍 Final payment details for email:", {
+              partialAmount,
+              normalizedMonth,
+              normalizedYear,
+              paymentType: fee.paymentType,
+            });
+
+            // Prepare students data for email - include ALL months for each student
+            const studentsForEmail = updatedFee.students.map((student) => ({
+              name: student.name,
+              monthsPaid: student.monthsPaid || [],
+              subtotal: student.subtotal,
+            }));
+
+            await sendMonthlyFeeEmail({
+              to: family.email,
+              parentName: family.name || "Parent",
+              students: studentsForEmail,
+              totalAmount: Number(partialAmount),
+              method: paymentMethod,
+              paymentDate: paymentDate,
+              isOnHold: fee.paymentType === "monthlyOnHold",
+              remainingAmount: remaining,
+              isPartialPayment: true,
+            });
+
+            console.log(
+              `✅ Partial payment email sent for ${normalizedMonth}/${normalizedYear}`
+            );
+          } else if (
+            fee.paymentType === "admission" ||
+            fee.paymentType === "admissionOnHold"
+          ) {
+            const enrichedStudents = await enrichStudents(
+              updatedFee.students,
+              studentsCollection,
+              departmentsCollection,
+              classesCollection
+            );
+
+            const studentBreakdown = enrichedStudents.map((enrichedStudent) => {
+              const originalStudent = updatedFee.students.find(
+                (s) => String(s.studentId) === String(enrichedStudent._id)
+              );
+
+              const admissionFee = originalStudent?.admissionFee || 20;
+              const monthlyFee = originalStudent?.monthlyFee || 50;
+              const totalPaid = originalStudent?.subtotal || 0;
+
+              const admissionPaid = Math.min(totalPaid, admissionFee);
+              const monthlyPaid = Math.max(0, totalPaid - admissionFee);
+              const admissionRemaining = Math.max(
+                0,
+                admissionFee - admissionPaid
+              );
+              const monthlyRemaining = Math.max(0, monthlyFee - monthlyPaid);
+              const studentRemaining = admissionRemaining + monthlyRemaining;
+
+              return {
+                ...enrichedStudent,
+                admissionFee,
+                monthlyFee,
+                subtotal: totalPaid,
+                admissionPaid,
+                monthlyPaid,
+                admissionRemaining,
+                monthlyRemaining,
+                studentRemaining,
+              };
+            });
+
+            await sendEmailViaAPI({
+              to: family.email,
+              parentName: family.name || "Parent",
+              students: studentBreakdown,
+              totalAmount: Number(partialAmount),
+              method: paymentMethod,
+              paymentDate: paymentDate,
+              remainingAmount: remaining,
+              studentBreakdown: studentBreakdown,
+              isPartialPayment: true,
+            });
+          }
+        } catch (emailError) {
+          console.error("❌ Partial payment email failed:", emailError);
+        }
+      }
+
+      res.send({
+        message: "Partial payment added",
+        updatedFee,
+        emailSent: !!family?.email,
+        appliedMonth: normalizedMonth,
+        appliedYear: normalizedYear,
+      });
     } catch (err) {
       console.error("Update fee error:", err);
       res.status(500).send({ message: "Internal server error" });
