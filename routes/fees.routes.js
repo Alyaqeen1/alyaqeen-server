@@ -771,9 +771,188 @@ module.exports = (
 
   router.get("/by-id/:id", async (req, res) => {
     const id = req.params.id;
-    const query = { familyId: id };
-    const result = await feesCollection.find(query).toArray();
-    res.send(result);
+
+    try {
+      // Step 1: Get all fees with payments
+      const result = await feesCollection
+        .find({
+          familyId: id,
+          payments: { $exists: true, $ne: [] },
+        })
+        .toArray();
+
+      console.log(`📊 Found ${result.length} fees for family ${id}`);
+
+      // Step 2: Flatten payment data from all students across all docs
+      let allMonths = [];
+
+      result.forEach((fee) => {
+        fee.students.forEach((student) => {
+          // ✅ CASE 1: Monthly fees with monthsPaid array
+          if (student.monthsPaid && Array.isArray(student.monthsPaid)) {
+            student.monthsPaid.forEach((m) => {
+              if (m.paid > 0) {
+                // Only include months with actual payments
+                allMonths.push({
+                  studentId: student.studentId,
+                  name: student.name,
+                  month: parseInt(m.month, 10),
+                  year: parseInt(m.year, 10),
+                  amount: m.paid || 0,
+                  status: fee.status,
+                  paidDate:
+                    fee.payments?.[0]?.date || fee.timestamp || new Date(),
+                  feeType: "monthly",
+                  originalFeeId: fee._id,
+                });
+              }
+            });
+          }
+
+          // ✅ CASE 2: Admission fees - calculate first month payment from payments array
+          else if (
+            fee.paymentType === "admission" ||
+            fee.paymentType === "admissionOnHold"
+          ) {
+            const joiningMonth = parseInt(student.joiningMonth, 10);
+            const joiningYear = parseInt(student.joiningYear, 10);
+
+            if (joiningMonth && joiningYear && student.subtotal > 0) {
+              // Calculate how much was paid for the first month
+              const admissionFee = student.admissionFee || 20;
+              const monthlyFee = student.monthlyFee || 50;
+              const totalPaid = student.subtotal || 0;
+
+              // First £20 goes to admission, rest goes to first month
+              const firstMonthPaid = Math.max(0, totalPaid - admissionFee);
+
+              if (firstMonthPaid > 0) {
+                allMonths.push({
+                  studentId: student.studentId,
+                  name: student.name,
+                  month: joiningMonth,
+                  year: joiningYear,
+                  amount: firstMonthPaid,
+                  status: fee.status,
+                  paidDate:
+                    fee.payments?.[0]?.date || fee.timestamp || new Date(),
+                  feeType: "admission_first_month",
+                  originalFeeId: fee._id,
+                });
+              }
+            }
+          }
+
+          // ✅ CASE 3: If no monthsPaid but student has subtotal (fallback)
+          else if (student.subtotal > 0) {
+            // Try to extract month from timestamp as fallback
+            const feeDate = new Date(fee.timestamp || fee.payments?.[0]?.date);
+            allMonths.push({
+              studentId: student.studentId,
+              name: student.name,
+              month: feeDate.getMonth() + 1, // 1-12
+              year: feeDate.getFullYear(),
+              amount: student.subtotal || 0,
+              status: fee.status,
+              paidDate: fee.payments?.[0]?.date || fee.timestamp,
+              feeType: "fallback",
+              originalFeeId: fee._id,
+            });
+          }
+        });
+      });
+
+      console.log(`📈 Total payment records found: ${allMonths.length}`);
+
+      // Step 3: Keep only months >= Sep 2025
+      allMonths = allMonths.filter(
+        (m) => m.year > 2025 || (m.year === 2025 && m.month >= 9)
+      );
+
+      // Step 4: GROUP BY MONTH (year-month combination)
+      const monthGroups = {};
+
+      allMonths.forEach((month) => {
+        const monthKey = `${month.year}-${month.month
+          .toString()
+          .padStart(2, "0")}`;
+
+        if (!monthGroups[monthKey]) {
+          monthGroups[monthKey] = {
+            month: month.month,
+            year: month.year,
+            students: [],
+            totalAmount: 0,
+            status: month.status,
+            paidDate: month.paidDate,
+            feeIds: new Set(), // Track unique fee IDs
+          };
+        }
+
+        // Add student to this month group
+        monthGroups[monthKey].students.push({
+          studentId: month.studentId,
+          name: month.name,
+          amount: month.amount,
+        });
+
+        // Add to total amount
+        monthGroups[monthKey].totalAmount += month.amount;
+
+        // Track fee IDs
+        monthGroups[monthKey].feeIds.add(month.originalFeeId.toString());
+
+        // Use the most recent status if multiple
+        if (month.status === "paid") {
+          monthGroups[monthKey].status = "paid";
+        }
+      });
+
+      // Step 5: Convert to array and sort by date (most recent first)
+      let monthArray = Object.values(monthGroups);
+
+      monthArray.sort((a, b) => {
+        if (a.year !== b.year) return b.year - a.year;
+        return b.month - a.month;
+      });
+
+      // Step 6: Take only the last 2 months
+      const lastTwoMonths = monthArray.slice(0, 2);
+
+      // Step 7: Format the response for frontend
+      const formattedResult = lastTwoMonths.map((monthGroup) => {
+        const monthNames = [
+          "Jan",
+          "Feb",
+          "Mar",
+          "Apr",
+          "May",
+          "Jun",
+          "Jul",
+          "Aug",
+          "Sep",
+          "Oct",
+          "Nov",
+          "Dec",
+        ];
+        const monthName = monthNames[monthGroup.month - 1] || monthGroup.month;
+
+        return {
+          displayMonth: `${monthName} ${monthGroup.year}`,
+          students: monthGroup.students.map((s) => s.name).join(", "),
+          amount: monthGroup.totalAmount,
+          status: monthGroup.status,
+          paidDate: monthGroup.paidDate,
+          studentCount: monthGroup.students.length,
+          originalFeeIds: Array.from(monthGroup.feeIds), // For modal if needed
+        };
+      });
+
+      res.send(formattedResult);
+    } catch (error) {
+      console.error("Error fetching fees:", error);
+      res.status(500).send({ message: "Internal server error" });
+    }
   });
   router.get("/by-fee-id/:id", async (req, res) => {
     const id = req.params.id;
