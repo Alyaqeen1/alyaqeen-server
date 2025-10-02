@@ -1,7 +1,7 @@
 require("dotenv").config();
 const SibApiV3Sdk = require("sib-api-v3-sdk");
 const sessionMap = require("./sessionMap");
-const { isValid } = require("date-fns"); // ✅ ADD THIS IMPORT
+const { isValid } = require("date-fns");
 
 const sendEmailViaAPI = async ({
   to,
@@ -10,9 +10,8 @@ const sendEmailViaAPI = async ({
   totalAmount,
   method = "Selected Method",
   paymentDate = null,
-  remainingAmount = 0,
   studentBreakdown = [],
-  isPartialPayment = false, // ✅ ADD THIS FLAG
+  isEnrollmentConfirmed = true, // ✅ ADD THIS FLAG
 }) => {
   // if (process.env.EMAIL_SENDING_ENABLED !== "true") {
   //   console.log(
@@ -27,43 +26,17 @@ const sendEmailViaAPI = async ({
 
   const apiInstance = new SibApiV3Sdk.TransactionalEmailsApi();
 
-  const studentsWithBreakdown =
-    studentBreakdown.length > 0
-      ? studentBreakdown
-      : students.map((student) => {
-          const admissionFee = student.admissionFee || 20;
-          const monthlyFee = student.monthlyFee || 50;
-          const totalPaid = student.subtotal || 0;
+  // ✅ SIMPLIFIED: Only use basic student info without breakdown calculations
+  const studentsForEmail =
+    studentBreakdown.length > 0 ? studentBreakdown : students;
 
-          const admissionPaid = Math.min(totalPaid, admissionFee);
-          const monthlyPaid = Math.max(0, totalPaid - admissionFee);
-          const admissionRemaining = Math.max(0, admissionFee - admissionPaid);
-          const monthlyRemaining = Math.max(0, monthlyFee - monthlyPaid);
-          const studentRemaining = admissionRemaining + monthlyRemaining;
-
-          return {
-            ...student,
-            admissionPaid,
-            monthlyPaid,
-            admissionRemaining,
-            monthlyRemaining,
-            studentRemaining,
-          };
-        });
-
-  const studentDetailsHtml = studentsWithBreakdown
+  const studentDetailsHtml = studentsForEmail
     .map((student, index) => {
       const {
         name,
         startingDate,
         academic = {},
-        admissionFee = 20,
-        monthlyFee = 50,
-        admissionPaid = 0,
-        monthlyPaid = 0,
-        admissionRemaining = 0,
-        monthlyRemaining = 0,
-        studentRemaining = 0,
+        subtotal = 0, // ✅ Only show what was actually paid
       } = student;
 
       const formattedStartDate =
@@ -83,32 +56,23 @@ const sendEmailViaAPI = async ({
       } = academic;
 
       return `
-      <p><strong>${index + 1}. ${name}</strong></p>
-      <p><strong>Admission Details:</strong></p>
-      <ul>
-        <li><strong>Department:</strong> ${department}</li>
-        <li><strong>Class:</strong> ${className}</li>
-        <li><strong>Session:</strong> ${session}</li>
-        <li><strong>Starting Date:</strong> ${formattedStartDate}</li>
-      </ul>
-      <p><strong>Fee Breakdown:</strong></p>
-      <ul>
-        <li><strong>Admission Fee:</strong> £${admissionFee.toFixed(2)} 
-            (Paid: £${admissionPaid.toFixed(
-              2
-            )} | Remaining: £${admissionRemaining.toFixed(2)})</li>
-        <li><strong>First Month Fee:</strong> £${monthlyFee.toFixed(2)} 
-            (Paid: £${monthlyPaid.toFixed(
-              2
-            )} | Remaining: £${monthlyRemaining.toFixed(2)})</li>
-        <li><strong>Student Total Paid:</strong> £${(
-          admissionPaid + monthlyPaid
-        ).toFixed(2)}</li>
-        <li><strong>Student Total Remaining:</strong> £${studentRemaining.toFixed(
-          2
-        )}</li>
-      </ul>
-      <br/>
+      <div style="margin-bottom: 20px; padding: 15px; border: 1px solid #e0e0e0; border-radius: 8px;">
+        <p style="margin: 0 0 10px 0; font-size: 16px; color: #2c5aa0;">
+          <strong>${index + 1}. ${name}</strong>
+        </p>
+        <p style="margin: 10px 0 5px 0;"><strong>Admission Details:</strong></p>
+        <ul style="margin: 0 0 10px 0; padding-left: 20px;">
+          <li><strong>Department:</strong> ${department}</li>
+          <li><strong>Class:</strong> ${className}</li>
+          <li><strong>Session:</strong> ${session}</li>
+          <li><strong>Starting Date:</strong> ${formattedStartDate}</li>
+        </ul>
+        <p style="margin: 10px 0 5px 0;"><strong>Payment Summary:</strong></p>
+        <ul style="margin: 0; padding-left: 20px;">
+          <li><strong>Amount Paid:</strong> £${subtotal.toFixed(2)}</li>
+          <li><strong>Status:</strong> ✅ Enrollment Confirmed</li>
+        </ul>
+      </div>
     `;
     })
     .join("");
@@ -122,41 +86,39 @@ const sendEmailViaAPI = async ({
       })
     : "recently";
 
-  // ✅ DIFFERENT MESSAGES FOR PARTIAL VS INITIAL PAYMENTS
-  const messageIntro = isPartialPayment
-    ? `<p>We have received your <strong>additional payment of £${totalAmount.toFixed(
-        2
-      )}</strong> towards the remaining balance via <strong>${method}</strong> on <strong>${paymentDateText}</strong>.</p>
-     <p>This payment of <strong>£${totalAmount.toFixed(
-       2
-     )}</strong> has been applied to your outstanding fees.</p>`
-    : `<p>We have received your <strong>admission payment of £${totalAmount.toFixed(
-        2
-      )}</strong> via <strong>${method}</strong> on <strong>${paymentDateText}</strong>.</p>`;
-  // ✅ UPDATE THE SUMMARY TO SHOW BOTH
-  const paymentSummary = isPartialPayment
-    ? `<p><strong>Amount Paid This Time:</strong> £${totalAmount.toFixed(2)}</p>
-     <p><strong>Total Amount Received So Far:</strong> £${studentsWithBreakdown
-       .reduce((sum, student) => sum + student.subtotal, 0)
-       .toFixed(2)}</p>`
-    : `<p><strong>Total Amount Received:</strong> £${totalAmount.toFixed(
-        2
-      )}</p>`;
+  // ✅ SIMPLIFIED MESSAGE - ONLY SHOW PAID AMOUNT AND ENROLLMENT
+  const messageIntro = `
+    <p>We have successfully received your <strong>admission payment of £${totalAmount.toFixed(
+      2
+    )}</strong> via <strong>${method}</strong> on <strong>${paymentDateText}</strong>.</p>
+    <p>Your student(s) have been <strong>successfully enrolled</strong> at Alyaqeen!</p>
+  `;
 
-  // ✅ REMINING AMOUNT SECTION
-  const remainingSection =
-    remainingAmount > 0
-      ? `<p><strong>Total Remaining Balance:</strong> £${remainingAmount.toFixed(
-          2
-        )}</p>
-       <p>Please pay the remaining amount at your earliest convenience to complete the admission process.</p><br/>`
-      : `<p><strong>Admission Status:</strong> Fully Completed ✅</p>
-       <p>Your admission process is now complete. Welcome to Alyaqeen!</p><br/>`;
+  // ✅ SIMPLIFIED SUMMARY - ONLY SHOW TOTAL PAID
+  const paymentSummary = `
+    <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin: 15px 0;">
+      <p style="margin: 0 0 10px 0; font-size: 16px; color: #2c5aa0;">
+        <strong>Payment Confirmation</strong>
+      </p>
+      <p style="margin: 5px 0;"><strong>Total Amount Paid:</strong> £${totalAmount.toFixed(
+        2
+      )}</p>
+      <p style="margin: 5px 0;"><strong>Payment Method:</strong> ${method}</p>
+      <p style="margin: 5px 0;"><strong>Payment Date:</strong> ${paymentDateText}</p>
+    </div>
+  `;
 
-  // ✅ DIFFERENT SUBJECT FOR PARTIAL PAYMENTS
-  const emailSubject = isPartialPayment
-    ? "💰 Additional Payment Received - Alyaqeen"
-    : "✅ Admission Fee Payment - Alyaqeen";
+  // ✅ ENROLLMENT CONFIRMATION SECTION
+  const enrollmentSection = `
+    <div style="background-color: #d4edda; padding: 15px; border-radius: 8px; margin: 15px 0;">
+      <p style="margin: 0; color: #155724; font-weight: bold;">
+        ✅ Enrollment Successfully Completed
+      </p>
+      <p style="margin: 10px 0 0 0; color: #155724;">
+        Your student(s) are now officially enrolled and can start attending classes according to their schedule.
+      </p>
+    </div>
+  `;
 
   const sendSmtpEmail = {
     sender: {
@@ -169,29 +131,38 @@ const sendEmailViaAPI = async ({
         name: parentName,
       },
     ],
-    subject: emailSubject,
+    subject: "✅ Enrollment Confirmed - Alyaqeen", // ✅ SIMPLIFIED SUBJECT
     htmlContent: `
-      <p>Dear <strong>${parentName}</strong>,</p>
-      ${messageIntro}
-      <br/>
-      ${studentDetailsHtml}
-      <p><strong>Overall Summary:</strong></p>
-      ${paymentSummary}
-      ${remainingSection}
-      ${
-        isPartialPayment
-          ? `<p><em>Thank you for your continued support. Your student's admission remains active.</em></p>`
-          : `<p>Your student(s) admission process has been initiated. Full access to classes will be granted upon complete payment.</p>`
-      }
-      <br/>
-      <p>Thank you for choosing Alyaqeen.</p>
-      <p>JazakumAllahu khayran for your support.</p>
-      <p>Warm regards,<br />Alyaqeen Team</p>
+      <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+        <p>Dear <strong>${parentName}</strong>,</p>
+        
+        ${messageIntro}
+        
+        ${enrollmentSection}
+        
+        <p><strong>Student Enrollment Details:</strong></p>
+        ${studentDetailsHtml}
+        
+        ${paymentSummary}
+        
+        <p>Your student(s) are now ready to begin their educational journey with us. 
+           Welcome to the Alyaqeen family!</p>
+           
+        <p>If you have any questions about the class schedule or need further assistance, 
+           please don't hesitate to contact us.</p>
+           
+        <br/>
+        <p>Thank you for choosing Alyaqeen.</p>
+        <p>JazakumAllahu khayran for your trust and support.</p>
+        <p>Warm regards,<br />
+           <strong>Alyaqeen Team</strong></p>
+      </div>
     `,
   };
 
   try {
     await apiInstance.sendTransacEmail(sendSmtpEmail);
+    console.log("✅ Enrollment confirmation email sent successfully to:", to);
   } catch (error) {
     console.error(
       "❌ Failed to send email via Brevo API:",

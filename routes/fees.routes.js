@@ -212,37 +212,19 @@ module.exports = (
             classesCollection
           );
 
-          // ✅ FIXED: Ensure we have the fee data from original students
+          // ✅ SIMPLIFIED: Only show paid amounts and enrollment confirmation
           const studentBreakdown = enrichedStudents.map((enrichedStudent) => {
             // Find the original fee data for this student
             const originalStudent = feesData.students.find(
               (s) => String(s.studentId) === String(enrichedStudent._id)
             );
 
-            const admissionFee = originalStudent?.admissionFee || 20;
-            const monthlyFee = originalStudent?.monthlyFee || 50;
             const totalPaid = originalStudent?.subtotal || 0;
-
-            // Calculate how much was paid for admission vs monthly
-            const admissionPaid = Math.min(totalPaid, admissionFee);
-            const monthlyPaid = Math.max(0, totalPaid - admissionFee);
-            const admissionRemaining = Math.max(
-              0,
-              admissionFee - admissionPaid
-            );
-            const monthlyRemaining = Math.max(0, monthlyFee - monthlyPaid);
-            const studentRemaining = admissionRemaining + monthlyRemaining;
 
             return {
               ...enrichedStudent, // Academic info
-              admissionFee, // From original fee data
-              monthlyFee, // From original fee data
-              subtotal: totalPaid, // From original fee data
-              admissionPaid,
-              monthlyPaid,
-              admissionRemaining,
-              monthlyRemaining,
-              studentRemaining,
+              subtotal: totalPaid, // Only show what was actually paid
+              // Remove all expected/remaining calculations
             };
           });
 
@@ -250,11 +232,14 @@ module.exports = (
             to: familyEmail,
             parentName: familyName,
             students: studentBreakdown,
-            totalAmount: paidAmount,
+            totalAmount: paidAmount, // This shows the actual paid amount
             method: paymentMethod,
             paymentDate: paymentDate,
-            remainingAmount: remainingAmount,
+            // ✅ REMOVED: remainingAmount - don't show remaining balance
+            // ✅ REMOVED: studentBreakdown with remaining calculations
             studentBreakdown: studentBreakdown,
+            // Add enrollment confirmation message
+            isEnrollmentConfirmed: true,
           });
         } catch (admissionError) {
           console.error("❌ Admission email process failed:", admissionError);
@@ -312,7 +297,6 @@ module.exports = (
         if (!feeStudent) return;
 
         // Helper function to get payment date for a specific student in a fee
-        // Helper function to get payment date for a specific student in a fee
         const getPaymentDate = (fee, feeStudent) => {
           // 1. NEW SYSTEM: Student-level payments
           if (
@@ -337,9 +321,6 @@ module.exports = (
           if (fee.date) {
             return fee.date;
           }
-
-          // ❌ REMOVE timestamp-to-date conversion
-          // Old LMS "timestamp" is just document creation, not payment date
 
           // 4. Old LMS: no real date available
           return "N/A";
@@ -373,7 +354,7 @@ module.exports = (
                   month: monthKey,
                   displayMonth: formatDisplayMonth(monthKey),
                   amount: paymentAmount,
-                  paymentDate: paymentDate, // This will be "N/A" for old data, actual date for new data
+                  paymentDate: paymentDate,
                   status: fee.status,
                   paymentType: fee.paymentType,
                   feeId: fee._id,
@@ -384,7 +365,7 @@ module.exports = (
           }
         }
 
-        // Handle admission fees
+        // Handle admission fees - SIMPLIFIED: No partial payments
         if (
           fee.paymentType === "admission" ||
           fee.paymentType === "admissionOnHold"
@@ -395,6 +376,7 @@ module.exports = (
               feeStudent.joiningYear
             }-${feeStudent.joiningMonth.toString().padStart(2, "0")}`;
 
+            // ✅ SIMPLIFIED: Always treat admission as fully paid for the first month
             // Calculate how much was actually paid for the first month
             let firstMonthPaid = 0;
 
@@ -410,53 +392,26 @@ module.exports = (
                 feeStudent.subtotal || feeStudent.monthlyFee || 0;
             }
 
-            // Only consider the monthly fee portion (not admission fee)
-            if (
-              fee.status === "paid" &&
-              firstMonthPaid >= (feeStudent.monthlyFee || 0)
-            ) {
-              if (!paidMonths.has(monthKey)) {
-                paidMonths.add(monthKey);
-                totalMonthlyPaid += feeStudent.monthlyFee || 0;
+            // ✅ REMOVED: Partial payment logic - always consider first month as paid
+            // If any payment was made, consider the first month as paid
+            if (firstMonthPaid > 0 && !paidMonths.has(monthKey)) {
+              paidMonths.add(monthKey);
 
-                monthlyPayments.push({
-                  month: monthKey,
-                  displayMonth: formatDisplayMonth(monthKey),
-                  amount: feeStudent.monthlyFee || 0,
-                  paymentDate: paymentDate, // This will be "N/A" for old data, actual date for new data
-                  status: fee.status,
-                  paymentType: fee.paymentType,
-                  feeId: fee._id,
-                  isFirstMonth: true,
-                });
-              }
-            } else if (fee.status === "partial") {
-              // For partial payments, we need to determine how much of the monthly fee was paid
-              const monthlyFee = feeStudent.monthlyFee || 0;
-              const admissionFee = feeStudent.admissionFee || 0;
-              const totalExpected = monthlyFee + admissionFee;
-              const totalPaid = firstMonthPaid;
+              // Use the monthly fee amount, not the actual paid amount
+              const monthlyFeeAmount =
+                feeStudent.monthlyFee || feeStudent.monthly_fee || 50;
+              totalMonthlyPaid += monthlyFeeAmount;
 
-              // If paid amount covers admission fee + some monthly fee
-              if (totalPaid > admissionFee) {
-                const monthlyPortionPaid = totalPaid - admissionFee;
-                if (!paidMonths.has(monthKey)) {
-                  paidMonths.add(monthKey);
-                  totalMonthlyPaid += monthlyPortionPaid;
-
-                  monthlyPayments.push({
-                    month: monthKey,
-                    displayMonth: formatDisplayMonth(monthKey),
-                    amount: monthlyPortionPaid,
-                    paymentDate: paymentDate, // This will be "N/A" for old data, actual date for new data
-                    status: "partial",
-                    paymentType: fee.paymentType,
-                    feeId: fee._id,
-                    isFirstMonth: true,
-                    note: `Partial payment (${monthlyPortionPaid} of ${monthlyFee})`,
-                  });
-                }
-              }
+              monthlyPayments.push({
+                month: monthKey,
+                displayMonth: formatDisplayMonth(monthKey),
+                amount: monthlyFeeAmount, // Show the full monthly fee amount, not partial
+                paymentDate: paymentDate,
+                status: "paid", // ✅ Always show as paid
+                paymentType: fee.paymentType,
+                feeId: fee._id,
+                isFirstMonth: true,
+              });
             }
           }
         }
@@ -467,7 +422,7 @@ module.exports = (
           amount: feeStudent.subtotal || 0,
           status: fee.status,
           paymentType: fee.paymentType,
-          timestamp: paymentDate, // This will be "N/A" for old data, actual date for new data
+          timestamp: paymentDate,
           studentPortion: feeStudent.subtotal || 0,
         });
       });
@@ -551,23 +506,29 @@ module.exports = (
       if (lastPaidMonth) {
         const lastPaidDate = new Date(`${lastPaidMonth}-01`);
         const currentDate = new Date();
+        const currentMonth = new Date(
+          currentDate.getFullYear(),
+          currentDate.getMonth(),
+          1
+        ); // 1st of current month
 
-        let currentMonth = new Date(lastPaidDate);
-        currentMonth.setMonth(currentMonth.getMonth() + 1);
+        let currentIterationMonth = new Date(lastPaidDate);
+        currentIterationMonth.setMonth(currentIterationMonth.getMonth() + 1);
 
-        while (currentMonth <= currentDate) {
-          const monthKey = format(currentMonth, "yyyy-MM");
+        while (currentIterationMonth <= currentMonth) {
+          const monthKey = format(currentIterationMonth, "yyyy-MM");
           const monthDate = new Date(monthKey + "-01");
 
           if (monthDate >= september2025) {
             const paidMonth = monthlyPayments.find((p) => p.month === monthKey);
-            if (!paidMonth || paidMonth.status === "partial") {
+            if (!paidMonth) {
+              // ✅ Only count if completely unpaid (no partial logic)
               consecutiveUnpaidMonths++;
             } else {
               break;
             }
           }
-          currentMonth.setMonth(currentMonth.getMonth() + 1);
+          currentIterationMonth.setMonth(currentIterationMonth.getMonth() + 1);
         }
       }
 
@@ -611,7 +572,7 @@ module.exports = (
           .map((payment) => ({
             month: payment.displayMonth,
             amount: payment.amount,
-            paymentDate: payment.paymentDate, // Will show actual date for new data, "N/A" for old data
+            paymentDate: payment.paymentDate,
             status: payment.status,
             paymentType: payment.paymentType,
             feeId: payment.feeId,
@@ -659,7 +620,7 @@ module.exports = (
     return `${monthName} ${year}`;
   }
 
-  // You'll also need to include the getUnpaidFees function in this file
+  // Updated getUnpaidFees function - uses 1st of month and respects joining date
   function getUnpaidFees({
     students,
     fees,
@@ -673,7 +634,7 @@ module.exports = (
 
     const monthlyPaidMap = {};
 
-    // Build payment map from fee records (same as before)
+    // Build payment map from fee records
     for (const fee of fees || []) {
       if (
         (fee.paymentType === "monthly" ||
@@ -737,12 +698,27 @@ module.exports = (
         grouped[monthStr].studentsMap[studentId].subtotal += discountedFee;
       };
 
-      // calculate months (same as your current logic)
+      // ✅ FIXED: Calculate months from 1st of each month, not starting date
       let currentDate = new Date();
-      let payableMonth = new Date(startingDate);
-      payableMonth.setDate(1);
+      let currentMonth = new Date(
+        currentDate.getFullYear(),
+        currentDate.getMonth(),
+        1
+      ); // Start from 1st of current month
 
-      while (payableMonth <= currentDate) {
+      // ✅ FIXED: Don't show months before joining as unpaid
+      let startDate = new Date(startingDate);
+      let september2025 = new Date("2025-09-01");
+
+      // Use the later date between student's starting date and September 2025
+      let payableMonth = startDate > september2025 ? startDate : september2025;
+      payableMonth = new Date(
+        payableMonth.getFullYear(),
+        payableMonth.getMonth(),
+        1
+      ); // Ensure 1st of month
+
+      while (payableMonth <= currentMonth) {
         const year = payableMonth.getFullYear();
         const month = payableMonth.getMonth() + 1;
         const monthStr = `${year}-${month.toString().padStart(2, "0")}`;
@@ -780,8 +756,6 @@ module.exports = (
           payments: { $exists: true, $ne: [] },
         })
         .toArray();
-
-      console.log(`📊 Found ${result.length} fees for family ${id}`);
 
       // Step 2: Flatten payment data from all students across all docs
       let allMonths = [];
@@ -861,8 +835,6 @@ module.exports = (
           }
         });
       });
-
-      console.log(`📈 Total payment records found: ${allMonths.length}`);
 
       // Step 3: Keep only months >= Sep 2025
       allMonths = allMonths.filter(
@@ -1050,6 +1022,17 @@ module.exports = (
       const fee = await feesCollection.findOne({ _id: new ObjectId(id) });
       if (!fee) return res.status(404).send({ message: "Fee not found" });
 
+      // ✅ BLOCK ADMISSION PARTIAL PAYMENTS
+      if (
+        fee.paymentType === "admission" ||
+        fee.paymentType === "admissionOnHold"
+      ) {
+        return res.status(400).send({
+          message:
+            "Partial payments are not allowed for admission fees. Please create a new admission payment instead.",
+        });
+      }
+
       // Get family for email
       const family = await familiesCollection.findOne({
         _id: new ObjectId(fee.familyId),
@@ -1068,187 +1051,60 @@ module.exports = (
       const normalizedMonth = String(month).padStart(2, "0");
       const normalizedYear = Number(year);
 
-      // ✅ Update students based on payment type
+      // ✅ Update students based on payment type (ONLY MONTHLY NOW)
       const students = fee.students.map((s) => {
         if (studentIds.includes(String(s.studentId))) {
-          if (
-            fee.paymentType === "monthly" ||
-            fee.paymentType === "monthlyOnHold"
-          ) {
-            // Monthly fee logic (unchanged)
-            if (!s.monthsPaid) s.monthsPaid = [];
+          // Monthly fee logic only
+          if (!s.monthsPaid) s.monthsPaid = [];
 
-            let monthEntry = s.monthsPaid.find(
-              (m) =>
-                String(m.month).padStart(2, "0") === normalizedMonth &&
-                Number(m.year) === normalizedYear
-            );
+          let monthEntry = s.monthsPaid.find(
+            (m) =>
+              String(m.month).padStart(2, "0") === normalizedMonth &&
+              Number(m.year) === normalizedYear
+          );
 
-            if (monthEntry) {
-              monthEntry.paid =
-                Number(monthEntry.paid || 0) +
-                Number(partialAmount) / studentIds.length;
-            } else {
-              const baseFee = s.monthlyFee || s.monthly_fee || 50;
-              const discountedFee =
-                discountPercent > 0
-                  ? Number(
-                      (baseFee - (baseFee * discountPercent) / 100).toFixed(2)
-                    )
-                  : Number(baseFee);
-
-              s.monthsPaid.push({
-                month: normalizedMonth,
-                year: normalizedYear,
-                monthlyFee: Number(baseFee),
-                discountedFee: discountedFee,
-                paid: Number(partialAmount) / studentIds.length,
-              });
-            }
-
-            s.subtotal = s.monthsPaid.reduce(
-              (sum, m) => sum + (m.paid || 0),
-              0
-            );
-          } else if (
-            fee.paymentType === "admission" ||
-            fee.paymentType === "admissionOnHold"
-          ) {
-            const admissionFee = s.admissionFee || 20;
-            const baseMonthlyFee = s.monthlyFee || s.monthly_fee || 50;
-
-            // ✅ DISCOUNT APPLIES ONLY TO MONTHLY FEE, NOT ADMISSION FEE
-            const discountedMonthlyFee =
+          if (monthEntry) {
+            monthEntry.paid =
+              Number(monthEntry.paid || 0) +
+              Number(partialAmount) / studentIds.length;
+          } else {
+            const baseFee = s.monthlyFee || s.monthly_fee || 50;
+            const discountedFee =
               discountPercent > 0
                 ? Number(
-                    (
-                      baseMonthlyFee -
-                      (baseMonthlyFee * discountPercent) / 100
-                    ).toFixed(2)
+                    (baseFee - (baseFee * discountPercent) / 100).toFixed(2)
                   )
-                : Number(baseMonthlyFee);
+                : Number(baseFee);
 
-            // ✅ CALCULATE ACTUAL EXPECTED TOTAL FOR THIS STUDENT
-            const studentExpectedTotal = admissionFee + discountedMonthlyFee;
-
-            // Calculate amount per student
-            const amountPerStudent = Number(partialAmount) / studentIds.length;
-
-            // For admission fees, update the payments array
-            if (!s.payments) s.payments = [];
-
-            const today = partialDate || new Date().toISOString().slice(0, 10);
-            const existingPaymentIndex = s.payments.findIndex(
-              (p) => p.date === today
-            );
-
-            if (existingPaymentIndex !== -1) {
-              s.payments[existingPaymentIndex].amount =
-                Number(s.payments[existingPaymentIndex].amount || 0) +
-                amountPerStudent;
-            } else {
-              // Calculate current payment breakdown
-              const currentTotalPaid = s.payments.reduce(
-                (sum, p) => sum + (p.amount || 0),
-                0
-              );
-
-              // Track how much has been allocated to admission vs monthly
-              let currentAdmissionPaid = 0;
-              let currentMonthlyPaid = 0;
-
-              // Simple logic: First £20 goes to admission, rest to monthly
-              if (currentTotalPaid <= admissionFee) {
-                currentAdmissionPaid = currentTotalPaid;
-                currentMonthlyPaid = 0;
-              } else {
-                currentAdmissionPaid = admissionFee;
-                currentMonthlyPaid = currentTotalPaid - admissionFee;
-              }
-
-              // If admission not fully paid, pay admission first
-              if (currentAdmissionPaid < admissionFee) {
-                const admissionNeeded = admissionFee - currentAdmissionPaid;
-                const admissionPayment = Math.min(
-                  amountPerStudent,
-                  admissionNeeded
-                );
-                const monthlyPayment = amountPerStudent - admissionPayment;
-
-                if (admissionPayment > 0) {
-                  s.payments.push({
-                    amount: Number(admissionPayment),
-                    date: today,
-                    method: partialMethod || "Unknown",
-                  });
-                }
-
-                if (monthlyPayment > 0) {
-                  s.payments.push({
-                    amount: Number(monthlyPayment),
-                    date: today,
-                    method: partialMethod || "Unknown",
-                  });
-                }
-              } else {
-                // Admission already paid, all goes to monthly
-                s.payments.push({
-                  amount: Number(amountPerStudent),
-                  date: today,
-                  method: partialMethod || "Unknown",
-                });
-              }
-            }
-
-            // Recalc subtotal from payments array
-            s.subtotal = s.payments.reduce(
-              (sum, p) => sum + (p.amount || 0),
-              0
-            );
+            s.monthsPaid.push({
+              month: normalizedMonth,
+              year: normalizedYear,
+              monthlyFee: Number(baseFee),
+              discountedFee: discountedFee,
+              paid: Number(partialAmount) / studentIds.length,
+            });
           }
+
+          s.subtotal = s.monthsPaid.reduce((sum, m) => sum + (m.paid || 0), 0);
         }
         return s;
       });
 
-      // ✅ FIXED: Calculate remaining correctly
-      // For admission fees, we need to calculate the actual expected total per student
+      // ✅ Calculate remaining only for monthly fees
       let totalExpected = 0;
       let totalPaid = 0;
 
       students.forEach((s) => {
         if (studentIds.includes(String(s.studentId))) {
-          if (
-            fee.paymentType === "admission" ||
-            fee.paymentType === "admissionOnHold"
-          ) {
-            const admissionFee = s.admissionFee || 20;
-            const baseMonthlyFee = s.monthlyFee || s.monthly_fee || 50;
-            const discountedMonthlyFee =
-              discountPercent > 0
-                ? Number(
-                    (
-                      baseMonthlyFee -
-                      (baseMonthlyFee * discountPercent) / 100
-                    ).toFixed(2)
-                  )
-                : Number(baseMonthlyFee);
-
-            // ✅ Calculate expected total for THIS student
-            const studentExpected = admissionFee + discountedMonthlyFee;
-            totalExpected += studentExpected;
-          } else {
-            // For monthly fees, use the existing expectedTotal logic
-            totalExpected +=
-              s.monthsPaid?.reduce(
-                (sum, m) => sum + (m.discountedFee || m.monthlyFee || 0),
-                0
-              ) || 0;
-          }
+          totalExpected +=
+            s.monthsPaid?.reduce(
+              (sum, m) => sum + (m.discountedFee || m.monthlyFee || 0),
+              0
+            ) || 0;
           totalPaid += s.subtotal || 0;
         }
       });
 
-      // ✅ Use the calculated expected total instead of fee.expectedTotal
       const remaining = Math.max(0, totalExpected - totalPaid);
       const newStatus =
         remaining <= 0 ? "paid" : totalPaid > 0 ? "partial" : "unpaid";
@@ -1256,7 +1112,7 @@ module.exports = (
       // ✅ Update root payments array (add the new payment)
       const updatedRootPayments = [...(fee.payments || []), newPayment];
 
-      // ✅ Update in DB - also update expectedTotal if it's wrong
+      // ✅ Update in DB
       const updateData = {
         students,
         remaining: Number(remaining.toFixed(2)),
@@ -1264,22 +1120,13 @@ module.exports = (
         payments: updatedRootPayments,
       };
 
-      // ✅ If this is an admission fee and expectedTotal seems wrong, fix it
-      if (
-        (fee.paymentType === "admission" ||
-          fee.paymentType === "admissionOnHold") &&
-        fee.expectedTotal !== totalExpected
-      ) {
-        updateData.expectedTotal = Number(totalExpected.toFixed(2));
-      }
-
       const updatedFee = await feesCollection.findOneAndUpdate(
         { _id: new ObjectId(id) },
         { $set: updateData },
         { returnDocument: "after" }
       );
 
-      // ✅ SEND EMAIL FOR PARTIAL PAYMENT (your existing email code)
+      // ✅ SEND EMAIL FOR PARTIAL PAYMENT (MONTHLY ONLY)
       if (family && family.email) {
         try {
           const paymentMethod =
@@ -1287,81 +1134,23 @@ module.exports = (
           const paymentDate =
             partialDate || new Date().toISOString().slice(0, 10);
 
-          if (
-            fee.paymentType === "monthly" ||
-            fee.paymentType === "monthlyOnHold"
-          ) {
-            const studentsForEmail = updatedFee.students.map((student) => ({
-              name: student.name,
-              monthsPaid: student.monthsPaid || [],
-              subtotal: student.subtotal,
-            }));
+          const studentsForEmail = updatedFee.students.map((student) => ({
+            name: student.name,
+            monthsPaid: student.monthsPaid || [],
+            subtotal: student.subtotal,
+          }));
 
-            await sendMonthlyFeeEmail({
-              to: family.email,
-              parentName: family.name || "Parent",
-              students: studentsForEmail,
-              totalAmount: Number(partialAmount),
-              method: paymentMethod,
-              paymentDate: paymentDate,
-              isOnHold: fee.paymentType === "monthlyOnHold",
-              remainingAmount: remaining,
-              isPartialPayment: true,
-            });
-          } else if (
-            fee.paymentType === "admission" ||
-            fee.paymentType === "admissionOnHold"
-          ) {
-            const enrichedStudents = await enrichStudents(
-              updatedFee.students,
-              studentsCollection,
-              departmentsCollection,
-              classesCollection
-            );
-
-            const studentBreakdown = enrichedStudents.map((enrichedStudent) => {
-              const originalStudent = updatedFee.students.find(
-                (s) => String(s.studentId) === String(enrichedStudent._id)
-              );
-
-              const admissionFee = originalStudent?.admissionFee || 20;
-              const monthlyFee = originalStudent?.monthlyFee || 50;
-              const totalPaid = originalStudent?.subtotal || 0;
-
-              const admissionPaid = Math.min(totalPaid, admissionFee);
-              const monthlyPaid = Math.max(0, totalPaid - admissionFee);
-              const admissionRemaining = Math.max(
-                0,
-                admissionFee - admissionPaid
-              );
-              const monthlyRemaining = Math.max(0, monthlyFee - monthlyPaid);
-              const studentRemaining = admissionRemaining + monthlyRemaining;
-
-              return {
-                ...enrichedStudent,
-                admissionFee,
-                monthlyFee,
-                subtotal: totalPaid,
-                admissionPaid,
-                monthlyPaid,
-                admissionRemaining,
-                monthlyRemaining,
-                studentRemaining,
-              };
-            });
-
-            await sendEmailViaAPI({
-              to: family.email,
-              parentName: family.name || "Parent",
-              students: studentBreakdown,
-              totalAmount: Number(partialAmount),
-              method: paymentMethod,
-              paymentDate: paymentDate,
-              remainingAmount: remaining,
-              studentBreakdown: studentBreakdown,
-              isPartialPayment: true,
-            });
-          }
+          await sendMonthlyFeeEmail({
+            to: family.email,
+            parentName: family.name || "Parent",
+            students: studentsForEmail,
+            totalAmount: Number(partialAmount),
+            method: paymentMethod,
+            paymentDate: paymentDate,
+            isOnHold: fee.paymentType === "monthlyOnHold",
+            remainingAmount: remaining,
+            isPartialPayment: true,
+          });
         } catch (emailError) {
           console.error("❌ Partial payment email failed:", emailError);
         }
@@ -1518,11 +1307,26 @@ module.exports = (
         return s;
       });
 
-      // Recalculate totals for fee
-      const totalPaid = students.reduce((sum, s) => sum + (s.subtotal || 0), 0);
-      const remaining = Math.max(0, (fee.expectedTotal || 0) - totalPaid);
-      const newStatus =
-        remaining <= 0 ? "paid" : totalPaid > 0 ? "partial" : "unpaid";
+      // ✅ FIXED: For admission payments, always set remaining to 0 and status to paid
+      let remaining, newStatus;
+
+      if (
+        fee.paymentType === "admission" ||
+        fee.paymentType === "admissionOnHold"
+      ) {
+        // ✅ ADMISSION: Always paid with 0 remaining
+        remaining = 0;
+        newStatus = "paid";
+      } else {
+        // ✅ MONTHLY: Calculate normally
+        const totalPaid = students.reduce(
+          (sum, s) => sum + (s.subtotal || 0),
+          0
+        );
+        remaining = Math.max(0, (fee.expectedTotal || 0) - totalPaid);
+        newStatus =
+          remaining <= 0 ? "paid" : totalPaid > 0 ? "partial" : "unpaid";
+      }
 
       // UPDATE root payments array with new total amount
       const totalPaymentAmount = payments.reduce(
