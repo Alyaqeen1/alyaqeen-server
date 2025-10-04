@@ -1005,6 +1005,10 @@ module.exports = (
         const addUnpaidMonth = (monthStr, year, month) => {
           const key = `${studentId}_${monthStr}`;
 
+          if (paidMonthsMap.has(key)) {
+            return;
+          }
+
           const discountedFee = fee - (fee * discount) / 100;
 
           if (!grouped[monthStr]) {
