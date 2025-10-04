@@ -5,7 +5,7 @@ const sendHoldEmail = require("../config/sendHoldEmail");
 const sendMonthlyFeeEmail = require("../config/sendMonthlyFeeEmail");
 const router = express.Router();
 const { addDays, isBefore, format, isValid } = require("date-fns");
-
+// const { isValid, parseISO } = require("date-fns");
 const enrichStudents = async (
   feeStudents,
   studentsCollection,
@@ -932,6 +932,174 @@ module.exports = (
     const result = await feesCollection.findOne(query);
     res.send(result);
   });
+
+  // GET /api/fees/unpaid-months/:familyId
+  router.get("/unpaid-months/:familyId", async (req, res) => {
+    try {
+      const { familyId } = req.params;
+      const { discount = 0 } = req.query;
+
+      // Get all fee records for this family
+      const fees = await feesCollection
+        .find({
+          familyId: familyId,
+          paymentType: { $in: ["monthly", "monthlyOnHold"] },
+          status: { $in: ["paid", "pending"] },
+        })
+        .toArray();
+
+      if (fees.length === 0) {
+        return res.json({
+          success: true,
+          familyId,
+          unpaidMonths: [],
+          message: "No fee records found for this family",
+        });
+      }
+
+      // Extract all students and their paid months from the fees
+      const allStudents = new Map(); // studentId -> { student data }
+      const paidMonthsMap = new Map(); // studentId_month -> true
+
+      fees.forEach((fee) => {
+        fee.students?.forEach((student) => {
+          const studentId = student.studentId?.toString();
+
+          // Store student info
+          if (!allStudents.has(studentId)) {
+            allStudents.set(studentId, {
+              studentId: studentId,
+              name: student.name,
+              monthly_fee: student.monthlyFee || student.monthly_fee || 50, // fallback to 50
+            });
+          }
+
+          // Mark paid months
+          if (Array.isArray(student.monthsPaid)) {
+            student.monthsPaid.forEach((monthPaid) => {
+              const monthNum = parseInt(monthPaid.month, 10);
+              const year = monthPaid.year;
+
+              if (monthNum && year) {
+                const monthStr = `${year}-${monthNum
+                  .toString()
+                  .padStart(2, "0")}`;
+                const key = `${studentId}_${monthStr}`;
+                paidMonthsMap.set(key, true);
+              }
+            });
+          }
+        });
+      });
+
+      const grouped = {};
+      const currentDate = new Date();
+      const currentYear = currentDate.getFullYear();
+      const currentMonth = currentDate.getMonth() + 1;
+
+      // Process each student to find unpaid months
+      allStudents.forEach((student, studentId) => {
+        const { name, monthly_fee } = student;
+        const fee = monthly_fee || 50;
+
+        const addUnpaidMonth = (monthStr, year, month) => {
+          const key = `${studentId}_${monthStr}`;
+
+          const discountedFee = fee - (fee * discount) / 100;
+
+          if (!grouped[monthStr]) {
+            grouped[monthStr] = {
+              totalAmount: 0,
+              studentNames: new Set(),
+              studentsMap: {},
+            };
+          }
+
+          grouped[monthStr].totalAmount += discountedFee;
+          grouped[monthStr].studentNames.add(name);
+
+          if (!grouped[monthStr].studentsMap[studentId]) {
+            grouped[monthStr].studentsMap[studentId] = {
+              studentId,
+              name,
+              subtotal: 0,
+              monthsUnpaid: [],
+            };
+          }
+
+          grouped[monthStr].studentsMap[studentId].monthsUnpaid.push({
+            month: monthStr,
+            monthlyFee: fee,
+            discountedFee: parseFloat(discountedFee.toFixed(2)),
+          });
+
+          grouped[monthStr].studentsMap[studentId].subtotal += discountedFee;
+        };
+
+        // Generate all months from September 2025 to current month
+        const startDate = new Date(2025, 8, 1); // September 1, 2025
+        const checkDate = new Date(startDate);
+
+        while (
+          checkDate.getFullYear() < currentYear ||
+          (checkDate.getFullYear() === currentYear &&
+            checkDate.getMonth() + 1 <= currentMonth)
+        ) {
+          const year = checkDate.getFullYear();
+          const month = checkDate.getMonth() + 1;
+          const monthStr = `${year}-${month.toString().padStart(2, "0")}`;
+
+          addUnpaidMonth(monthStr, year, month);
+          checkDate.setMonth(checkDate.getMonth() + 1);
+        }
+      });
+
+      // Sort months chronologically and format response
+      const sortedMonths = Object.keys(grouped).sort((a, b) => {
+        const [yearA, monthA] = a.split("-").map(Number);
+        const [yearB, monthB] = b.split("-").map(Number);
+        if (yearA !== yearB) return yearA - yearB;
+        return monthA - monthB;
+      });
+
+      const unpaidMonths = sortedMonths.map((month) => {
+        const data = grouped[month];
+        return {
+          month,
+          totalAmount: parseFloat(data.totalAmount.toFixed(2)),
+          studentNames: Array.from(data.studentNames).join(", "),
+          students: Object.values(data.studentsMap).map((stu) => ({
+            ...stu,
+            subtotal: parseFloat(stu.subtotal.toFixed(2)),
+          })),
+        };
+      });
+
+      res.json({
+        success: true,
+        familyId,
+        unpaidMonths,
+        summary: {
+          totalUnpaidMonths: unpaidMonths.length,
+          totalAmountDue: unpaidMonths.reduce(
+            (sum, month) => sum + month.totalAmount,
+            0
+          ),
+          studentCount: allStudents.size,
+          feeRecordsProcessed: fees.length,
+        },
+      });
+    } catch (error) {
+      console.error("❌ Error in unpaid-months route:", error);
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+        error: error.message,
+      });
+    }
+  });
+
+  // fee summary
   router.get("/by-student-id/:id", async (req, res) => {
     try {
       const id = req.params.id;
