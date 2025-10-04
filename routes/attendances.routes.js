@@ -55,17 +55,53 @@ module.exports = (
   router.get("/student/:studentId/summary", async (req, res) => {
     try {
       const { studentId } = req.params;
+      const { month, year } = req.query; // Get month and year from query params
 
       if (!studentId) {
         return res.status(400).send({ message: "Student ID is required" });
       }
 
+      // Check if student exists
+      const student = await studentsCollection.findOne({
+        _id: new ObjectId(studentId),
+      });
+
+      if (!student) {
+        return res.status(404).send({ message: "Student not found" });
+      }
+
+      // Build match filter
+      const matchFilter = {
+        student_id: studentId,
+      };
+
+      // Add month and year filters if provided
+      if (month && year) {
+        // Since date is stored as string "YYYY-MM-DD", use regex to filter
+        const monthStr = month.toString().padStart(2, "0");
+        matchFilter.date = {
+          $regex: `^${year}-${monthStr}-`, // Matches "2024-10-*"
+        };
+      } else if (year) {
+        // Filter by year only
+        matchFilter.date = {
+          $regex: `^${year}-`, // Matches "2024-*"
+        };
+      } else if (month) {
+        // If only month is provided, use current year
+        const currentYear = new Date().getFullYear();
+        const monthStr = month.toString().padStart(2, "0");
+        matchFilter.date = {
+          $regex: `^${currentYear}-${monthStr}-`, // Matches "2024-10-*"
+        };
+      }
+
+      console.log("Match filter:", matchFilter); // Debug log
+
       const aggregation = await attendancesCollection
         .aggregate([
           {
-            $match: {
-              student_id: studentId,
-            },
+            $match: matchFilter,
           },
           {
             $group: {
@@ -79,8 +115,8 @@ module.exports = (
               total: { $sum: "$count" },
               statusCounts: {
                 $push: {
-                  status: "$_id",
-                  count: "$count",
+                  k: "$_id",
+                  v: "$count",
                 },
               },
             },
@@ -89,68 +125,56 @@ module.exports = (
             $project: {
               _id: 0,
               total: 1,
-              present: {
-                $ifNull: [
-                  {
-                    $arrayElemAt: [
-                      {
-                        $filter: {
-                          input: "$statusCounts",
-                          as: "item",
-                          cond: { $eq: ["$$item.status", "present"] },
-                        },
-                      },
-                      0,
-                    ],
-                  },
-                  { count: 0 },
-                ],
+              statusCounts: {
+                $arrayToObject: "$statusCounts",
               },
-              absent: {
-                $ifNull: [
-                  {
-                    $arrayElemAt: [
-                      {
-                        $filter: {
-                          input: "$statusCounts",
-                          as: "item",
-                          cond: { $eq: ["$$item.status", "absent"] },
-                        },
-                      },
-                      0,
-                    ],
-                  },
-                  { count: 0 },
-                ],
-              },
-              late: {
-                $ifNull: [
-                  {
-                    $arrayElemAt: [
-                      {
-                        $filter: {
-                          input: "$statusCounts",
-                          as: "item",
-                          cond: { $eq: ["$$item.status", "late"] },
-                        },
-                      },
-                      0,
-                    ],
-                  },
-                  { count: 0 },
-                ],
-              },
+            },
+          },
+          {
+            $project: {
+              total: 1,
+              present: { $ifNull: ["$statusCounts.present", 0] },
+              absent: { $ifNull: ["$statusCounts.absent", 0] },
+              late: { $ifNull: ["$statusCounts.late", 0] },
+              half_day: { $ifNull: ["$statusCounts.half_day", 0] },
             },
           },
         ])
         .toArray();
 
-      // Format the response
-      const result = aggregation[0] || {
-        total: 0,
-        present: { count: 0 },
-        absent: { count: 0 },
-        late: { count: 0 },
+      // If no attendance records found, return default structure
+      if (aggregation.length === 0) {
+        const defaultResult = {
+          total: 0,
+          present: 0,
+          absent: 0,
+          late: 0,
+          half_day: 0,
+          studentName: student.name,
+          studentId: studentId,
+          filters: {
+            month: month || null,
+            year: year || null,
+          },
+          message:
+            month || year
+              ? `No attendance records found for ${
+                  month ? getMonthName(month) : ""
+                }${month && year ? " " : ""}${year || ""}`.trim()
+              : "No attendance records found",
+        };
+        return res.send(defaultResult);
+      }
+
+      // Format the response with student info and filters
+      const result = {
+        ...aggregation[0],
+        studentName: student.name,
+        studentId: studentId,
+        filters: {
+          month: month || null,
+          year: year || null,
+        },
       };
 
       res.send(result);
@@ -163,6 +187,24 @@ module.exports = (
     }
   });
 
+  // Helper function to get month name
+  function getMonthName(month) {
+    const months = [
+      "January",
+      "February",
+      "March",
+      "April",
+      "May",
+      "June",
+      "July",
+      "August",
+      "September",
+      "October",
+      "November",
+      "December",
+    ];
+    return months[parseInt(month) - 1] || month;
+  }
   router.patch("/:id", async (req, res) => {
     const id = req.params.id;
     if (!ObjectId.isValid(id)) {

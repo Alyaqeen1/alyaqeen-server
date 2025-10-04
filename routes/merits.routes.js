@@ -13,21 +13,49 @@ module.exports = (
   });
 
   // Get merit data for single student
+  // Get merit data for single student with filters
   router.get("/student/:studentId", async (req, res) => {
     try {
       const { studentId } = req.params;
+      const { month, year } = req.query; // Get month and year from query params
 
       if (!studentId) {
         return res.status(400).send({ message: "Student ID is required" });
       }
 
-      // Get all merit records for the student
+      // Build base filter
+      const baseFilter = {
+        student_id: studentId,
+      };
+
+      // Add date filters if provided - using string matching for ISO date strings
+      let dateFilter = {};
+
+      if (month && year) {
+        // Filter by specific month and year using regex on date string
+        const monthStr = month.toString().padStart(2, "0");
+        dateFilter.date = {
+          $regex: `^${year}-${monthStr}`, // Matches "2025-08-*"
+        };
+      } else if (year) {
+        // Filter by entire year using regex
+        dateFilter.date = {
+          $regex: `^${year}-`, // Matches "2025-*"
+        };
+      }
+
+      // Combine filters
+      const filter = { ...baseFilter, ...dateFilter };
+
+      console.log("Merit filter:", filter); // Debug log
+
+      // Get all merit records for the student with filters
       const meritRecords = await meritsCollection
-        .find({
-          student_id: studentId,
-        })
+        .find(filter)
         .sort({ date: 1 }) // Sort by date ascending for trends
         .toArray();
+
+      console.log("Found merit records:", meritRecords.length); // Debug log
 
       // Calculate total merit points
       const totalMerit = meritRecords.reduce(
@@ -35,15 +63,18 @@ module.exports = (
         0
       );
 
-      // Calculate monthly merit points (last 30 days)
+      // Calculate monthly merit points (last 30 days) - only if no specific month filter
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-      const recentMerit = meritRecords
-        .filter((record) => new Date(record.date) >= thirtyDaysAgo)
-        .reduce((sum, record) => sum + (record.merit_points || 0), 0);
+      const recentMerit =
+        !month && !year
+          ? meritRecords
+              .filter((record) => new Date(record.date) >= thirtyDaysAgo)
+              .reduce((sum, record) => sum + (record.merit_points || 0), 0)
+          : totalMerit; // If filtered, recent merit is the same as total
 
-      // FIXED: Group by behavior type with POINT SUMS
+      // Group by behavior type with POINT SUMS
       const behaviorBreakdown = meritRecords.reduce((acc, record) => {
         const behavior = record.behavior || "Other";
         if (!acc[behavior]) {
@@ -60,62 +91,101 @@ module.exports = (
         return acc;
       }, {});
 
-      // FIXED: Better monthly trend calculation
+      // Monthly trend calculation - adapt based on filters
       const monthlyTrend = {};
-      const allMonths = [];
+      let allMonths = [];
 
-      // Generate last 6 months array
-      const today = new Date();
-      for (let i = 5; i >= 0; i--) {
-        const date = new Date(today.getFullYear(), today.getMonth() - i, 1);
-        const monthKey = date.toLocaleString("default", {
-          month: "short",
-          year: "numeric",
-        });
-        allMonths.push(monthKey);
-        monthlyTrend[monthKey] = 0; // Initialize with 0
+      if (month && year) {
+        // If specific month selected, show daily trend for that month
+        const daysInMonth = new Date(year, month, 0).getDate();
+        for (let day = 1; day <= daysInMonth; day++) {
+          const dayStr = day.toString().padStart(2, "0");
+          const dayKey = `${dayStr} ${getMonthName(month).substring(0, 3)}`;
+          allMonths.push(dayKey);
+          monthlyTrend[dayKey] = 0;
+        }
+      } else if (year) {
+        // If year selected, show monthly trend for that year
+        for (let m = 1; m <= 12; m++) {
+          const monthKey = getMonthName(m).substring(0, 3);
+          allMonths.push(monthKey);
+          monthlyTrend[monthKey] = 0;
+        }
+      } else {
+        // Default: show last 6 months
+        const today = new Date();
+        for (let i = 5; i >= 0; i--) {
+          const date = new Date(today.getFullYear(), today.getMonth() - i, 1);
+          const monthKey = date.toLocaleString("default", {
+            month: "short",
+            year: "numeric",
+          });
+          allMonths.push(monthKey);
+          monthlyTrend[monthKey] = 0;
+        }
       }
 
-      // Fill in actual data
+      // Fill in actual data for monthly/daily trend
       meritRecords.forEach((record) => {
         const recordDate = new Date(record.date);
-        const monthKey = recordDate.toLocaleString("default", {
-          month: "short",
-          year: "numeric",
-        });
+        let trendKey;
 
-        if (monthlyTrend.hasOwnProperty(monthKey)) {
-          monthlyTrend[monthKey] += record.merit_points || 0;
+        if (month && year) {
+          // Daily trend for specific month
+          const day = recordDate.getDate();
+          const dayKey = `${day.toString().padStart(2, "0")} ${getMonthName(
+            month
+          ).substring(0, 3)}`;
+          trendKey = dayKey;
+        } else if (year) {
+          // Monthly trend for specific year
+          const monthKey = recordDate.toLocaleString("default", {
+            month: "short",
+          });
+          trendKey = monthKey;
+        } else {
+          // Default monthly trend
+          const monthKey = recordDate.toLocaleString("default", {
+            month: "short",
+            year: "numeric",
+          });
+          trendKey = monthKey;
+        }
+
+        if (monthlyTrend.hasOwnProperty(trendKey)) {
+          monthlyTrend[trendKey] += record.merit_points || 0;
         }
       });
 
-      // Calculate weekly trend (last 8 weeks for more data points)
+      // Calculate weekly trend (only if no specific filters)
       const weeklyTrend = {};
       const allWeeks = [];
 
-      for (let i = 7; i >= 0; i--) {
-        const date = new Date();
-        date.setDate(date.getDate() - i * 7);
-        const weekKey = `Week ${i + 1}`;
-        allWeeks.push(weekKey);
-        weeklyTrend[weekKey] = 0;
-      }
-
-      meritRecords.forEach((record) => {
-        const recordDate = new Date(record.date);
-        const weekAgo = new Date();
-        weekAgo.setDate(weekAgo.getDate() - 56); // 8 weeks ago
-
-        if (recordDate >= weekAgo) {
-          const weekDiff = Math.floor(
-            (today - recordDate) / (7 * 24 * 60 * 60 * 1000)
-          );
-          const weekKey = `Week ${8 - weekDiff}`;
-          if (weeklyTrend.hasOwnProperty(weekKey)) {
-            weeklyTrend[weekKey] += record.merit_points || 0;
-          }
+      if (!month && !year) {
+        for (let i = 7; i >= 0; i--) {
+          const date = new Date();
+          date.setDate(date.getDate() - i * 7);
+          const weekKey = `Week ${i + 1}`;
+          allWeeks.push(weekKey);
+          weeklyTrend[weekKey] = 0;
         }
-      });
+
+        meritRecords.forEach((record) => {
+          const recordDate = new Date(record.date);
+          const weekAgo = new Date();
+          weekAgo.setDate(weekAgo.getDate() - 56); // 8 weeks ago
+
+          if (recordDate >= weekAgo) {
+            const weekDiff = Math.floor(
+              (new Date() - recordDate) / (7 * 24 * 60 * 60 * 1000)
+            );
+            const weekKey = `Week ${8 - weekDiff}`;
+            if (weeklyTrend.hasOwnProperty(weekKey)) {
+              weeklyTrend[weekKey] += record.merit_points || 0;
+            }
+          }
+        });
+      }
 
       // Calculate top behaviors by points
       const topBehaviors = Object.entries(behaviorBreakdown)
@@ -128,14 +198,18 @@ module.exports = (
         totalRecords: meritRecords.length,
         meritRecords: meritRecords.slice(-10).reverse(), // Last 10 records, most recent first
         behaviorBreakdown,
-        monthlyTrend: allMonths.map((month) => ({
-          month,
-          points: monthlyTrend[month],
+        trendType: month && year ? "daily" : year ? "monthly" : "monthly",
+        trendData: allMonths.map((period) => ({
+          period,
+          points: monthlyTrend[period],
         })),
-        weeklyTrend: allWeeks.map((week) => ({
-          week,
-          points: weeklyTrend[week],
-        })),
+        weeklyTrend:
+          !month && !year
+            ? allWeeks.map((week) => ({
+                week,
+                points: weeklyTrend[week],
+              }))
+            : [],
         averagePoints:
           meritRecords.length > 0 ? totalMerit / meritRecords.length : 0,
         topBehaviors,
@@ -155,6 +229,17 @@ module.exports = (
           points: record.merit_points,
           behavior: record.behavior,
         })),
+        filters: {
+          month: month || null,
+          year: year || null,
+          applied: !!(month || year),
+        },
+        periodInfo:
+          month && year
+            ? `Showing data for ${getMonthName(month)} ${year}`
+            : year
+            ? `Showing data for year ${year}`
+            : "Showing all time data",
       };
 
       res.send(result);
@@ -166,6 +251,25 @@ module.exports = (
       });
     }
   });
+
+  // Helper function to get month name
+  function getMonthName(month) {
+    const months = [
+      "January",
+      "February",
+      "March",
+      "April",
+      "May",
+      "June",
+      "July",
+      "August",
+      "September",
+      "October",
+      "November",
+      "December",
+    ];
+    return months[parseInt(month) - 1] || month;
+  }
 
   router.get("/top-merit-students", async (req, res) => {
     try {

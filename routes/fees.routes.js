@@ -932,6 +932,331 @@ module.exports = (
     const result = await feesCollection.findOne(query);
     res.send(result);
   });
+  router.get("/by-student-id/:id", async (req, res) => {
+    try {
+      const id = req.params.id;
+      const { month, year } = req.query; // e.g., ?month=08&year=2025
+
+      const query = { "students.studentId": id };
+      const fees = await feesCollection.find(query).toArray();
+
+      // If no fees found, return empty data instead of error
+      if (!fees || fees.length === 0) {
+        const student = await studentsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        return res.send({
+          studentId: id,
+          studentName: student?.name || "Unknown",
+          summaryType: month && year ? "monthly" : "overall", // Use month and year from query params
+          month: month, // Use month from query params
+          year: year, // Use year from query params
+          totalPaid: 0,
+          totalExpected: 0,
+          remaining: 0,
+          paymentStatus: "unpaid",
+          partialPaymentAnalysis: {
+            totalPayments: 0,
+            partialPayments: 0,
+            partialPercentage: 0,
+            status: "no_partial_payments",
+          },
+          paymentHistory: [],
+          unpaidMonths: await getUnpaidMonthsForStudent(id), // Get unpaid months
+          dataSource: "current",
+        });
+      }
+
+      // Filter for specific month if provided
+      let filteredFees = fees;
+      if (month && year) {
+        filteredFees = fees.filter((fee) => {
+          if (
+            fee.paymentType === "monthly" ||
+            fee.paymentType === "monthlyOnHold"
+          ) {
+            return fee.students.some(
+              (student) =>
+                student.studentId === id &&
+                student.monthsPaid?.some(
+                  (mp) => mp.month === month && mp.year == year
+                )
+            );
+          } else if (fee.paymentType === "admission") {
+            return fee.students.some(
+              (student) =>
+                student.studentId === id &&
+                student.joiningMonth === month &&
+                student.joiningYear == year
+            );
+          }
+          return false;
+        });
+      }
+
+      // Calculate summary
+      const summary = await calculateStudentSummary(
+        filteredFees,
+        id,
+        month, // Pass month from query params
+        year // Pass year from query params
+      );
+
+      res.send(summary);
+    } catch (error) {
+      console.error("Error fetching student fees:", error);
+      res.status(500).send({ error: "Internal server error" });
+    }
+  });
+
+  async function calculateStudentSummary(
+    fees,
+    studentId,
+    selectedMonth, // This comes from the route's month parameter
+    selectedYear // This comes from the route's year parameter
+  ) {
+    let totalPaid = 0;
+    let totalExpected = 0;
+    let paymentMonths = [];
+    let partialPayments = 0;
+    let totalPayments = 0;
+
+    fees.forEach((fee) => {
+      const studentData = fee.students.find((s) => s.studentId === studentId);
+      if (!studentData) return;
+
+      if (
+        fee.paymentType === "monthly" ||
+        fee.paymentType === "monthlyOnHold"
+      ) {
+        studentData.monthsPaid?.forEach((monthPaid) => {
+          // If specific month/year filter is applied, only count that month
+          if (selectedMonth && selectedYear) {
+            if (
+              monthPaid.month !== selectedMonth ||
+              monthPaid.year != selectedYear
+            )
+              return;
+          }
+
+          // For legacy data without 'paid' field, infer from document status and subtotal
+          const expectedFee =
+            monthPaid.discountedFee || monthPaid.monthlyFee || 0;
+          let paidAmount = 0;
+          let paymentStatus = "unpaid";
+
+          // If document status is "paid", assume the month was fully paid
+          if (fee.status === "paid" || fee.status === "pending") {
+            paidAmount = monthPaid.paid || expectedFee; // Use paid field if available, else assume fully paid
+            paymentStatus =
+              paidAmount >= expectedFee
+                ? "fully_paid"
+                : paidAmount > 0
+                ? "partial"
+                : "unpaid";
+          }
+
+          totalPayments++;
+          totalPaid += paidAmount;
+          totalExpected += expectedFee;
+
+          paymentMonths.push({
+            month: monthPaid.month,
+            year: monthPaid.year,
+            paid: paidAmount,
+            expected: expectedFee,
+            status: paymentStatus,
+            type: "monthly",
+            isLegacyData: !monthPaid.hasOwnProperty("paid"), // Flag for legacy data
+          });
+
+          if (paymentStatus === "partial") {
+            partialPayments++;
+          }
+        });
+      } else if (fee.paymentType === "admission") {
+        // If specific month/year filter is applied, only count if joining month matches
+        if (selectedMonth && selectedYear) {
+          if (
+            studentData.joiningMonth !== selectedMonth ||
+            studentData.joiningYear != selectedYear
+          )
+            return;
+        }
+
+        // For admission, it's ALWAYS fully paid (system doesn't allow partial)
+        const totalAdmissionExpected =
+          (studentData.admissionFee || 0) +
+          (studentData.discountedFee || studentData.monthlyFee || 0);
+        let totalAdmissionPaid = totalAdmissionExpected; // Assume fully paid for admission
+
+        // If there are payments array, calculate from there
+        if (studentData.payments && studentData.payments.length > 0) {
+          totalAdmissionPaid = studentData.payments.reduce(
+            (sum, payment) => sum + payment.amount,
+            0
+          );
+        }
+
+        totalPayments++; // Count as ONE payment
+        totalPaid += totalAdmissionPaid;
+        totalExpected += totalAdmissionExpected;
+
+        // Admission is always "fully_paid" - system doesn't allow partial
+        paymentMonths.push({
+          month: studentData.joiningMonth,
+          year: studentData.joiningYear,
+          paid: totalAdmissionPaid,
+          expected: totalAdmissionExpected,
+          status: "fully_paid", // Always fully paid for admission
+          type: "admission_and_first_month",
+        });
+      }
+    });
+
+    // Calculate partial payment percentage (only for monthly payments)
+    const partialPercentage =
+      totalPayments > 0 ? (partialPayments / totalPayments) * 100 : 0;
+
+    // Get unpaid months for this student
+    const unpaidMonths = await getUnpaidMonthsForStudent(studentId);
+
+    return {
+      studentId,
+      studentName:
+        fees[0]?.students.find((s) => s.studentId === studentId)?.name ||
+        "Unknown",
+      summaryType: selectedMonth && selectedYear ? "monthly" : "overall",
+      month: selectedMonth,
+      year: selectedYear,
+      totalPaid,
+      totalExpected,
+      remaining: totalExpected - totalPaid,
+      paymentStatus:
+        totalPaid >= totalExpected
+          ? "fully_paid"
+          : totalPaid > 0
+          ? "partially_paid"
+          : "unpaid",
+      partialPaymentAnalysis: {
+        totalPayments,
+        partialPayments,
+        partialPercentage: Math.round(partialPercentage * 100) / 100,
+        status:
+          partialPercentage === 0
+            ? "no_partial_payments"
+            : partialPercentage < 50
+            ? "few_partial_payments"
+            : partialPercentage < 100
+            ? "many_partial_payments"
+            : "all_partial_payments",
+      },
+      paymentHistory: paymentMonths.sort((a, b) => {
+        // Sort by year and month
+        const dateA = new Date(a.year, parseInt(a.month) - 1);
+        const dateB = new Date(b.year, parseInt(b.month) - 1);
+        return dateA - dateB;
+      }),
+      unpaidMonths, // Include unpaid months data
+      dataSource: hasLegacyData(paymentMonths) ? "mixed" : "current", // Indicate if legacy data is included
+    };
+  }
+
+  // Function to get unpaid months for a specific student
+  async function getUnpaidMonthsForStudent(studentId) {
+    try {
+      // Get student data
+      const student = await studentsCollection.findOne({
+        _id: new ObjectId(studentId),
+      });
+      if (!student) return [];
+
+      // Get all fees for this student
+      const fees = await feesCollection
+        .find({ "students.studentId": studentId })
+        .toArray();
+
+      // Use the existing getUnpaidFees function logic but for single student
+      const monthlyPaidMap = {};
+
+      // Build payment map from fee records
+      for (const fee of fees || []) {
+        if (
+          (fee.paymentType === "monthly" ||
+            fee.paymentType === "monthlyOnHold") &&
+          (fee.status === "paid" || fee.status === "pending")
+        ) {
+          for (const stu of fee.students || []) {
+            if (stu.studentId === studentId && Array.isArray(stu.monthsPaid)) {
+              for (const { month, year } of stu.monthsPaid) {
+                const monthStr = `${year}-${month.toString().padStart(2, "0")}`;
+                monthlyPaidMap[monthStr] = true;
+              }
+            }
+          }
+        }
+      }
+
+      const unpaidMonths = [];
+      const { name, monthly_fee, startingDate } = student;
+      const fee = monthly_fee || 0;
+
+      // Calculate payable months (from starting date or Sept 2025, whichever is later)
+      let currentDate = new Date();
+      let currentMonth = new Date(
+        currentDate.getFullYear(),
+        currentDate.getMonth(),
+        1
+      );
+
+      let startDate = new Date(startingDate);
+      let september2025 = new Date("2025-09-01");
+
+      let payableMonth = startDate > september2025 ? startDate : september2025;
+      payableMonth = new Date(
+        payableMonth.getFullYear(),
+        payableMonth.getMonth(),
+        1
+      );
+
+      while (payableMonth <= currentMonth) {
+        const year = payableMonth.getFullYear();
+        const month = payableMonth.getMonth() + 1;
+        const monthStr = `${year}-${month.toString().padStart(2, "0")}`;
+
+        // Check if this month is unpaid
+        if (!monthlyPaidMap[monthStr]) {
+          unpaidMonths.push({
+            month: month.toString().padStart(2, "0"),
+            year: year,
+            monthStr: monthStr,
+            expectedFee: fee,
+            status: "unpaid",
+            isCurrentMonth: isCurrentMonth(year, month),
+          });
+        }
+
+        payableMonth.setMonth(payableMonth.getMonth() + 1);
+      }
+
+      return unpaidMonths;
+    } catch (error) {
+      console.error("Error getting unpaid months:", error);
+      return [];
+    }
+  }
+
+  // Helper function to check if a month is the current month
+  function isCurrentMonth(year, month) {
+    const currentDate = new Date();
+    return (
+      year === currentDate.getFullYear() && month === currentDate.getMonth() + 1
+    );
+  }
+
+  function hasLegacyData(paymentMonths) {
+    return paymentMonths.some((pm) => pm.isLegacyData);
+  }
 
   router.patch("/update-status-mode/:id", async (req, res) => {
     const { id } = req.params;
