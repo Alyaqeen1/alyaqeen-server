@@ -47,15 +47,11 @@ module.exports = (
       // Combine filters
       const filter = { ...baseFilter, ...dateFilter };
 
-      console.log("Merit filter:", filter); // Debug log
-
       // Get all merit records for the student with filters
       const meritRecords = await meritsCollection
         .find(filter)
         .sort({ date: 1 }) // Sort by date ascending for trends
         .toArray();
-
-      console.log("Found merit records:", meritRecords.length); // Debug log
 
       // Calculate total merit points
       const totalMerit = meritRecords.reduce(
