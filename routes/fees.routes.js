@@ -969,12 +969,27 @@ module.exports = (
   });
 
   // GET /api/fees/unpaid-months/:familyId
+  // GET /api/fees/unpaid-months/:familyId
   router.get("/unpaid-months/:familyId", async (req, res) => {
     try {
       const { familyId } = req.params;
-      const { discount = 0 } = req.query;
+      // query discount still accepted as fallback if family doc doesn't have discount
+      const discountQuery = Number(req.query.discount || 0);
 
-      // Get all fee records for this family
+      // Find family document (try familyId field first, then _id fallback)
+      let family = await familiesCollection.findOne({ familyId });
+      if (!family && ObjectId.isValid(familyId)) {
+        family = await familiesCollection.findOne({
+          _id: new ObjectId(familyId),
+        });
+      }
+
+      const familyDiscount =
+        family && family.discount !== undefined && family.discount !== null
+          ? Number(family.discount) || 0
+          : discountQuery;
+
+      // Get all fee records for this family (monthly types)
       const fees = await feesCollection
         .find({
           familyId: familyId,
@@ -983,7 +998,7 @@ module.exports = (
         })
         .toArray();
 
-      if (fees.length === 0) {
+      if (!fees || fees.length === 0) {
         return res.json({
           success: true,
           familyId,
@@ -992,59 +1007,107 @@ module.exports = (
         });
       }
 
-      // Extract all students and their paid months from the fees
-      const allStudents = new Map(); // studentId -> { student data }
-      const paidMonthsMap = new Map(); // studentId_month -> true
+      // build set of studentIds referenced in fees
+      const studentIdStrings = [
+        ...new Set(
+          fees.flatMap(
+            (fee) => fee.students?.map((s) => String(s.studentId)) || []
+          )
+        ),
+      ].filter(Boolean);
 
-      fees.forEach((fee) => {
-        fee.students?.forEach((student) => {
-          const studentId = student.studentId?.toString();
+      // split into ObjectId-like and non-ObjectId (maybe some systems store uid)
+      const objectIdList = studentIdStrings
+        .filter((id) => ObjectId.isValid(id))
+        .map((id) => new ObjectId(id));
+      const uidList = studentIdStrings.filter((id) => !ObjectId.isValid(id));
 
-          // Store student info
-          if (!allStudents.has(studentId)) {
-            allStudents.set(studentId, {
-              studentId: studentId,
-              name: student.name,
-              monthly_fee: student.monthlyFee || student.monthly_fee || 50, // fallback to 50
+      // fetch students documents to check active/inactive (support both _id and uid)
+      const studentQueryParts = [];
+      if (objectIdList.length)
+        studentQueryParts.push({ _id: { $in: objectIdList } });
+      if (uidList.length) studentQueryParts.push({ uid: { $in: uidList } });
+
+      const studentDocs = studentQueryParts.length
+        ? await studentsCollection
+            .find({ $or: studentQueryParts })
+            .project({ _id: 1, uid: 1, activity: 1, status: 1, name: 1 })
+            .toArray()
+        : [];
+
+      // compute set of active student ids (string form matching fee.students studentId)
+      const activeStudentIds = new Set(
+        studentDocs
+          .filter((s) => s.activity !== "inactive" && s.status !== "inactive")
+          .map((s) => {
+            // prefer _id string if available, else uid
+            if (s._id) return String(s._id);
+            if (s.uid) return String(s.uid);
+            return null;
+          })
+          .filter(Boolean)
+      );
+
+      // Maps to collect data
+      const allStudents = new Map(); // studentIdStr => { studentId, name, monthly_fee }
+      const paidMonthsMap = new Map(); // key studentId_monthStr => true
+
+      // Build paidMonthsMap and allStudents (only for active students)
+      for (const fee of fees) {
+        for (const s of fee.students || []) {
+          const studentIdStr = String(s.studentId);
+          // skip entirely if student is inactive (not in activeStudentIds)
+          if (
+            activeStudentIds.size > 0 &&
+            !activeStudentIds.has(studentIdStr)
+          ) {
+            continue;
+          }
+
+          // store student baseline info (fee may contain monthlyFee)
+          if (!allStudents.has(studentIdStr)) {
+            // Use only base monthly fee, ignore subtotal
+            const monthlyFeeCandidate = s.monthlyFee ?? s.monthly_fee ?? 50; // <-- NOT s.subtotal
+            const monthlyFee = Number(monthlyFeeCandidate) || 50;
+            allStudents.set(studentIdStr, {
+              studentId: studentIdStr,
+              name: s.name || "Unknown",
+              monthly_fee: monthlyFee,
             });
           }
 
-          // Mark paid months
-          if (Array.isArray(student.monthsPaid)) {
-            student.monthsPaid.forEach((monthPaid) => {
-              const monthNum = parseInt(monthPaid.month, 10);
-              const year = monthPaid.year;
-
-              if (monthNum && year) {
-                const monthStr = `${year}-${monthNum
-                  .toString()
-                  .padStart(2, "0")}`;
-                const key = `${studentId}_${monthStr}`;
-                paidMonthsMap.set(key, true);
+          // mark paid months
+          if (Array.isArray(s.monthsPaid)) {
+            for (const mp of s.monthsPaid) {
+              const monthNum = Number(mp.month);
+              const year = mp.year;
+              if (!isNaN(monthNum) && year) {
+                const monthStr = `${year}-${String(monthNum).padStart(2, "0")}`;
+                paidMonthsMap.set(`${studentIdStr}_${monthStr}`, true);
               }
-            });
+            }
           }
-        });
-      });
+        }
+      }
 
+      // grouped structure: monthStr -> { totalAmount, studentNames:Set, studentsMap }
       const grouped = {};
-      const currentDate = new Date();
-      const currentYear = currentDate.getFullYear();
-      const currentMonth = currentDate.getMonth() + 1;
+      const now = new Date();
+      const currentYear = now.getFullYear();
+      const currentMonth = now.getMonth() + 1;
 
-      // Process each student to find unpaid months
-      allStudents.forEach((student, studentId) => {
-        const { name, monthly_fee } = student;
-        const fee = monthly_fee || 50;
+      // For each active student, generate months from Sept 2025 to current and mark unpaid
+      for (const [studentIdStr, sInfo] of allStudents.entries()) {
+        const feeAmount = Number(sInfo.monthly_fee) || 50;
 
         const addUnpaidMonth = (monthStr, year, month) => {
-          const key = `${studentId}_${monthStr}`;
+          const key = `${studentIdStr}_${monthStr}`;
+          if (paidMonthsMap.has(key)) return; // already paid
 
-          if (paidMonthsMap.has(key)) {
-            return;
-          }
-
-          const discountedFee = fee - (fee * discount) / 100;
+          // compute discounted fee using familyDiscount
+          const discountedFee = Number(
+            (feeAmount * (1 - familyDiscount / 100)).toFixed(2)
+          );
 
           if (!grouped[monthStr]) {
             grouped[monthStr] = {
@@ -1055,61 +1118,58 @@ module.exports = (
           }
 
           grouped[monthStr].totalAmount += discountedFee;
-          grouped[monthStr].studentNames.add(name);
+          grouped[monthStr].studentNames.add(sInfo.name || "Unknown");
 
-          if (!grouped[monthStr].studentsMap[studentId]) {
-            grouped[monthStr].studentsMap[studentId] = {
-              studentId,
-              name,
+          if (!grouped[monthStr].studentsMap[studentIdStr]) {
+            grouped[monthStr].studentsMap[studentIdStr] = {
+              studentId: studentIdStr,
+              name: sInfo.name || "Unknown",
               subtotal: 0,
               monthsUnpaid: [],
             };
           }
 
-          grouped[monthStr].studentsMap[studentId].monthsUnpaid.push({
+          grouped[monthStr].studentsMap[studentIdStr].monthsUnpaid.push({
             month: monthStr,
-            monthlyFee: fee,
-            discountedFee: parseFloat(discountedFee.toFixed(2)),
+            monthlyFee: feeAmount,
+            discountedFee,
           });
 
-          grouped[monthStr].studentsMap[studentId].subtotal += discountedFee;
+          grouped[monthStr].studentsMap[studentIdStr].subtotal += discountedFee;
         };
 
-        // Generate all months from September 2025 to current month
-        const startDate = new Date(2025, 8, 1); // September 1, 2025
-        const checkDate = new Date(startDate);
-
+        // Start from September 2025 (as per your earlier requirement)
+        let checkDate = new Date(2025, 8, 1); // 2025-09-01
         while (
           checkDate.getFullYear() < currentYear ||
           (checkDate.getFullYear() === currentYear &&
             checkDate.getMonth() + 1 <= currentMonth)
         ) {
-          const year = checkDate.getFullYear();
-          const month = checkDate.getMonth() + 1;
-          const monthStr = `${year}-${month.toString().padStart(2, "0")}`;
-
-          addUnpaidMonth(monthStr, year, month);
+          const y = checkDate.getFullYear();
+          const m = checkDate.getMonth() + 1;
+          const monthStr = `${y}-${String(m).padStart(2, "0")}`;
+          addUnpaidMonth(monthStr, y, m);
           checkDate.setMonth(checkDate.getMonth() + 1);
         }
-      });
+      }
 
-      // Sort months chronologically and format response
+      // Format grouped -> sorted unpaidMonths array
       const sortedMonths = Object.keys(grouped).sort((a, b) => {
-        const [yearA, monthA] = a.split("-").map(Number);
-        const [yearB, monthB] = b.split("-").map(Number);
-        if (yearA !== yearB) return yearA - yearB;
-        return monthA - monthB;
+        const [yA, mA] = a.split("-").map(Number);
+        const [yB, mB] = b.split("-").map(Number);
+        if (yA !== yB) return yA - yB;
+        return mA - mB;
       });
 
-      const unpaidMonths = sortedMonths.map((month) => {
-        const data = grouped[month];
+      const unpaidMonths = sortedMonths.map((monthStr) => {
+        const data = grouped[monthStr];
         return {
-          month,
-          totalAmount: parseFloat(data.totalAmount.toFixed(2)),
+          month: monthStr,
+          totalAmount: parseFloat((data.totalAmount || 0).toFixed(2)),
           studentNames: Array.from(data.studentNames).join(", "),
           students: Object.values(data.studentsMap).map((stu) => ({
             ...stu,
-            subtotal: parseFloat(stu.subtotal.toFixed(2)),
+            subtotal: parseFloat((stu.subtotal || 0).toFixed(2)),
           })),
         };
       });
@@ -1121,11 +1181,12 @@ module.exports = (
         summary: {
           totalUnpaidMonths: unpaidMonths.length,
           totalAmountDue: unpaidMonths.reduce(
-            (sum, month) => sum + month.totalAmount,
+            (sum, m) => sum + (m.totalAmount || 0),
             0
           ),
           studentCount: allStudents.size,
           feeRecordsProcessed: fees.length,
+          familyDiscount: familyDiscount,
         },
       });
     } catch (error) {
@@ -1137,6 +1198,200 @@ module.exports = (
       });
     }
   });
+
+  // router.get("/unpaid-months/:familyId", async (req, res) => {
+  //   try {
+  //     const { familyId } = req.params;
+  //     const { discount = 0 } = req.query;
+
+  //     // Get all fee records for this family
+  //     const fees = await feesCollection
+  //       .find({
+  //         familyId: familyId,
+  //         paymentType: { $in: ["monthly", "monthlyOnHold"] },
+  //         status: { $in: ["paid", "pending"] },
+  //       })
+  //       .toArray();
+
+  //     if (fees.length === 0) {
+  //       return res.json({
+  //         success: true,
+  //         familyId,
+  //         unpaidMonths: [],
+  //         message: "No fee records found for this family",
+  //       });
+  //     }
+
+  //     // Extract all students and their paid months from the fees
+  //     const allStudents = new Map(); // studentId -> { student data }
+  //     const paidMonthsMap = new Map(); // studentId_month -> true
+
+  //     // After fetching fees...
+  //     const studentIds = [
+  //       ...new Set(
+  //         fees.flatMap(
+  //           (fee) => fee.students?.map((s) => s.studentId?.toString()) || []
+  //         )
+  //       ),
+  //     ].filter(Boolean);
+
+  //     // ✅ Fetch student details once to check activity
+  //     const studentDocs = await studentsCollection
+  //       .find({ _id: { $in: studentIds.map((id) => new ObjectId(id)) } })
+  //       .project({ _id: 1, name: 1, activity: 1, status: 1 })
+  //       .toArray();
+
+  //     const activeStudentIds = new Set(
+  //       studentDocs
+  //         .filter((s) => s.activity !== "inactive" && s.status !== "inactive")
+  //         .map((s) => s._id.toString())
+  //     );
+
+  //     // Then when processing each student
+  //     fees.forEach((fee) => {
+  //       fee.students?.forEach((student) => {
+  //         const studentId = student.studentId?.toString();
+
+  //         // ✅ Skip inactive students
+  //         if (!activeStudentIds.has(studentId)) return;
+
+  //         // Store student info
+  //         if (!allStudents.has(studentId)) {
+  //           allStudents.set(studentId, {
+  //             studentId: studentId,
+  //             name: student.name,
+  //             monthly_fee: student.monthlyFee || student.monthly_fee || 50,
+  //           });
+  //         }
+
+  //         // Mark paid months (no change)
+  //         if (Array.isArray(student.monthsPaid)) {
+  //           student.monthsPaid.forEach((monthPaid) => {
+  //             const monthNum = parseInt(monthPaid.month, 10);
+  //             const year = monthPaid.year;
+
+  //             if (monthNum && year) {
+  //               const monthStr = `${year}-${monthNum
+  //                 .toString()
+  //                 .padStart(2, "0")}`;
+  //               const key = `${studentId}_${monthStr}`;
+  //               paidMonthsMap.set(key, true);
+  //             }
+  //           });
+  //         }
+  //       });
+  //     });
+
+  //     const grouped = {};
+  //     const currentDate = new Date();
+  //     const currentYear = currentDate.getFullYear();
+  //     const currentMonth = currentDate.getMonth() + 1;
+
+  //     // Process each student to find unpaid months
+  //     allStudents.forEach((student, studentId) => {
+  //       const { name, monthly_fee } = student;
+  //       const fee = monthly_fee || 50;
+
+  //       const addUnpaidMonth = (monthStr, year, month) => {
+  //         const key = `${studentId}_${monthStr}`;
+
+  //         if (paidMonthsMap.has(key)) {
+  //           return;
+  //         }
+
+  //         const discountedFee = fee - (fee * discount) / 100;
+
+  //         if (!grouped[monthStr]) {
+  //           grouped[monthStr] = {
+  //             totalAmount: 0,
+  //             studentNames: new Set(),
+  //             studentsMap: {},
+  //           };
+  //         }
+
+  //         grouped[monthStr].totalAmount += discountedFee;
+  //         grouped[monthStr].studentNames.add(name);
+
+  //         if (!grouped[monthStr].studentsMap[studentId]) {
+  //           grouped[monthStr].studentsMap[studentId] = {
+  //             studentId,
+  //             name,
+  //             subtotal: 0,
+  //             monthsUnpaid: [],
+  //           };
+  //         }
+
+  //         grouped[monthStr].studentsMap[studentId].monthsUnpaid.push({
+  //           month: monthStr,
+  //           monthlyFee: fee,
+  //           discountedFee: parseFloat(discountedFee.toFixed(2)),
+  //         });
+
+  //         grouped[monthStr].studentsMap[studentId].subtotal += discountedFee;
+  //       };
+
+  //       // Generate all months from September 2025 to current month
+  //       const startDate = new Date(2025, 8, 1); // September 1, 2025
+  //       const checkDate = new Date(startDate);
+
+  //       while (
+  //         checkDate.getFullYear() < currentYear ||
+  //         (checkDate.getFullYear() === currentYear &&
+  //           checkDate.getMonth() + 1 <= currentMonth)
+  //       ) {
+  //         const year = checkDate.getFullYear();
+  //         const month = checkDate.getMonth() + 1;
+  //         const monthStr = `${year}-${month.toString().padStart(2, "0")}`;
+
+  //         addUnpaidMonth(monthStr, year, month);
+  //         checkDate.setMonth(checkDate.getMonth() + 1);
+  //       }
+  //     });
+
+  //     // Sort months chronologically and format response
+  //     const sortedMonths = Object.keys(grouped).sort((a, b) => {
+  //       const [yearA, monthA] = a.split("-").map(Number);
+  //       const [yearB, monthB] = b.split("-").map(Number);
+  //       if (yearA !== yearB) return yearA - yearB;
+  //       return monthA - monthB;
+  //     });
+
+  //     const unpaidMonths = sortedMonths.map((month) => {
+  //       const data = grouped[month];
+  //       return {
+  //         month,
+  //         totalAmount: parseFloat(data.totalAmount.toFixed(2)),
+  //         studentNames: Array.from(data.studentNames).join(", "),
+  //         students: Object.values(data.studentsMap).map((stu) => ({
+  //           ...stu,
+  //           subtotal: parseFloat(stu.subtotal.toFixed(2)),
+  //         })),
+  //       };
+  //     });
+
+  //     res.json({
+  //       success: true,
+  //       familyId,
+  //       unpaidMonths,
+  //       summary: {
+  //         totalUnpaidMonths: unpaidMonths.length,
+  //         totalAmountDue: unpaidMonths.reduce(
+  //           (sum, month) => sum + month.totalAmount,
+  //           0
+  //         ),
+  //         studentCount: allStudents.size,
+  //         feeRecordsProcessed: fees.length,
+  //       },
+  //     });
+  //   } catch (error) {
+  //     console.error("❌ Error in unpaid-months route:", error);
+  //     res.status(500).json({
+  //       success: false,
+  //       message: "Internal server error",
+  //       error: error.message,
+  //     });
+  //   }
+  // });
 
   // fee summary
   router.get("/by-student-id/:id", async (req, res) => {
