@@ -79,18 +79,53 @@ module.exports = (
   // Get all fees that have payments, sorted by timestamp descending
   router.get("/with-payments", async (req, res) => {
     try {
+      const { month, year, paymentType } = req.query;
+
+      console.log("Query params:", { month, year, paymentType });
+
+      let query = { payments: { $exists: true, $ne: [] } };
+
+      // Filter by payment type if provided
+      if (paymentType) {
+        if (paymentType === "monthly") {
+          query.paymentType = { $in: ["monthly", "monthlyOnHold"] };
+
+          // If month and year are provided for monthly payments, filter by payment months
+          if (month && year) {
+            const monthNum = parseInt(month);
+            const yearNum = parseInt(year);
+            const monthStr = monthNum.toString().padStart(2, "0");
+
+            query = {
+              ...query,
+              "students.monthsPaid": {
+                $elemMatch: {
+                  month: monthStr,
+                  year: yearNum,
+                },
+              },
+            };
+          }
+        } else if (paymentType === "admission") {
+          // For admission, show all admission payments without month/year filtering
+          query.paymentType = { $in: ["admission", "admissionOnHold"] };
+        }
+      }
+
+      console.log("Final query:", JSON.stringify(query, null, 2));
+
       const result = await feesCollection
-        .find({ payments: { $exists: true, $ne: [] } }) // only docs with non-empty payments
-        .sort({ timestamp: -1 }) // sort by timestamp descending
+        .find(query)
+        .sort({ timestamp: -1 })
         .toArray();
 
+      console.log("Results found:", result.length);
       res.send(result);
     } catch (err) {
       console.error("Error fetching fees with payments:", err);
       res.status(500).send({ message: "Internal server error" });
     }
   });
-
   router.get("/:id", async (req, res) => {
     const id = req.params.id;
     const query = { _id: new ObjectId(id) };
