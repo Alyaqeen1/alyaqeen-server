@@ -150,6 +150,85 @@ module.exports = (lessonsCoveredCollection) => {
     }
   });
 
+  // Route to get previous month's ending data for pre-filling beginning
+  router.get("/previous-month-ending/:student_id", async (req, res) => {
+    try {
+      const { student_id } = req.params;
+      const { month, year } = req.query;
+
+      if (!month || !year) {
+        return res.status(400).send({
+          message: "Month and year parameters are required",
+        });
+      }
+
+      // Convert month name to number for calculation
+      const monthNames = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+      ];
+
+      const currentMonthIndex = monthNames.indexOf(month);
+      if (currentMonthIndex === -1) {
+        return res.status(400).send({
+          message: "Invalid month name",
+        });
+      }
+
+      // Calculate previous month and year
+      let prevMonthIndex = currentMonthIndex - 1;
+      let prevYear = parseInt(year);
+
+      if (prevMonthIndex < 0) {
+        prevMonthIndex = 11; // December
+        prevYear = prevYear - 1;
+      }
+
+      const prevMonth = monthNames[prevMonthIndex];
+
+      console.log(
+        `🔍 Looking for: ${prevMonth} ${prevYear} (previous to ${month} ${year})`
+      );
+
+      // SIMPLE FIX: Just find the ending data for the calculated previous month/year
+      const previousEnding = await lessonsCoveredCollection.findOne({
+        student_id: student_id,
+        month: prevMonth,
+        year: prevYear.toString(),
+        time_of_month: "ending",
+      });
+
+      if (!previousEnding) {
+        return res.status(404).send({
+          message: `No ending data found for previous month (${prevMonth} ${prevYear})`,
+        });
+      }
+
+      console.log(
+        `✅ Found previous data: ${previousEnding.month} ${previousEnding.year}`
+      );
+
+      // Return the previous month's ending document
+      res.send(previousEnding);
+    } catch (error) {
+      console.error("Error fetching previous month ending:", error);
+      res.status(500).send({
+        message: "Something went wrong while fetching previous month data",
+        error: error.message,
+      });
+    }
+  });
+
   // New aggregation route for monthly summaries
   router.get("/monthly-summary", async (req, res) => {
     try {
