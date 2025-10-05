@@ -283,6 +283,11 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
                     },
                   },
                 },
+                {
+                  $match: {
+                    activity: "active", // optional: ensure active ones only
+                  },
+                },
                 ...studentEnrichmentStages(),
               ],
               as: "childrenDocs",
