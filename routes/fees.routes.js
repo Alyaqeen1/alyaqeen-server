@@ -394,6 +394,7 @@ module.exports = (
                   paymentType: fee.paymentType,
                   feeId: fee._id,
                   isFirstMonth: false,
+                  paymentMethod: fee.payments?.[0]?.method || "N/A",
                 });
               }
             });
@@ -446,6 +447,7 @@ module.exports = (
                 paymentType: fee.paymentType,
                 feeId: fee._id,
                 isFirstMonth: true,
+                paymentMethod: fee.payments?.[0]?.method || "N/A",
               });
             }
           }
@@ -459,6 +461,7 @@ module.exports = (
           paymentType: fee.paymentType,
           timestamp: paymentDate,
           studentPortion: feeStudent.subtotal || 0,
+          paymentMethod: fee.payments?.[0]?.method || "N/A",
         });
       });
 
@@ -613,6 +616,7 @@ module.exports = (
             feeId: payment.feeId,
             isFirstMonth: payment.isFirstMonth || false,
             note: payment.note || null,
+            paymentMethod: payment.paymentMethod || "N/A", // Add this line
           })),
         unpaidMonths: unpaidMonthsDetails
           .sort((a, b) => new Date(b.month) - new Date(a.month))

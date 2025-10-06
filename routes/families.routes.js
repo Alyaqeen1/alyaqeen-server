@@ -343,14 +343,10 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
   });
   // update family
   router.patch("/update-by-admin/:id", async (req, res) => {
-    console.log("🔵 UPDATE FAMILY REQUEST STARTED =======================");
-
     try {
       const id = req.params.id;
-      console.log("🔵 Processing family ID:", id);
 
       if (!ObjectId.isValid(id)) {
-        console.log("❌ Invalid ID format");
         return res.status(400).send({ error: "Invalid ID format" });
       }
 
@@ -358,17 +354,13 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
       const { name, children, discount } = req.body;
 
       if (!Array.isArray(children)) {
-        console.log("❌ Children is not an array");
         return res.status(400).json({ error: "Invalid children array" });
       }
 
-      console.log("🔵 Fetching family...");
       const familyDoc = await familiesCollection.findOne(query);
       if (!familyDoc) {
-        console.log("❌ Family not found");
         return res.status(404).json({ error: "Family not found" });
       }
-      console.log("✅ Family found:", familyDoc.name);
 
       const currentChildren = familyDoc.children || [];
       const newlyAddedChildren = children.filter(
@@ -378,17 +370,8 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
         (child) => !children.includes(child)
       );
 
-      console.log(
-        "🔵 Children changes - Added:",
-        newlyAddedChildren,
-        "Removed:",
-        removedChildren
-      );
-
       // ✅ FIXED: Check if newly added children belong to OTHER families
       if (newlyAddedChildren.length > 0) {
-        console.log("🔵 Checking for student conflicts...");
-
         // Only consider it a conflict if they have a NON-EMPTY parentUid that's DIFFERENT from this family
         const existingStudents = await studentsCollection
           .find({
@@ -401,11 +384,6 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
           })
           .toArray();
 
-        console.log(
-          "🔵 Found existing students with ACTUAL conflicts:",
-          existingStudents.length
-        );
-
         if (existingStudents.length > 0) {
           const conflictedStudents = existingStudents.map((student) => ({
             uid: student.uid,
@@ -414,7 +392,6 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
             parentUid: student.parentUid,
           }));
 
-          console.log("❌ Student conflicts detected:", conflictedStudents);
           return res.status(400).json({
             error: "Some students already belong to other families",
             conflictedStudents: conflictedStudents,
@@ -427,11 +404,9 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
             ),
           });
         }
-        console.log("✅ No ACTUAL student conflicts found");
       }
 
       // Update family first
-      console.log("🔵 Updating family document...");
       const familyResult = await familiesCollection.updateOne(query, {
         $set: {
           name,
@@ -440,21 +415,17 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
           updatedAt: new Date(),
         },
       });
-      console.log("✅ Family updated:", familyResult.modifiedCount);
 
       // Handle removals
       if (removedChildren.length > 0) {
-        console.log("🔵 Removing students:", removedChildren);
         const removeResult = await studentsCollection.updateMany(
           { uid: { $in: removedChildren } },
           { $set: { email: "", family_name: "", parentUid: "" } }
         );
-        console.log("✅ Students removed:", removeResult.modifiedCount);
       }
 
       // Handle additions
       if (newlyAddedChildren.length > 0) {
-        console.log("🔵 Adding students:", newlyAddedChildren);
         const addResult = await studentsCollection.updateMany(
           { uid: { $in: newlyAddedChildren } },
           {
@@ -465,10 +436,8 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
             },
           }
         );
-        console.log("✅ Students added:", addResult.modifiedCount);
       }
 
-      console.log("🟢 UPDATE COMPLETED SUCCESSFULLY");
       res.send({
         success: true,
         modifiedCount: familyResult.modifiedCount,
@@ -836,15 +805,6 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
                 } else {
                   feeStatus = "unpaid";
                 }
-
-                console.log(`Admission fee analysis for ${student.name}:`, {
-                  admissionFee: admissionFeeRecord.admissionFee,
-                  subtotal: admissionFeeRecord.subtotal,
-                  monthlyPortionPaid,
-                  expectedMonthlyPortion,
-                  feeStatus,
-                  payments: admissionFeeRecord.payments,
-                });
               }
             }
 
