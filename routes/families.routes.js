@@ -342,61 +342,163 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
     res.send(result);
   });
   // update family
+  router.patch("/update-by-admin/:id", async (req, res) => {
+    console.log("🔵 UPDATE FAMILY REQUEST STARTED =======================");
+
+    try {
+      const id = req.params.id;
+      console.log("🔵 Processing family ID:", id);
+
+      if (!ObjectId.isValid(id)) {
+        console.log("❌ Invalid ID format");
+        return res.status(400).send({ error: "Invalid ID format" });
+      }
+
+      const query = { _id: new ObjectId(id) };
+      const { name, children, discount } = req.body;
+
+      if (!Array.isArray(children)) {
+        console.log("❌ Children is not an array");
+        return res.status(400).json({ error: "Invalid children array" });
+      }
+
+      console.log("🔵 Fetching family...");
+      const familyDoc = await familiesCollection.findOne(query);
+      if (!familyDoc) {
+        console.log("❌ Family not found");
+        return res.status(404).json({ error: "Family not found" });
+      }
+      console.log("✅ Family found:", familyDoc.name);
+
+      const currentChildren = familyDoc.children || [];
+      const newlyAddedChildren = children.filter(
+        (child) => !currentChildren.includes(child)
+      );
+      const removedChildren = currentChildren.filter(
+        (child) => !children.includes(child)
+      );
+
+      console.log(
+        "🔵 Children changes - Added:",
+        newlyAddedChildren,
+        "Removed:",
+        removedChildren
+      );
+
+      // ✅ FIXED: Check if newly added children belong to OTHER families
+      if (newlyAddedChildren.length > 0) {
+        console.log("🔵 Checking for student conflicts...");
+
+        // Only consider it a conflict if they have a NON-EMPTY parentUid that's DIFFERENT from this family
+        const existingStudents = await studentsCollection
+          .find({
+            uid: { $in: newlyAddedChildren },
+            $and: [
+              { parentUid: { $exists: true } },
+              { parentUid: { $ne: "" } }, // Must have actual parentUid (not empty)
+              { parentUid: { $ne: familyDoc.uid } }, // And it's different from this family
+            ],
+          })
+          .toArray();
+
+        console.log(
+          "🔵 Found existing students with ACTUAL conflicts:",
+          existingStudents.length
+        );
+
+        if (existingStudents.length > 0) {
+          const conflictedStudents = existingStudents.map((student) => ({
+            uid: student.uid,
+            name: student.name,
+            currentFamily: student.family_name,
+            parentUid: student.parentUid,
+          }));
+
+          console.log("❌ Student conflicts detected:", conflictedStudents);
+          return res.status(400).json({
+            error: "Some students already belong to other families",
+            conflictedStudents: conflictedStudents,
+            message: `Please remove the students from their current families first before adding to this family.`,
+            details: conflictedStudents.map(
+              (student) =>
+                `${student.name} is currently in ${
+                  student.currentFamily || "another"
+                } family`
+            ),
+          });
+        }
+        console.log("✅ No ACTUAL student conflicts found");
+      }
+
+      // Update family first
+      console.log("🔵 Updating family document...");
+      const familyResult = await familiesCollection.updateOne(query, {
+        $set: {
+          name,
+          discount: Number(discount) || 0,
+          children,
+          updatedAt: new Date(),
+        },
+      });
+      console.log("✅ Family updated:", familyResult.modifiedCount);
+
+      // Handle removals
+      if (removedChildren.length > 0) {
+        console.log("🔵 Removing students:", removedChildren);
+        const removeResult = await studentsCollection.updateMany(
+          { uid: { $in: removedChildren } },
+          { $set: { email: "", family_name: "", parentUid: "" } }
+        );
+        console.log("✅ Students removed:", removeResult.modifiedCount);
+      }
+
+      // Handle additions
+      if (newlyAddedChildren.length > 0) {
+        console.log("🔵 Adding students:", newlyAddedChildren);
+        const addResult = await studentsCollection.updateMany(
+          { uid: { $in: newlyAddedChildren } },
+          {
+            $set: {
+              email: familyDoc.email,
+              family_name: name,
+              parentUid: familyDoc.uid,
+            },
+          }
+        );
+        console.log("✅ Students added:", addResult.modifiedCount);
+      }
+
+      console.log("🟢 UPDATE COMPLETED SUCCESSFULLY");
+      res.send({
+        success: true,
+        modifiedCount: familyResult.modifiedCount,
+        addedCount: newlyAddedChildren.length,
+        removedCount: removedChildren.length,
+        message: `Family updated successfully.`,
+      });
+    } catch (error) {
+      console.log("❌ UPDATE FAILED:", error);
+      res.status(500).send({
+        error: "Failed to update family",
+        details: error.message,
+      });
+    }
+  });
+
   // router.patch("/update-by-admin/:id", async (req, res) => {
   //   try {
   //     const id = req.params.id;
   //     if (!ObjectId.isValid(id)) {
   //       return res.status(400).send({ error: "Invalid ID format" });
   //     }
-
   //     const query = { _id: new ObjectId(id) };
-  //     const { name, children, discount } = req.body;
+
+  //     const { name, children, discount, newlyAddedChildren = [] } = req.body;
 
   //     if (!Array.isArray(children)) {
   //       return res.status(400).json({ error: "Invalid children array" });
   //     }
 
-  //     // 🔹 Fetch family to get current state and family details
-  //     const familyDoc = await familiesCollection.findOne(query);
-  //     if (!familyDoc) {
-  //       return res.status(404).json({ error: "Family not found" });
-  //     }
-
-  //     // 🔹 Auto-detect added and removed children
-  //     const currentChildren = familyDoc.children || [];
-  //     const newlyAddedChildren = children.filter(
-  //       (child) => !currentChildren.includes(child)
-  //     );
-  //     const removedChildren = currentChildren.filter(
-  //       (child) => !children.includes(child)
-  //     );
-
-  //     // ✅ Check if newly added children already belong to other families
-  //     if (newlyAddedChildren.length > 0) {
-  //       const existingStudents = await studentsCollection
-  //         .find({
-  //           uid: { $in: newlyAddedChildren },
-  //           parentUid: { $exists: true, $ne: "" }, // Check if they have a parentUid
-  //           parentUid: { $ne: familyDoc.uid }, // Exclude if they already belong to this family
-  //         })
-  //         .toArray();
-
-  //       if (existingStudents.length > 0) {
-  //         return res.status(400).json({
-  //           error: "Some students already belong to other families",
-  //           conflictedStudents: existingStudents.map((student) => ({
-  //             uid: student.uid,
-  //             name: student.name,
-  //             currentFamily: student.family_name,
-  //             parentUid: student.parentUid,
-  //           })),
-  //           message:
-  //             `Please remove the students from their $student.family_name first`,
-  //         });
-  //       }
-  //     }
-
-  //     // Update family document
   //     const updatedDoc = {
   //       $set: {
   //         name,
@@ -411,87 +513,19 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
   //       updatedDoc
   //     );
 
-  //     // ✅ Handle newly added students - Set family fields
+  //     // ✅ Only update newly added students to "enrolled"
   //     if (newlyAddedChildren.length > 0) {
   //       await studentsCollection.updateMany(
   //         { uid: { $in: newlyAddedChildren } },
-  //         {
-  //           $set: {
-  //             email: familyDoc.email,
-  //             family_name: familyDoc.name,
-  //             parentUid: familyDoc.uid,
-  //           },
-  //         }
+  //         { $set: { status: "enrolled" } }
   //       );
   //     }
 
-  //     // ✅ Handle removed students - Clear family fields
-  //     if (removedChildren.length > 0) {
-  //       await studentsCollection.updateMany(
-  //         { uid: { $in: removedChildren } },
-  //         {
-  //           $set: {
-  //             email: "",
-  //             family_name: "",
-  //             parentUid: "",
-  //           },
-  //         }
-  //       );
-  //     }
-
-  //     res.send({
-  //       success: true,
-  //       modifiedCount: familyResult.modifiedCount,
-  //       addedCount: newlyAddedChildren.length,
-  //       removedCount: removedChildren.length,
-  //     });
+  //     res.send({ success: true, modifiedCount: familyResult.modifiedCount });
   //   } catch (error) {
-  //     console.error("Update family error:", error);
   //     res.status(500).send({ error: "Failed to update family" });
   //   }
   // });
-
-  router.patch("/update-by-admin/:id", async (req, res) => {
-    try {
-      const id = req.params.id;
-      if (!ObjectId.isValid(id)) {
-        return res.status(400).send({ error: "Invalid ID format" });
-      }
-      const query = { _id: new ObjectId(id) };
-
-      const { name, children, discount, newlyAddedChildren = [] } = req.body;
-
-      if (!Array.isArray(children)) {
-        return res.status(400).json({ error: "Invalid children array" });
-      }
-
-      const updatedDoc = {
-        $set: {
-          name,
-          discount: Number(discount) || 0,
-          children,
-          updatedAt: new Date(),
-        },
-      };
-
-      const familyResult = await familiesCollection.updateOne(
-        query,
-        updatedDoc
-      );
-
-      // ✅ Only update newly added students to "enrolled"
-      if (newlyAddedChildren.length > 0) {
-        await studentsCollection.updateMany(
-          { uid: { $in: newlyAddedChildren } },
-          { $set: { status: "enrolled" } }
-        );
-      }
-
-      res.send({ success: true, modifiedCount: familyResult.modifiedCount });
-    } catch (error) {
-      res.status(500).send({ error: "Failed to update family" });
-    }
-  });
   router.get("/with-children/enrolled-fee-summary", async (req, res) => {
     try {
       const result = await familiesCollection
