@@ -187,12 +187,27 @@ module.exports = (
       const topBehaviors = Object.entries(behaviorBreakdown)
         .sort(([, a], [, b]) => b.totalPoints - a.totalPoints)
         .slice(0, 5);
+      // Determine how many merits to show (6 in both cases)
+      let lastMerits;
+
+      if (month && year) {
+        // Filter only records from that specific month/year
+        const monthStr = month.toString().padStart(2, "0");
+        const filteredMonthRecords = meritRecords.filter((record) =>
+          record.date.startsWith(`${year}-${monthStr}`)
+        );
+
+        lastMerits = filteredMonthRecords.slice(-6).reverse(); // last 6 of that month
+      } else {
+        // For all time or only year → last 6 overall
+        lastMerits = meritRecords.slice(-6).reverse();
+      }
 
       const result = {
         totalMerit,
         recentMerit,
         totalRecords: meritRecords.length,
-        meritRecords: meritRecords.slice(-10).reverse(), // Last 10 records, most recent first
+        meritRecords: lastMerits, // Last 10 records, most recent first
         behaviorBreakdown,
         trendType: month && year ? "daily" : year ? "monthly" : "monthly",
         trendData: allMonths.map((period) => ({

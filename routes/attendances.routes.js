@@ -96,8 +96,6 @@ module.exports = (
         };
       }
 
-      console.log("Match filter:", matchFilter); // Debug log
-
       const aggregation = await attendancesCollection
         .aggregate([
           {
