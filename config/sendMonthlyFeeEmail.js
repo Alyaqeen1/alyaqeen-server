@@ -15,50 +15,47 @@ const sendMonthlyFeeEmail = async ({
   remainingAmount = 0,
   isPartialPayment = false,
 }) => {
-  // if (process.env.EMAIL_SENDING_ENABLED !== "true") {
-  //   console.log(
-  //     "🚫 Email sending is disabled (test mode). Skipping email to:",
-  //     to
-  //   );
-  //   return;
-  // }
-
   const defaultClient = SibApiV3Sdk.ApiClient.instance;
   const apiKey = defaultClient.authentications["api-key"];
   apiKey.apiKey = process.env.BREVO_PASS;
 
   const apiInstance = new SibApiV3Sdk.TransactionalEmailsApi();
 
-  // ✅ AUTOMATICALLY DETECT THE PAID MONTH FROM STUDENTS DATA
-  let paidMonthName = "";
-  let paidYear = "";
-
-  // Find the most recent month that received payment in this transaction
-  const allPaidMonths = [];
+  // ✅ GET ALL UNIQUE PAID MONTHS FROM STUDENTS DATA
+  const allPaidMonthsSet = new Set();
 
   students.forEach((student) => {
     student.monthsPaid?.forEach((month) => {
       if (month.paid > 0) {
-        allPaidMonths.push({
-          month: month.month,
-          year: month.year,
-          paid: month.paid,
-        });
+        // Create a unique formatted month-year string
+        const monthKey = `${getMonthName(month.month)} ${month.year}`;
+        allPaidMonthsSet.add(monthKey);
       }
     });
   });
 
-  // Sort by most recent month
-  if (allPaidMonths.length > 0) {
-    allPaidMonths.sort((a, b) => {
-      const dateA = new Date(a.year, a.month - 1);
-      const dateB = new Date(b.year, b.month - 1);
-      return dateB - dateA;
-    });
+  // Convert Set to Array and sort by date (most recent first)
+  const allPaidMonths = Array.from(allPaidMonthsSet).sort((a, b) => {
+    // Convert month names back to dates for sorting
+    const dateA = new Date(a);
+    const dateB = new Date(b);
+    return dateB - dateA;
+  });
 
-    const latestPaidMonth = allPaidMonths[0];
-    paidMonthName = getMonthName(latestPaidMonth.month);
-    paidYear = latestPaidMonth.year;
+  // ✅ CREATE MONTHS TEXT FOR SUBJECT AND CONTENT
+  let monthsText = "";
+  let monthsTextForSubject = [...allPaidMonths]; // Copy for subject
+
+  if (allPaidMonths.length > 0) {
+    if (allPaidMonths.length === 1) {
+      monthsText = ` for ${allPaidMonths[0]}`;
+    } else if (allPaidMonths.length === 2) {
+      monthsText = ` for ${allPaidMonths[0]} and ${allPaidMonths[1]}`;
+    } else {
+      const lastMonth = allPaidMonths[allPaidMonths.length - 1];
+      const otherMonths = allPaidMonths.slice(0, -1);
+      monthsText = ` for ${otherMonths.join(", ")} and ${lastMonth}`;
+    }
   }
 
   const studentDetailsHtml = students
@@ -109,23 +106,19 @@ const sendMonthlyFeeEmail = async ({
     year: "numeric",
   });
 
-  // ✅ DIFFERENT MESSAGES FOR PARTIAL VS FULL PAYMENTS - INCLUDING DETECTED MONTH/YEAR
-  const monthYearText = paidMonthName
-    ? ` for ${paidMonthName} ${paidYear}`
-    : "";
-
+  // ✅ DIFFERENT MESSAGES FOR PARTIAL VS FULL PAYMENTS - USING ALL MONTHS
   const messageIntro = isOnHold
     ? `<p>We have <strong>recorded</strong> your payment of <strong>£${totalAmount.toFixed(
         2
-      )}</strong> via <strong>${method}</strong> on ${formattedDate}${monthYearText}.</p>
+      )}</strong> via <strong>${method}</strong> on ${formattedDate}${monthsText}.</p>
        <p><em>Your payment is currently under review and will be confirmed by our administration shortly.</em></p>`
     : isPartialPayment
     ? `<p>We have received your <strong>additional payment of £${totalAmount.toFixed(
         2
-      )}</strong> via <strong>${method}</strong> on ${formattedDate}${monthYearText}.</p>`
+      )}</strong> via <strong>${method}</strong> on ${formattedDate}${monthsText}.</p>`
     : `<p>We have received your <strong>payment of £${totalAmount.toFixed(
         2
-      )}</strong> via <strong>${method}</strong> on ${formattedDate}${monthYearText}.</p>`;
+      )}</strong> via <strong>${method}</strong> on ${formattedDate}${monthsText}.</p>`;
 
   // ✅ Calculate if ALL monthly fees are fully paid
   const allMonthsFullyPaid = students.every((student) => {
@@ -144,12 +137,34 @@ const sendMonthlyFeeEmail = async ({
        <p>Please pay the remaining amount at your earliest convenience.</p>`
     : `<p><strong>Payment Status:</strong> Fully Paid ✅</p>`;
 
-  // ✅ DIFFERENT SUBJECT FOR PARTIAL PAYMENTS - INCLUDING DETECTED MONTH/YEAR
-  const emailSubject = isOnHold
-    ? "🕒 Payment Acknowledged - Awaiting Confirmation"
-    : isPartialPayment
-    ? `💰 Additional Payment for ${paidMonthName} ${paidYear} - Alyaqeen`
-    : `📅 ${paidMonthName} ${paidYear} Fee Payment Confirmation - Alyaqeen`;
+  // ✅ DIFFERENT SUBJECT FOR ALL PAYMENT TYPES - INCLUDING ALL MONTHS
+  let emailSubject = "";
+
+  if (isOnHold) {
+    emailSubject = "🕒 Payment Acknowledged - Awaiting Confirmation";
+  } else if (isPartialPayment) {
+    // For partial payments - show specific months
+    if (monthsTextForSubject.length === 1) {
+      emailSubject = `💰 Additional Payment for ${monthsTextForSubject[0]} - Alyaqeen`;
+    } else if (monthsTextForSubject.length === 2) {
+      emailSubject = `💰 Additional Payment for ${monthsTextForSubject[0]} & ${monthsTextForSubject[1]} - Alyaqeen`;
+    } else if (monthsTextForSubject.length === 3) {
+      emailSubject = `💰 Additional Payment for ${monthsTextForSubject[0]}, ${monthsTextForSubject[1]} & ${monthsTextForSubject[2]} - Alyaqeen`;
+    } else {
+      emailSubject = `💰 Additional Payment for ${monthsTextForSubject.length} Months - Alyaqeen`;
+    }
+  } else {
+    // For full payments - show specific months
+    if (monthsTextForSubject.length === 1) {
+      emailSubject = `📅 ${monthsTextForSubject[0]} Fee Payment Confirmation - Alyaqeen`;
+    } else if (monthsTextForSubject.length === 2) {
+      emailSubject = `📅 ${monthsTextForSubject[0]} & ${monthsTextForSubject[1]} Fee Payment Confirmation - Alyaqeen`;
+    } else if (monthsTextForSubject.length === 3) {
+      emailSubject = `📅 ${monthsTextForSubject[0]}, ${monthsTextForSubject[1]} & ${monthsTextForSubject[2]} Fee Payment Confirmation - Alyaqeen`;
+    } else {
+      emailSubject = `📅 ${monthsTextForSubject.length} Months Fee Payment Confirmation - Alyaqeen`;
+    }
+  }
 
   const sendSmtpEmail = {
     sender: {
@@ -181,7 +196,11 @@ const sendMonthlyFeeEmail = async ({
 
   try {
     await apiInstance.sendTransacEmail(sendSmtpEmail);
-    console.log(`✅ Monthly fee email sent for ${paidMonthName} ${paidYear}`);
+    console.log(
+      `✅ Monthly fee email sent for ${
+        allPaidMonths.length
+      } month(s): ${allPaidMonths.join(", ")}`
+    );
   } catch (error) {
     console.error(
       "❌ Failed to send monthly fee email:",

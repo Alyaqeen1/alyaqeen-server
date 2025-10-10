@@ -4,8 +4,9 @@ const SibApiV3Sdk = require("sib-api-v3-sdk");
 const sendHoldEmail = async ({
   to,
   parentName = "Parent",
-  studentNames = [], // expects an array of names
+  studentNames = [],
   method = "your selected method",
+  amount = 0, // ADD THIS PARAMETER
 }) => {
   if (process.env.EMAIL_SENDING_ENABLED !== "true") {
     console.log(
@@ -45,9 +46,11 @@ const sendHoldEmail = async ({
       "🕒 Temporary Enrollment Confirmed – Action Required Within 7 Days",
     htmlContent: `
       <p>Dear <strong>${parentName}</strong>,</p>
-      <p>We’ve noted your preference to pay the admission and first month’s fee via <strong>${method}</strong>. As a result, the following student(s) have been placed on <strong>temporary enrollment</strong> at Alyaqeen:</p>
+      <p>We've noted your preference to pay the admission and first month's fee of <strong>£${amount.toFixed(
+        2
+      )}</strong> via <strong>${method}</strong>. As a result, the following student(s) have been placed on <strong>temporary enrollment</strong> at Alyaqeen:</p>
       <p><strong>${studentList}</strong></p>
-      <p>You may allow your child(ren) to begin attending classes immediately. However, please note that official enrollment will only be confirmed once the admission and first month’s fee is received.</p>
+      <p>You may allow your child(ren) to begin attending classes immediately. However, please note that official enrollment will only be confirmed once the admission and first month's fee is received.</p>
       <p><strong>Kindly ensure the payment is completed within 7 days to avoid any interruption in class access.</strong></p>
       <p>If you have already initiated the transfer, please share the payment receipt or reference number with us by replying to this email.</p>
       <p>If you have any questions or need banking details again, feel free to contact us.</p>

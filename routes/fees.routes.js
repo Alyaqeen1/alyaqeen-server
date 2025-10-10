@@ -81,8 +81,6 @@ module.exports = (
     try {
       const { month, year, paymentType } = req.query;
 
-      console.log("Query params:", { month, year, paymentType });
-
       let query = { payments: { $exists: true, $ne: [] } };
 
       // Filter by payment type if provided
@@ -90,37 +88,82 @@ module.exports = (
         if (paymentType === "monthly") {
           query.paymentType = { $in: ["monthly", "monthlyOnHold"] };
 
-          // If month and year are provided for monthly payments, filter by payment months
-          if (month && year) {
-            const monthNum = parseInt(month);
-            const yearNum = parseInt(year);
-            const monthStr = monthNum.toString().padStart(2, "0");
-
-            query = {
-              ...query,
-              "students.monthsPaid": {
-                $elemMatch: {
-                  month: monthStr,
-                  year: yearNum,
-                },
-              },
-            };
-          }
+          // ✅ REMOVED: Month/year filtering in MongoDB query
+          // We'll handle this in client-side processing
         } else if (paymentType === "admission") {
-          // For admission, show all admission payments without month/year filtering
           query.paymentType = { $in: ["admission", "admissionOnHold"] };
         }
       }
-
-      console.log("Final query:", JSON.stringify(query, null, 2));
 
       const result = await feesCollection
         .find(query)
         .sort({ timestamp: -1 })
         .toArray();
 
-      console.log("Results found:", result.length);
-      res.send(result);
+      // ✅ COMPLETE CLIENT-SIDE PROCESSING FOR MONTHLY PAYMENTS
+      let processedResults = result;
+
+      if (paymentType === "monthly" && month && year) {
+        const monthNum = parseInt(month);
+        const yearNum = parseInt(year);
+        const monthStr = monthNum.toString().padStart(2, "0");
+
+        processedResults = result
+          .map((fee) => {
+            // Create a copy of the fee
+            const feeCopy = JSON.parse(JSON.stringify(fee));
+
+            // Filter students to only include those with the specified month
+            feeCopy.students = fee.students
+              .map((student) => {
+                // Find the specific month payment for this student
+                const monthPayment = student.monthsPaid?.find(
+                  (mp) =>
+                    mp.month === monthStr &&
+                    mp.year === yearNum &&
+                    (mp.paid || 0) > 0
+                );
+
+                if (!monthPayment) {
+                  return null; // This student doesn't have payment for the specified month
+                }
+
+                // Create a student object with ONLY the specified month
+                return {
+                  ...student,
+                  monthsPaid: [monthPayment], // Only include the requested month
+                  subtotal: monthPayment.paid || 0, // Update subtotal to only this month's payment
+                };
+              })
+              .filter((student) => student !== null); // Remove students without the specified month
+
+            // If no students left after filtering, exclude this fee entirely
+            if (feeCopy.students.length === 0) {
+              return null;
+            }
+
+            // Recalculate totals for the filtered data
+            feeCopy.expectedTotal = feeCopy.students.reduce(
+              (sum, student) =>
+                sum + (student.monthsPaid[0]?.discountedFee || 0),
+              0
+            );
+
+            feeCopy.remaining = Math.max(
+              0,
+              feeCopy.expectedTotal -
+                feeCopy.students.reduce(
+                  (sum, student) => sum + (student.subtotal || 0),
+                  0
+                )
+            );
+
+            return feeCopy;
+          })
+          .filter((fee) => fee !== null); // Remove fees with no matching students
+      }
+
+      res.send(processedResults);
     } catch (err) {
       console.error("Error fetching fees with payments:", err);
       res.status(500).send({ message: "Internal server error" });
@@ -977,14 +1020,17 @@ module.exports = (
   router.get("/unpaid-months/:familyId", async (req, res) => {
     try {
       const { familyId } = req.params;
-      // query discount still accepted as fallback if family doc doesn't have discount
       const discountQuery = Number(req.query.discount || 0);
 
-      // Find family document (try familyId field first, then _id fallback)
-      let family = await familiesCollection.findOne({ familyId });
-      if (!family && ObjectId.isValid(familyId)) {
-        family = await familiesCollection.findOne({
-          _id: new ObjectId(familyId),
+      // Find family document by _id
+      const family = await familiesCollection.findOne({
+        _id: new ObjectId(familyId),
+      });
+
+      if (!family) {
+        return res.status(404).json({
+          success: false,
+          message: "Family not found",
         });
       }
 
@@ -993,120 +1039,153 @@ module.exports = (
           ? Number(family.discount) || 0
           : discountQuery;
 
-      // Get all fee records for this family (monthly types)
-      const fees = await feesCollection
-        .find({
-          familyId: familyId,
-          paymentType: { $in: ["monthly", "monthlyOnHold"] },
-          status: { $in: ["paid", "pending"] },
-        })
-        .toArray();
+      // ✅ Get enrolled students from family.children UIDs
+      let enrolledStudents = [];
 
-      if (!fees || fees.length === 0) {
+      if (family.children && Array.isArray(family.children)) {
+        const studentUIDs = family.children
+          .filter((uid) => uid && typeof uid === "string")
+          .map((uid) => uid.trim())
+          .filter((uid) => uid.length > 0);
+
+        if (studentUIDs.length > 0) {
+          enrolledStudents = await studentsCollection
+            .find({
+              uid: { $in: studentUIDs },
+              status: { $in: ["enrolled", "approved"] },
+              activity: { $ne: "inactive" },
+            })
+            .project({
+              _id: 1,
+              uid: 1,
+              name: 1,
+              startingDate: 1,
+              monthly_fee: 1,
+              monthlyFee: 1,
+              status: 1,
+            })
+            .toArray();
+        }
+      }
+
+      if (enrolledStudents.length === 0) {
         return res.json({
           success: true,
           familyId,
           unpaidMonths: [],
-          message: "No fee records found for this family",
+          message: "No enrolled students found for this family",
         });
       }
 
-      // build set of studentIds referenced in fees
-      const studentIdStrings = [
-        ...new Set(
-          fees.flatMap(
-            (fee) => fee.students?.map((s) => String(s.studentId)) || []
-          )
-        ),
-      ].filter(Boolean);
+      // ✅ Get ALL fee records (monthly AND admission types)
+      const allFees = await feesCollection
+        .find({
+          familyId: familyId,
+          paymentType: {
+            $in: ["monthly", "monthlyOnHold", "admission", "admissionOnHold"],
+          },
+          status: { $in: ["paid", "pending", "partial"] },
+        })
+        .toArray();
 
-      // split into ObjectId-like and non-ObjectId (maybe some systems store uid)
-      const objectIdList = studentIdStrings
-        .filter((id) => ObjectId.isValid(id))
-        .map((id) => new ObjectId(id));
-      const uidList = studentIdStrings.filter((id) => !ObjectId.isValid(id));
-
-      // fetch students documents to check active/inactive (support both _id and uid)
-      const studentQueryParts = [];
-      if (objectIdList.length)
-        studentQueryParts.push({ _id: { $in: objectIdList } });
-      if (uidList.length) studentQueryParts.push({ uid: { $in: uidList } });
-
-      const studentDocs = studentQueryParts.length
-        ? await studentsCollection
-            .find({ $or: studentQueryParts })
-            .project({ _id: 1, uid: 1, activity: 1, status: 1, name: 1 })
-            .toArray()
-        : [];
-
-      // compute set of active student ids (string form matching fee.students studentId)
-      const activeStudentIds = new Set(
-        studentDocs
-          .filter((s) => s.activity !== "inactive" && s.status !== "inactive")
-          .map((s) => {
-            // prefer _id string if available, else uid
-            if (s._id) return String(s._id);
-            if (s.uid) return String(s.uid);
-            return null;
-          })
-          .filter(Boolean)
+      // ✅ Separate monthly fees and admission fees
+      const monthlyFees = allFees.filter(
+        (fee) =>
+          fee.paymentType === "monthly" || fee.paymentType === "monthlyOnHold"
       );
 
-      // Maps to collect data
-      const allStudents = new Map(); // studentIdStr => { studentId, name, monthly_fee }
-      const paidMonthsMap = new Map(); // key studentId_monthStr => true
+      const admissionFees = allFees.filter(
+        (fee) =>
+          fee.paymentType === "admission" ||
+          fee.paymentType === "admissionOnHold"
+      );
 
-      // Build paidMonthsMap and allStudents (only for active students)
-      for (const fee of fees) {
+      // ✅ Build allStudents from enrolled students
+      const allStudents = new Map();
+      const paidMonthsMap = new Map();
+
+      // Build student info from enrolled students with actual data
+      enrolledStudents.forEach((student) => {
+        const studentIdStr = String(student._id);
+        const monthlyFee = Number(
+          student.monthly_fee ?? student.monthlyFee ?? 50
+        );
+
+        allStudents.set(studentIdStr, {
+          studentId: studentIdStr,
+          name: student.name || "Unknown",
+          monthly_fee: monthlyFee,
+          startingDate: student.startingDate,
+        });
+      });
+
+      // ✅ Build paidMonthsMap from MONTHLY fees
+      for (const fee of monthlyFees) {
         for (const s of fee.students || []) {
           const studentIdStr = String(s.studentId);
-          // skip entirely if student is inactive (not in activeStudentIds)
-          if (
-            activeStudentIds.size > 0 &&
-            !activeStudentIds.has(studentIdStr)
-          ) {
-            continue;
-          }
 
-          // store student baseline info (fee may contain monthlyFee)
-          if (!allStudents.has(studentIdStr)) {
-            // Use only base monthly fee, ignore subtotal
-            const monthlyFeeCandidate = s.monthlyFee ?? s.monthly_fee ?? 50; // <-- NOT s.subtotal
-            const monthlyFee = Number(monthlyFeeCandidate) || 50;
-            allStudents.set(studentIdStr, {
-              studentId: studentIdStr,
-              name: s.name || "Unknown",
-              monthly_fee: monthlyFee,
-            });
-          }
-
-          // mark paid months
           if (Array.isArray(s.monthsPaid)) {
             for (const mp of s.monthsPaid) {
               const monthNum = Number(mp.month);
               const year = mp.year;
               if (!isNaN(monthNum) && year) {
                 const monthStr = `${year}-${String(monthNum).padStart(2, "0")}`;
-                paidMonthsMap.set(`${studentIdStr}_${monthStr}`, true);
+                const paidAmount = mp.paid || mp.Paid || 0;
+
+                if (paidAmount > 0) {
+                  paidMonthsMap.set(`${studentIdStr}_${monthStr}`, true);
+                }
               }
             }
           }
         }
       }
 
-      // grouped structure: monthStr -> { totalAmount, studentNames:Set, studentsMap }
+      // ✅ Check ADMISSION fees for joining month payments
+      for (const fee of admissionFees) {
+        for (const s of fee.students || []) {
+          const studentIdStr = String(s.studentId);
+
+          // If admission payment exists and has joining month, mark that month as paid
+          if (s.joiningMonth && s.joiningYear) {
+            const monthStr = `${s.joiningYear}-${String(
+              s.joiningMonth
+            ).padStart(2, "0")}`;
+            paidMonthsMap.set(`${studentIdStr}_${monthStr}`, true);
+          }
+        }
+      }
+
+      // ✅ YOUR EXISTING LOGIC FOR UNPAID MONTHS
       const grouped = {};
       const now = new Date();
       const currentYear = now.getFullYear();
       const currentMonth = now.getMonth() + 1;
 
-      // For each active student, generate months from Sept 2025 to current and mark unpaid
+      // For each enrolled student, generate months but respect starting dates
       for (const [studentIdStr, sInfo] of allStudents.entries()) {
         const feeAmount = Number(sInfo.monthly_fee) || 50;
 
+        // ✅ Determine start date: Use student startingDate OR September 2025 (whichever is later)
+        let startDate = new Date(2025, 8, 1); // September 2025
+
+        if (sInfo.startingDate) {
+          const studentStartDate = new Date(sInfo.startingDate);
+          // Use the later date: September 2025 OR student start date
+          startDate =
+            studentStartDate > startDate ? studentStartDate : startDate;
+        }
+
+        // If start date is in future, skip this student
+        if (startDate > now) {
+          continue;
+        }
+
         const addUnpaidMonth = (monthStr, year, month) => {
           const key = `${studentIdStr}_${monthStr}`;
-          if (paidMonthsMap.has(key)) return; // already paid
+          if (paidMonthsMap.has(key)) {
+            return;
+          }
 
           // compute discounted fee using familyDiscount
           const discountedFee = Number(
@@ -1142,8 +1221,9 @@ module.exports = (
           grouped[monthStr].studentsMap[studentIdStr].subtotal += discountedFee;
         };
 
-        // Start from September 2025 (as per your earlier requirement)
-        let checkDate = new Date(2025, 8, 1); // 2025-09-01
+        // Generate months from start date to current month
+        let checkDate = new Date(startDate);
+
         while (
           checkDate.getFullYear() < currentYear ||
           (checkDate.getFullYear() === currentYear &&
@@ -1189,8 +1269,10 @@ module.exports = (
             0
           ),
           studentCount: allStudents.size,
-          feeRecordsProcessed: fees.length,
+          monthlyFeeRecords: monthlyFees.length,
+          admissionFeeRecords: admissionFees.length,
           familyDiscount: familyDiscount,
+          paidMonthsCount: paidMonthsMap.size,
         },
       });
     } catch (error) {
@@ -1202,7 +1284,6 @@ module.exports = (
       });
     }
   });
-
   // router.get("/unpaid-months/:familyId", async (req, res) => {
   //   try {
   //     const { familyId } = req.params;
@@ -1745,57 +1826,96 @@ module.exports = (
       });
       if (!family) return res.status(404).json({ error: "Family not found" });
 
-      // 3. Get full student records (same as POST route)
-      const studentIds = fee.students.map((s) => new ObjectId(s.studentId));
-      const allStudents = await studentsCollection
-        .find({
-          _id: { $in: studentIds },
-        })
-        .toArray();
+      // ✅ FIX: Calculate actual paid amount from payments array
+      const paidAmount =
+        fee.payments?.reduce(
+          (sum, payment) => sum + (payment.amount || 0),
+          0
+        ) || 0;
 
-      // 4. Simple update
+      // ✅ FIX: Get payment method and date
+      const paymentMethod = fee.payments?.[0]?.method || "Unknown";
+      const paymentDate = fee.payments?.[0]?.date || new Date();
+
+      // ✅ FIX: Calculate remaining amount properly
+      const remainingAmount = fee.remaining || 0;
+
+      // ✅ FIX: Ensure monthsPaid has the correct paid amounts
+      const updatedStudents = fee.students.map((student) => {
+        const updatedMonthsPaid =
+          student.monthsPaid?.map((month) => ({
+            ...month,
+            // ✅ Ensure paid field exists and has correct value
+            paid:
+              month.paid !== undefined
+                ? month.paid
+                : month.discountedFee || month.monthlyFee || 0,
+          })) || [];
+
+        return {
+          ...student,
+          monthsPaid: updatedMonthsPaid,
+        };
+      });
+
+      // ✅ FIX: Update BOTH the status AND the students data in database
       const result = await feesCollection.updateOne(
         { _id: new ObjectId(id) },
-        { $set: { status, paymentType } }
+        {
+          $set: {
+            status,
+            paymentType: paymentType || fee.paymentType,
+            students: updatedStudents, // ✅ CRITICAL: Save the updated students data
+          },
+        }
       );
 
-      // 5. Send appropriate email (now with enriched students like POST route)
+      // 4. Send appropriate email
       if (result.modifiedCount > 0 && status === "paid") {
-        // Create enriched students array (same as POST route)
-        const enrichedStudents = await enrichStudents(
-          fee.students,
-          studentsCollection,
-          departmentsCollection,
-          classesCollection
-        );
-
         if (fee.paymentType === "admissionOnHold") {
+          // For admission payments
+          const enrichedStudents = await enrichStudents(
+            fee.students,
+            studentsCollection,
+            departmentsCollection,
+            classesCollection
+          );
+
           await sendEmailViaAPI({
             to: family.email,
             parentName: family.name,
-            students: enrichedStudents, // Now using enriched data
-            totalAmount: fee.amount,
-            method: fee.method,
+            students: enrichedStudents,
+            totalAmount: paidAmount,
+            method: paymentMethod,
+            paymentDate: paymentDate,
           });
         } else if (fee.paymentType === "monthlyOnHold") {
           await sendMonthlyFeeEmail({
             to: family.email,
             parentName: family.name,
-            students: enrichedStudents, // Now using enriched data
-            totalAmount: fee.amount,
-            method: fee.method,
-            date: fee.date || new Date(),
+            students: updatedStudents, // ✅ Use the UPDATED students data
+            totalAmount: paidAmount,
+            method: paymentMethod,
+            paymentDate: paymentDate,
             isOnHold: false,
+            remainingAmount: remainingAmount,
+            isPartialPayment: remainingAmount > 0,
           });
         }
       }
 
-      res.send(result);
+      res.json({
+        modifiedCount: result.modifiedCount,
+        paidAmount,
+        paymentMethod,
+        emailSent: result.modifiedCount > 0 && status === "paid",
+        studentsUpdated: updatedStudents.length,
+      });
     } catch (err) {
-      res.status(500).json({ error: "Server error" });
+      console.error("Error in update-status-mode:", err);
+      res.status(500).json({ error: "Server error: " + err.message });
     }
   });
-
   // Update fee (partial payment for both monthly and admission)
   // Update fee (partial payment for both monthly and admission)
   router.patch("/update/:id", async (req, res) => {
@@ -1963,6 +2083,7 @@ module.exports = (
       res.status(500).send({ message: "Internal server error" });
     }
   });
+  // PATCH /partial-payment/:id
   // PATCH /partial-payment/:id
   router.patch("/update-payment/:id", async (req, res) => {
     const { id } = req.params;
@@ -2160,7 +2281,6 @@ module.exports = (
       res.status(500).send({ message: "Internal server error" });
     }
   });
-
   // delete
   router.delete("/:id", async (req, res) => {
     const { id } = req.params;
