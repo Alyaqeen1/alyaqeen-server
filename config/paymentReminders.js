@@ -200,11 +200,7 @@ const getFamilies = async () => {
     const familiesCollection = db.collection("families");
 
     // Get ONLY the test family by email
-    const families = await familiesCollection
-      .find({
-        email: "lamidiya5@gmail.com",
-      })
-      .toArray();
+    const families = await familiesCollection.find({}).toArray();
 
     console.log(`🧪 TEST MODE - Found ${families.length} test families`);
 
