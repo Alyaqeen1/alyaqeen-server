@@ -52,6 +52,7 @@ const cookieOptions = {
 // in development server secure will false .  in production secure will be true
 
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const { sendMonthlyReminders } = require("./config/paymentReminders");
 
 // old
 // const uri = `mongodb+srv://${process.env.DB_User}:${process.env.DB_Pass}@cluster0.dr5qw.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
@@ -279,6 +280,42 @@ async function run() {
   }
 }
 run().catch(console.dir);
+
+// === ADD PAYMENT REMINDERS ROUTE ===
+app.get("/api/send-reminders", async (req, res) => {
+  // Get current time in UK timezone
+  const now = new Date();
+  const ukTime = new Date(
+    now.toLocaleString("en-US", { timeZone: "Europe/London" })
+  );
+  const currentDay = ukTime.getDate();
+
+  console.log(`🕛 UK Time: ${ukTime.toISOString()}, Day: ${currentDay}`);
+
+  // Determine which reminder type based on current UK date
+  let reminderDay;
+  if (currentDay === 10) reminderDay = 10;
+  else if (currentDay === 20) reminderDay = 20;
+  else if (currentDay === 29) reminderDay = 29;
+  else {
+    return res.json({ message: "Not a reminder day in UK time" });
+  }
+
+  console.log(`📧 Processing ${reminderDay}th day reminders at UK time...`);
+
+  try {
+    const { sendMonthlyReminders } = require("./config/paymentReminders");
+    await sendMonthlyReminders(reminderDay);
+
+    res.json({
+      success: true,
+      message: `Reminders sent for day ${reminderDay} (UK time)`,
+    });
+  } catch (error) {
+    console.error("Error:", error);
+    res.status(500).json({ error: "Failed to send reminders" });
+  }
+});
 
 app.get("/", async (req, res) => {
   res.send("Alyaqeen server is running");
