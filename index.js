@@ -283,7 +283,7 @@ run().catch(console.dir);
 
 // === ADD PAYMENT REMINDERS ROUTE ===
 app.get("/api/send-reminders", async (req, res) => {
-  // Get current time in UK timezone
+  // Get current UK time
   const now = new Date();
   const ukTime = new Date(
     now.toLocaleString("en-US", { timeZone: "Europe/London" })
@@ -292,7 +292,7 @@ app.get("/api/send-reminders", async (req, res) => {
 
   console.log(`🕛 UK Time: ${ukTime.toISOString()}, Day: ${currentDay}`);
 
-  // Determine which reminder type based on current UK date
+  // Check if today is a reminder day
   let reminderDay;
   if (currentDay === 10) reminderDay = 10;
   else if (currentDay === 20) reminderDay = 20;
@@ -301,7 +301,7 @@ app.get("/api/send-reminders", async (req, res) => {
     return res.json({ message: "Not a reminder day in UK time" });
   }
 
-  console.log(`📧 Processing ${reminderDay}th day reminders at UK time...`);
+  console.log(`📧 Processing ${reminderDay}th day reminders...`);
 
   try {
     const { sendMonthlyReminders } = require("./config/paymentReminders");
@@ -309,7 +309,7 @@ app.get("/api/send-reminders", async (req, res) => {
 
     res.json({
       success: true,
-      message: `Reminders sent for day ${reminderDay} (UK time)`,
+      message: `Reminders sent for day ${reminderDay}`,
     });
   } catch (error) {
     console.error("Error:", error);
