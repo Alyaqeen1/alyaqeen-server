@@ -268,6 +268,7 @@ module.exports = (
       }
 
       // 6. Send Email based on type
+      // 6. Send Email based on type
       if (paymentType === "admissionOnHold") {
         try {
           await sendHoldEmail({
@@ -275,6 +276,7 @@ module.exports = (
             parentName: familyName,
             studentNames: allStudents.map((s) => s.name),
             method: paymentMethod,
+            amount: paidAmount, // ✅ ADD THIS - pass the actual paid amount
           });
           console.log("✅ Hold email sent successfully");
         } catch (emailError) {
@@ -1039,7 +1041,7 @@ module.exports = (
           ? Number(family.discount) || 0
           : discountQuery;
 
-      // ✅ Get enrolled students from family.children UIDs
+      // ✅ Get ONLY ENROLLED students from family.children UIDs
       let enrolledStudents = [];
 
       if (family.children && Array.isArray(family.children)) {
@@ -1049,10 +1051,11 @@ module.exports = (
           .filter((uid) => uid.length > 0);
 
         if (studentUIDs.length > 0) {
+          // ✅ CRITICAL FIX: Only get students with status "enrolled"
           enrolledStudents = await studentsCollection
             .find({
               uid: { $in: studentUIDs },
-              status: { $in: ["enrolled", "approved"] },
+              status: "enrolled", // ✅ Only enrolled students
               activity: { $ne: "inactive" },
             })
             .project({
@@ -1100,23 +1103,27 @@ module.exports = (
           fee.paymentType === "admissionOnHold"
       );
 
-      // ✅ Build allStudents from enrolled students
+      // ✅ Build allStudents ONLY from enrolled students
       const allStudents = new Map();
       const paidMonthsMap = new Map();
 
-      // Build student info from enrolled students with actual data
+      // Build student info ONLY from enrolled students
       enrolledStudents.forEach((student) => {
-        const studentIdStr = String(student._id);
-        const monthlyFee = Number(
-          student.monthly_fee ?? student.monthlyFee ?? 50
-        );
+        // ✅ Only process if student status is "enrolled"
+        if (student.status === "enrolled") {
+          const studentIdStr = String(student._id);
+          const monthlyFee = Number(
+            student.monthly_fee ?? student.monthlyFee ?? 50
+          );
 
-        allStudents.set(studentIdStr, {
-          studentId: studentIdStr,
-          name: student.name || "Unknown",
-          monthly_fee: monthlyFee,
-          startingDate: student.startingDate,
-        });
+          allStudents.set(studentIdStr, {
+            studentId: studentIdStr,
+            name: student.name || "Unknown",
+            monthly_fee: monthlyFee,
+            startingDate: student.startingDate,
+            status: student.status, // Keep status for reference
+          });
+        }
       });
 
       // ✅ Build paidMonthsMap from MONTHLY fees
@@ -1124,16 +1131,22 @@ module.exports = (
         for (const s of fee.students || []) {
           const studentIdStr = String(s.studentId);
 
-          if (Array.isArray(s.monthsPaid)) {
-            for (const mp of s.monthsPaid) {
-              const monthNum = Number(mp.month);
-              const year = mp.year;
-              if (!isNaN(monthNum) && year) {
-                const monthStr = `${year}-${String(monthNum).padStart(2, "0")}`;
-                const paidAmount = mp.paid || mp.Paid || 0;
+          // ✅ Only consider if student is in enrolled students
+          if (allStudents.has(studentIdStr)) {
+            if (Array.isArray(s.monthsPaid)) {
+              for (const mp of s.monthsPaid) {
+                const monthNum = Number(mp.month);
+                const year = mp.year;
+                if (!isNaN(monthNum) && year) {
+                  const monthStr = `${year}-${String(monthNum).padStart(
+                    2,
+                    "0"
+                  )}`;
+                  const paidAmount = mp.paid || mp.Paid || 0;
 
-                if (paidAmount > 0) {
-                  paidMonthsMap.set(`${studentIdStr}_${monthStr}`, true);
+                  if (paidAmount > 0) {
+                    paidMonthsMap.set(`${studentIdStr}_${monthStr}`, true);
+                  }
                 }
               }
             }
@@ -1146,24 +1159,32 @@ module.exports = (
         for (const s of fee.students || []) {
           const studentIdStr = String(s.studentId);
 
-          // If admission payment exists and has joining month, mark that month as paid
-          if (s.joiningMonth && s.joiningYear) {
-            const monthStr = `${s.joiningYear}-${String(
-              s.joiningMonth
-            ).padStart(2, "0")}`;
-            paidMonthsMap.set(`${studentIdStr}_${monthStr}`, true);
+          // ✅ Only consider if student is in enrolled students
+          if (allStudents.has(studentIdStr)) {
+            // If admission payment exists and has joining month, mark that month as paid
+            if (s.joiningMonth && s.joiningYear) {
+              const monthStr = `${s.joiningYear}-${String(
+                s.joiningMonth
+              ).padStart(2, "0")}`;
+              paidMonthsMap.set(`${studentIdStr}_${monthStr}`, true);
+            }
           }
         }
       }
 
-      // ✅ YOUR EXISTING LOGIC FOR UNPAID MONTHS
+      // ✅ YOUR EXISTING LOGIC FOR UNPAID MONTHS - ONLY FOR ENROLLED STUDENTS
       const grouped = {};
       const now = new Date();
       const currentYear = now.getFullYear();
       const currentMonth = now.getMonth() + 1;
 
-      // For each enrolled student, generate months but respect starting dates
+      // For each ENROLLED student, generate months but respect starting dates
       for (const [studentIdStr, sInfo] of allStudents.entries()) {
+        // ✅ Double-check: Only process enrolled students
+        if (sInfo.status !== "enrolled") {
+          continue; // Skip non-enrolled students
+        }
+
         const feeAmount = Number(sInfo.monthly_fee) || 50;
 
         // ✅ Determine start date: Use student startingDate OR September 2025 (whichever is later)
@@ -1268,7 +1289,8 @@ module.exports = (
             (sum, m) => sum + (m.totalAmount || 0),
             0
           ),
-          studentCount: allStudents.size,
+          studentCount: allStudents.size, // This now only includes enrolled students
+          enrolledStudentCount: enrolledStudents.length,
           monthlyFeeRecords: monthlyFees.length,
           admissionFeeRecords: admissionFees.length,
           familyDiscount: familyDiscount,
