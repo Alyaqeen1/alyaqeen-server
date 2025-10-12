@@ -3,7 +3,11 @@ const { messaging } = require("firebase-admin");
 const router = express.Router();
 const { ObjectId } = require("mongodb");
 
-module.exports = (lessonsCoveredCollection) => {
+module.exports = (
+  lessonsCoveredCollection,
+  studentsCollection,
+  teachersCollection
+) => {
   // Existing routes
   router.get("/", async (req, res) => {
     const result = await lessonsCoveredCollection.find().toArray();
@@ -229,37 +233,76 @@ module.exports = (lessonsCoveredCollection) => {
     }
   });
 
-  // New aggregation route for monthly summaries
   router.get("/monthly-summary", async (req, res) => {
     try {
       const { year, month } = req.query;
+
+      // Create match conditions - only unpublished monthly reports
       const matchConditions = {
-        $and: [
-          {
-            $or: [
-              { monthly_publish: false },
-              { monthly_publish: { $exists: false } },
-            ],
-          },
-          ...(year ? [{ year }] : []),
-          ...(month ? [{ month }] : []),
-        ],
+        monthly_publish: false,
       };
 
-      const pipeline = [
-        // Add initial match stage if filters are provided
-        ...(Object.keys(matchConditions).length
-          ? [{ $match: matchConditions }]
-          : []),
+      if (year) matchConditions.year = year;
+      if (month) matchConditions.month = month;
 
-        // Convert string IDs to ObjectId
+      const pipeline = [
+        // Initial match stage with all conditions
+        {
+          $match: matchConditions,
+        },
+
+        // Convert string IDs to ObjectId with empty string handling
         {
           $addFields: {
-            student_id: { $toObjectId: "$student_id" },
-            class_id: { $toObjectId: "$class_id" },
-            subject_id: { $toObjectId: "$subject_id" },
-            teacher_id: { $toObjectId: "$teacher_id" },
-            department_id: { $toObjectId: "$department_id" },
+            student_id: {
+              $cond: [
+                {
+                  $and: [
+                    { $ne: ["$student_id", ""] },
+                    { $ne: ["$student_id", null] },
+                  ],
+                },
+                { $toObjectId: "$student_id" },
+                null,
+              ],
+            },
+            class_id: {
+              $cond: [
+                {
+                  $and: [
+                    { $ne: ["$class_id", ""] },
+                    { $ne: ["$class_id", null] },
+                  ],
+                },
+                { $toObjectId: "$class_id" },
+                null,
+              ],
+            },
+            teacher_id: {
+              $cond: [
+                {
+                  $and: [
+                    { $ne: ["$teacher_id", ""] },
+                    { $ne: ["$teacher_id", null] },
+                  ],
+                },
+                { $toObjectId: "$teacher_id" },
+                null,
+              ],
+            },
+            department_id: {
+              $cond: [
+                {
+                  $and: [
+                    { $ne: ["$department_id", ""] },
+                    { $ne: ["$department_id", null] },
+                  ],
+                },
+                { $toObjectId: "$department_id" },
+                null,
+              ],
+            },
+            original_id: { $toString: "$_id" },
           },
         },
 
@@ -270,22 +313,65 @@ module.exports = (lessonsCoveredCollection) => {
               student_id: "$student_id",
               month: "$month",
               year: "$year",
-              subject_id: "$subject_id",
             },
             entries: {
               $push: {
                 time_of_month: "$time_of_month",
-                qaidahPages: "$qaidahPages",
-                duasSurahs: "$duasSurahs",
-                islamicStudiesPages: "$islamicStudiesPages",
-                original_id: "$_id", // Preserve original document ID
+                lessons: "$lessons",
+                original_id: "$original_id",
+                monthly_publish: "$monthly_publish",
+                type: "$type",
+                teacher_id: "$teacher_id",
+                class_id: "$class_id",
+                department_id: "$department_id",
               },
             },
-            book_names: { $addToSet: "$book_name" },
+            // Get the first non-null values for these fields
             class_id: { $first: "$class_id" },
-            subject_id: { $first: "$subject_id" },
             teacher_id: { $first: "$teacher_id" },
             department_id: { $first: "$department_id" },
+            all_published: { $min: "$monthly_publish" },
+          },
+        },
+
+        // Ensure we only include groups with unpublished entries
+        {
+          $match: {
+            all_published: false,
+          },
+        },
+
+        // Count beginning and ending entries
+        {
+          $addFields: {
+            beginning_count: {
+              $size: {
+                $filter: {
+                  input: "$entries",
+                  as: "entry",
+                  cond: { $eq: ["$$entry.time_of_month", "beginning"] },
+                },
+              },
+            },
+            ending_count: {
+              $size: {
+                $filter: {
+                  input: "$entries",
+                  as: "entry",
+                  cond: { $eq: ["$$entry.time_of_month", "ending"] },
+                },
+              },
+            },
+          },
+        },
+
+        // Only include groups that have BOTH beginning AND ending entries
+        {
+          $match: {
+            $and: [
+              { beginning_count: { $gt: 0 } },
+              { ending_count: { $gt: 0 } },
+            ],
           },
         },
 
@@ -296,9 +382,7 @@ module.exports = (lessonsCoveredCollection) => {
             student_id: "$_id.student_id",
             month: "$_id.month",
             year: "$_id.year",
-            book_names: 1,
             class_id: 1,
-            subject_id: 1,
             teacher_id: 1,
             department_id: 1,
             entries: 1,
@@ -329,61 +413,574 @@ module.exports = (lessonsCoveredCollection) => {
           },
         },
 
-        // Only include documents with ending entry
-        {
-          $match: {
-            ending: { $ne: null },
-          },
-        },
-
-        // Calculate progress and collect document IDs
+        // Calculate progress for each lesson type with SAFE number conversion
         {
           $project: {
             student_id: 1,
             month: 1,
             year: 1,
-            book_names: 1,
             class_id: 1,
-            subject_id: 1,
             teacher_id: 1,
             department_id: 1,
-            qaidahProgress: {
-              $subtract: [
-                { $toInt: "$ending.qaidahPages" },
-                { $ifNull: [{ $toInt: "$beginning.qaidahPages" }, 0] },
-              ],
-            },
-            duasSurahsProgress: {
-              $subtract: [
-                { $toInt: "$ending.duasSurahs" },
-                { $ifNull: [{ $toInt: "$beginning.duasSurahs" }, 0] },
-              ],
-            },
-            islamicStudiesProgress: {
-              $subtract: [
-                { $toInt: "$ending.islamicStudiesPages" },
-                { $ifNull: [{ $toInt: "$beginning.islamicStudiesPages" }, 0] },
-              ],
-            },
-            hasBeginning: { $ne: ["$beginning", null] },
-            hasEnding: true,
-            // Only include ending ID if no beginning exists
-            processedDocumentIds: {
+
+            // Determine type (use ending type if available, otherwise beginning)
+            type: {
               $cond: [
-                { $not: ["$beginning"] },
-                [{ $toString: "$ending.original_id" }],
+                { $ne: ["$ending.type", null] },
+                "$ending.type",
+                "$beginning.type",
+              ],
+            },
+
+            // Qaidah/Quran progress
+            // In the $project stage where you calculate progress, replace the qaidah_quran_progress section with this:
+
+            // Qaidah/Quran progress - FIXED number conversion
+            qaidah_quran_progress: {
+              $cond: [
                 {
-                  $filter: {
-                    input: [
-                      { $toString: "$beginning.original_id" },
-                      { $toString: "$ending.original_id" },
+                  $and: [
+                    "$beginning",
+                    "$ending",
+                    "$beginning.lessons",
+                    "$ending.lessons",
+                    "$beginning.lessons.qaidah_quran",
+                    "$ending.lessons.qaidah_quran",
+                  ],
+                },
+                {
+                  selected: "$ending.lessons.qaidah_quran.selected",
+                  page_progress: {
+                    $let: {
+                      vars: {
+                        startPage: {
+                          $ifNull: [
+                            {
+                              $convert: {
+                                input:
+                                  "$beginning.lessons.qaidah_quran.data.page",
+                                to: "double",
+                                onError: 0,
+                                onNull: 0,
+                              },
+                            },
+                            0,
+                          ],
+                        },
+                        endPage: {
+                          $ifNull: [
+                            {
+                              $convert: {
+                                input: "$ending.lessons.qaidah_quran.data.page",
+                                to: "double",
+                                onError: 0,
+                                onNull: 0,
+                              },
+                            },
+                            0,
+                          ],
+                        },
+                      },
+                      in: {
+                        $subtract: ["$$endPage", "$$startPage"],
+                      },
+                    },
+                  },
+                  line_progress: {
+                    $cond: [
+                      {
+                        $and: [
+                          "$ending.lessons.qaidah_quran.data.line",
+                          "$beginning.lessons.qaidah_quran.data.line",
+                        ],
+                      },
+                      {
+                        $let: {
+                          vars: {
+                            startLine: {
+                              $ifNull: [
+                                {
+                                  $convert: {
+                                    input:
+                                      "$beginning.lessons.qaidah_quran.data.line",
+                                    to: "double",
+                                    onError: 0,
+                                    onNull: 0,
+                                  },
+                                },
+                                0,
+                              ],
+                            },
+                            endLine: {
+                              $ifNull: [
+                                {
+                                  $convert: {
+                                    input:
+                                      "$ending.lessons.qaidah_quran.data.line",
+                                    to: "double",
+                                    onError: 0,
+                                    onNull: 0,
+                                  },
+                                },
+                                0,
+                              ],
+                            },
+                          },
+                          in: {
+                            $subtract: ["$$endLine", "$$startLine"],
+                          },
+                        },
+                      },
+                      null,
                     ],
-                    as: "id",
-                    cond: { $ne: ["$$id", null] },
+                  },
+                  level_display: {
+                    $cond: [
+                      {
+                        $and: [
+                          "$beginning.lessons.qaidah_quran.data.level",
+                          "$ending.lessons.qaidah_quran.data.level",
+                        ],
+                      },
+                      {
+                        $concat: [
+                          {
+                            $ifNull: [
+                              "$beginning.lessons.qaidah_quran.data.level",
+                              "N/A",
+                            ],
+                          },
+                          " - ",
+                          {
+                            $ifNull: [
+                              "$ending.lessons.qaidah_quran.data.level",
+                              "N/A",
+                            ],
+                          },
+                        ],
+                      },
+                      "N/A",
+                    ],
+                  },
+                  lesson_name_display: {
+                    $cond: [
+                      {
+                        $and: [
+                          "$beginning.lessons.qaidah_quran.data.lesson_name",
+                          "$ending.lessons.qaidah_quran.data.lesson_name",
+                        ],
+                      },
+                      {
+                        $concat: [
+                          {
+                            $ifNull: [
+                              "$beginning.lessons.qaidah_quran.data.lesson_name",
+                              "N/A",
+                            ],
+                          },
+                          " - ",
+                          {
+                            $ifNull: [
+                              "$ending.lessons.qaidah_quran.data.lesson_name",
+                              "N/A",
+                            ],
+                          },
+                        ],
+                      },
+                      "N/A",
+                    ],
                   },
                 },
+                null,
               ],
             },
+
+            // Islamic Studies progress (only for normal type)
+            islamic_studies_progress: {
+              $cond: [
+                {
+                  $and: [
+                    "$beginning",
+                    "$ending",
+                    "$beginning.lessons",
+                    "$ending.lessons",
+                    "$beginning.lessons.islamic_studies",
+                    "$ending.lessons.islamic_studies",
+                    { $ne: ["$ending.type", "gift_muslim"] },
+                  ],
+                },
+                {
+                  page_progress: {
+                    $subtract: [
+                      {
+                        $ifNull: [
+                          {
+                            $convert: {
+                              input: {
+                                $regexFind: {
+                                  input: {
+                                    $ifNull: [
+                                      "$ending.lessons.islamic_studies.page",
+                                      "0",
+                                    ],
+                                  },
+                                  regex: /^(\d+)/,
+                                },
+                              },
+                              to: "int",
+                              onError: 0,
+                              onNull: 0,
+                            },
+                          },
+                          0,
+                        ],
+                      },
+                      {
+                        $ifNull: [
+                          {
+                            $convert: {
+                              input: {
+                                $regexFind: {
+                                  input: {
+                                    $ifNull: [
+                                      "$beginning.lessons.islamic_studies.page",
+                                      "0",
+                                    ],
+                                  },
+                                  regex: /^(\d+)/,
+                                },
+                              },
+                              to: "int",
+                              onError: 0,
+                              onNull: 0,
+                            },
+                          },
+                          0,
+                        ],
+                      },
+                    ],
+                  },
+                  book_display: {
+                    $cond: [
+                      {
+                        $and: [
+                          "$beginning.lessons.islamic_studies.book",
+                          "$ending.lessons.islamic_studies.book",
+                        ],
+                      },
+                      {
+                        $concat: [
+                          {
+                            $ifNull: [
+                              "$beginning.lessons.islamic_studies.book",
+                              "N/A",
+                            ],
+                          },
+                          " - ",
+                          {
+                            $ifNull: [
+                              "$ending.lessons.islamic_studies.book",
+                              "N/A",
+                            ],
+                          },
+                        ],
+                      },
+                      "N/A",
+                    ],
+                  },
+                  lesson_name_display: {
+                    $cond: [
+                      {
+                        $and: [
+                          "$beginning.lessons.islamic_studies.lesson_name",
+                          "$ending.lessons.islamic_studies.lesson_name",
+                        ],
+                      },
+                      {
+                        $concat: [
+                          {
+                            $ifNull: [
+                              "$beginning.lessons.islamic_studies.lesson_name",
+                              "N/A",
+                            ],
+                          },
+                          " - ",
+                          {
+                            $ifNull: [
+                              "$ending.lessons.islamic_studies.lesson_name",
+                              "N/A",
+                            ],
+                          },
+                        ],
+                      },
+                      "N/A",
+                    ],
+                  },
+                },
+                null,
+              ],
+            },
+
+            // Dua/Surah progress (only for normal type)
+            dua_surah_progress: {
+              $cond: [
+                {
+                  $and: [
+                    "$beginning",
+                    "$ending",
+                    "$beginning.lessons",
+                    "$ending.lessons",
+                    "$beginning.lessons.dua_surah",
+                    "$ending.lessons.dua_surah",
+                    { $ne: ["$ending.type", "gift_muslim"] },
+                  ],
+                },
+                {
+                  page_progress: {
+                    $subtract: [
+                      {
+                        $ifNull: [
+                          {
+                            $convert: {
+                              input: {
+                                $regexFind: {
+                                  input: {
+                                    $ifNull: [
+                                      "$ending.lessons.dua_surah.page",
+                                      "0",
+                                    ],
+                                  },
+                                  regex: /^(\d+)/,
+                                },
+                              },
+                              to: "int",
+                              onError: 0,
+                              onNull: 0,
+                            },
+                          },
+                          0,
+                        ],
+                      },
+                      {
+                        $ifNull: [
+                          {
+                            $convert: {
+                              input: {
+                                $regexFind: {
+                                  input: {
+                                    $ifNull: [
+                                      "$beginning.lessons.dua_surah.page",
+                                      "0",
+                                    ],
+                                  },
+                                  regex: /^(\d+)/,
+                                },
+                              },
+                              to: "int",
+                              onError: 0,
+                              onNull: 0,
+                            },
+                          },
+                          0,
+                        ],
+                      },
+                    ],
+                  },
+                  target_progress: {
+                    $subtract: [
+                      {
+                        $ifNull: [
+                          {
+                            $convert: {
+                              input: {
+                                $regexFind: {
+                                  input: {
+                                    $ifNull: [
+                                      "$ending.lessons.dua_surah.target",
+                                      "0",
+                                    ],
+                                  },
+                                  regex: /^(\d+)/,
+                                },
+                              },
+                              to: "int",
+                              onError: 0,
+                              onNull: 0,
+                            },
+                          },
+                          0,
+                        ],
+                      },
+                      {
+                        $ifNull: [
+                          {
+                            $convert: {
+                              input: {
+                                $regexFind: {
+                                  input: {
+                                    $ifNull: [
+                                      "$beginning.lessons.dua_surah.target",
+                                      "0",
+                                    ],
+                                  },
+                                  regex: /^(\d+)/,
+                                },
+                              },
+                              to: "int",
+                              onError: 0,
+                              onNull: 0,
+                            },
+                          },
+                          0,
+                        ],
+                      },
+                    ],
+                  },
+                  dua_number_progress: {
+                    $subtract: [
+                      {
+                        $ifNull: [
+                          {
+                            $convert: {
+                              input: {
+                                $regexFind: {
+                                  input: {
+                                    $ifNull: [
+                                      "$ending.lessons.dua_surah.dua_number",
+                                      "0",
+                                    ],
+                                  },
+                                  regex: /^(\d+)/,
+                                },
+                              },
+                              to: "int",
+                              onError: 0,
+                              onNull: 0,
+                            },
+                          },
+                          0,
+                        ],
+                      },
+                      {
+                        $ifNull: [
+                          {
+                            $convert: {
+                              input: {
+                                $regexFind: {
+                                  input: {
+                                    $ifNull: [
+                                      "$beginning.lessons.dua_surah.dua_number",
+                                      "0",
+                                    ],
+                                  },
+                                  regex: /^(\d+)/,
+                                },
+                              },
+                              to: "int",
+                              onError: 0,
+                              onNull: 0,
+                            },
+                          },
+                          0,
+                        ],
+                      },
+                    ],
+                  },
+                  book_display: {
+                    $cond: [
+                      {
+                        $and: [
+                          "$beginning.lessons.dua_surah.book",
+                          "$ending.lessons.dua_surah.book",
+                        ],
+                      },
+                      {
+                        $concat: [
+                          {
+                            $ifNull: [
+                              "$beginning.lessons.dua_surah.book",
+                              "N/A",
+                            ],
+                          },
+                          " - ",
+                          {
+                            $ifNull: ["$ending.lessons.dua_surah.book", "N/A"],
+                          },
+                        ],
+                      },
+                      "N/A",
+                    ],
+                  },
+                  level_display: {
+                    $cond: [
+                      {
+                        $and: [
+                          "$beginning.lessons.dua_surah.level",
+                          "$ending.lessons.dua_surah.level",
+                        ],
+                      },
+                      {
+                        $concat: [
+                          {
+                            $ifNull: [
+                              "$beginning.lessons.dua_surah.level",
+                              "N/A",
+                            ],
+                          },
+                          " - ",
+                          {
+                            $ifNull: ["$ending.lessons.dua_surah.level", "N/A"],
+                          },
+                        ],
+                      },
+                      "N/A",
+                    ],
+                  },
+                  lesson_name_display: {
+                    $cond: [
+                      {
+                        $and: [
+                          "$beginning.lessons.dua_surah.lesson_name",
+                          "$ending.lessons.dua_surah.lesson_name",
+                        ],
+                      },
+                      {
+                        $concat: [
+                          {
+                            $ifNull: [
+                              "$beginning.lessons.dua_surah.lesson_name",
+                              "N/A",
+                            ],
+                          },
+                          " - ",
+                          {
+                            $ifNull: [
+                              "$ending.lessons.dua_surah.lesson_name",
+                              "N/A",
+                            ],
+                          },
+                        ],
+                      },
+                      "N/A",
+                    ],
+                  },
+                },
+                null,
+              ],
+            },
+
+            // Collect document IDs
+            processedDocumentIds: {
+              $filter: {
+                input: [
+                  { $toString: "$beginning.original_id" },
+                  { $toString: "$ending.original_id" },
+                ],
+                as: "id",
+                cond: { $ne: ["$$id", null] },
+              },
+            },
+            isUnpublished: { $literal: true },
           },
         },
 
@@ -397,7 +994,10 @@ module.exports = (lessonsCoveredCollection) => {
           },
         },
         {
-          $unwind: { path: "$student_info", preserveNullAndEmptyArrays: true },
+          $unwind: {
+            path: "$student_info",
+            preserveNullAndEmptyArrays: true,
+          },
         },
 
         {
@@ -408,37 +1008,42 @@ module.exports = (lessonsCoveredCollection) => {
             as: "class_info",
           },
         },
-        { $unwind: { path: "$class_info", preserveNullAndEmptyArrays: true } },
+        {
+          $unwind: {
+            path: "$class_info",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
 
         {
           $lookup: {
-            from: "subjects",
-            localField: "subject_id",
+            from: "teachers",
+            localField: "teacher_id",
             foreignField: "_id",
-            as: "subject_info",
+            as: "teacher_info",
           },
         },
         {
-          $unwind: { path: "$subject_info", preserveNullAndEmptyArrays: true },
+          $unwind: {
+            path: "$teacher_info",
+            preserveNullAndEmptyArrays: true,
+          },
         },
 
-        // Final projection
+        // Final projection - Use INCLUSION only
         {
           $project: {
-            student_id: 1,
             student_name: "$student_info.name",
-            processedDocumentIds: 1,
-            teacher_id: 1,
+            teacher_name: "$teacher_info.name",
+            class_name: "$class_info.class_name",
             month: 1,
             year: 1,
-            book_names: 1,
-            class_name: "$class_info.class_name",
-            subject_name: "$subject_info.subject_name",
-            qaidahProgress: 1,
-            duasSurahsProgress: 1,
-            islamicStudiesProgress: 1,
-            hasBeginning: 1,
-            hasEnding: 1,
+            type: 1,
+            qaidah_quran_progress: 1,
+            islamic_studies_progress: 1,
+            dua_surah_progress: 1,
+            processedDocumentIds: 1,
+            isUnpublished: 1,
           },
         },
       ];
@@ -446,8 +1051,10 @@ module.exports = (lessonsCoveredCollection) => {
       const result = await lessonsCoveredCollection
         .aggregate(pipeline)
         .toArray();
-      res.send(result);
+
+      res.send(result.length > 0 ? result : []);
     } catch (error) {
+      console.error("Monthly summary error:", error);
       res.status(500).send({
         error: "Internal server error",
         details: error.message,

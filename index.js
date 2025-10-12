@@ -243,7 +243,11 @@ async function run() {
     );
     app.use(
       "/lessons-covered",
-      createLessonsCoveredRouter(lessonsCoveredCollection)
+      createLessonsCoveredRouter(
+        lessonsCoveredCollection,
+        studentsCollection,
+        teachersCollection
+      )
     );
     app.use(
       "/merits",
