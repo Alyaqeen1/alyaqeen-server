@@ -470,9 +470,8 @@ async function run() {
           mode: "setup",
           payment_method_types: ["bacs_debit"],
           customer: customer.id, // ← CRITICAL: Link to customer
-          success_url:
-            "http://localhost:5173/dashboard/parent/payment-success?session_id={CHECKOUT_SESSION_ID}",
-          cancel_url: "http://localhost:5173/dashboard/parent/payment-cancel",
+          success_url: `${process.env.FRONTEND_URL}/dashboard/parent/payment-success`,
+          cancel_url: `${process.env.FRONTEND_URL}/dashboard/parent/payment-cancel`,
           metadata: {
             familyId: familyId,
             customerId: customer.id,
