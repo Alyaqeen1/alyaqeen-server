@@ -28,11 +28,170 @@ const createHolidaysRouter = require("./routes/holidays.routes");
 const createReviewsRouter = require("./routes/reviews.routes");
 
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+let familiesCollection;
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
 
+app.post(
+  "/webhook",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    const sig = req.headers["stripe-signature"];
+    let event;
+
+    try {
+      event = stripe.webhooks.constructEvent(
+        req.body,
+        sig,
+        process.env.STRIPE_WEBHOOK_SECRET
+      );
+    } catch (err) {
+      console.log(`❌ Webhook signature verification failed.`, err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    try {
+      switch (event.type) {
+        case "checkout.session.completed":
+          const checkoutSession = event.data.object;
+
+          // Get the setup intent ID from the checkout session
+          const setupIntentId = checkoutSession.setup_intent;
+
+          if (setupIntentId && checkoutSession.metadata.familyId) {
+            // Retrieve the setup intent to get payment method
+            const setupIntent = await stripe.setupIntents.retrieve(
+              setupIntentId
+            );
+
+            if (setupIntent.status === "succeeded") {
+              await processSuccessfulSetupIntent(
+                setupIntent,
+                checkoutSession.metadata.familyId
+              );
+            }
+          }
+          break;
+
+        // ✅ ADD MANDATE STATUS TRACKING
+        case "mandate.updated":
+          const mandate = event.data.object;
+
+          await handleMandateUpdate(mandate);
+          break;
+
+        case "setup_intent.succeeded":
+          break;
+
+        default:
+          console.log(`🔵 Unhandled event type ${event.type}`);
+      }
+
+      res.json({ received: true });
+    } catch (error) {
+      console.error("❌ Webhook processing error:", error);
+      res.status(500).json({ error: "Webhook processing failed" });
+    }
+  }
+);
+
+// Separate function to process successful setup
+async function processSuccessfulSetupIntent(setupIntent, familyId) {
+  try {
+    if (!familiesCollection) {
+      return;
+    }
+
+    // Get the payment method details
+    const paymentMethod = await stripe.paymentMethods.retrieve(
+      setupIntent.payment_method
+    );
+
+    if (paymentMethod.type === "bacs_debit") {
+      // ✅ GET MANDATE INFORMATION
+      const mandateId = setupIntent.mandate;
+      let mandateStatus = "pending";
+
+      if (mandateId) {
+        try {
+          const mandate = await stripe.mandates.retrieve(mandateId);
+          mandateStatus = mandate.status;
+        } catch (error) {
+          console.log("❌ Could not retrieve mandate:", error.message);
+        }
+      }
+
+      const result = await familiesCollection.updateOne(
+        { _id: new ObjectId(familyId) },
+        {
+          $set: {
+            directDebit: {
+              stripePaymentMethodId: paymentMethod.id,
+              stripeSetupIntentId: setupIntent.id,
+              stripeMandateId: mandateId, // ✅ STORE MANDATE ID
+              bankName: paymentMethod.bacs_debit?.bank_name || "Unknown Bank",
+              last4: paymentMethod.bacs_debit?.last4 || "****",
+              setupDate: new Date(),
+              status: mandateStatus === "active" ? "active" : "pending", // ✅ SET STATUS BASED ON MANDATE
+              mandateStatus: mandateStatus, // ✅ STORE MANDATE STATUS
+              activeDate: mandateStatus === "active" ? new Date() : null, // ✅ SET ACTIVE DATE IF ACTIVE
+            },
+          },
+        }
+      );
+
+      // Verify the update worked
+      const updatedFamily = await familiesCollection.findOne({
+        _id: new ObjectId(familyId),
+      });
+    } else {
+      console.log("❌ Payment method is not bacs_debit:", paymentMethod.type);
+    }
+  } catch (error) {
+    console.error("❌ Error processing setup intent:", error);
+  }
+}
+
+// ✅ NEW FUNCTION: Handle mandate status updates
+async function handleMandateUpdate(mandate) {
+  try {
+    if (!familiesCollection) {
+      return;
+    }
+
+    // Find family by mandate ID
+    const family = await familiesCollection.findOne({
+      "directDebit.stripeMandateId": mandate.id,
+    });
+
+    if (!family) {
+      return;
+    }
+
+    const updateData = {
+      "directDebit.mandateStatus": mandate.status,
+    };
+
+    // If mandate becomes active, update the main status and set active date
+    if (mandate.status === "active") {
+      updateData["directDebit.status"] = "active";
+      updateData["directDebit.activeDate"] = new Date();
+    }
+    // If mandate is revoked or failed, update status accordingly
+    else if (mandate.status === "inactive" || mandate.status === "revoked") {
+      updateData["directDebit.status"] = "cancelled";
+    }
+
+    const result = await familiesCollection.updateOne(
+      { _id: family._id },
+      { $set: updateData }
+    );
+  } catch (error) {
+    console.error("❌ Error handling mandate update:", error);
+  }
+}
 //Must remove "/" from your production URL
 app.use(
   cors({
@@ -87,7 +246,7 @@ async function run() {
     // collections
     const usersCollection = client.db("alyaqeenDb").collection("users");
     const studentsCollection = client.db("alyaqeenDb").collection("students");
-    const familiesCollection = client.db("alyaqeenDb").collection("families");
+    familiesCollection = client.db("alyaqeenDb").collection("families");
     const feesCollection = client.db("alyaqeenDb").collection("fees");
     const teachersCollection = client.db("alyaqeenDb").collection("teachers");
     const prayerTimesCollection = client
@@ -270,6 +429,67 @@ async function run() {
 
       res.send({ clientSecret: paymentIntent.client_secret });
     });
+
+    // ✅ Route to create SetupIntent for BACS Direct Debit
+    app.post("/create-bacs-checkout-session", async (req, res) => {
+      try {
+        const { email, familyId, name } = req.body; // ✅ Get name from request body
+
+        // ✅ STEP 1: Create or retrieve Stripe Customer
+        let customer;
+
+        // Check if customer already exists by email
+        const existingCustomers = await stripe.customers.list({
+          email: email,
+          limit: 1,
+        });
+
+        if (existingCustomers.data.length > 0) {
+          customer = existingCustomers.data[0];
+
+          // ✅ UPDATE: If customer exists but name is different, update it
+          if (name && customer.name !== name) {
+            customer = await stripe.customers.update(customer.id, {
+              name: name,
+            });
+          }
+        } else {
+          // Create new customer WITH ACTUAL NAME
+          customer = await stripe.customers.create({
+            email: email,
+            name: name, // ✅ Use the actual name from checkout form
+            metadata: {
+              familyId: familyId,
+              source: "bacs_direct_debit_setup",
+            },
+          });
+        }
+
+        // ✅ STEP 2: Create Checkout Session WITH customer ID
+        const session = await stripe.checkout.sessions.create({
+          mode: "setup",
+          payment_method_types: ["bacs_debit"],
+          customer: customer.id, // ← CRITICAL: Link to customer
+          success_url:
+            "http://localhost:5173/dashboard/parent/payment-success?session_id={CHECKOUT_SESSION_ID}",
+          cancel_url: "http://localhost:5173/dashboard/parent/payment-cancel",
+          metadata: {
+            familyId: familyId,
+            customerId: customer.id,
+          },
+        });
+
+        res.json({
+          url: session.url,
+          sessionId: session.id,
+          customerId: customer.id,
+        });
+      } catch (error) {
+        console.error("Stripe BACS Checkout Error:", error.message);
+        res.status(500).json({ error: error.message });
+      }
+    });
+    // In your backend (server.js)
 
     // Connect the client to the server	(optional starting in v4.7)
     // await client.connect();

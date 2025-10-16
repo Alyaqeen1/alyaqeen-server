@@ -15,7 +15,38 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
       res.status(500).send({ message: "Server error" });
     }
   });
+  // In your families.routes.js
+  router.get("/check-direct-debit-setup", async (req, res) => {
+    try {
+      const { familyId } = req.query;
 
+      if (!familyId) {
+        return res.status(400).json({ error: "Family ID is required" });
+      }
+
+      const family = await familiesCollection.findOne({
+        _id: new ObjectId(familyId),
+      });
+
+      if (!family) {
+        return res.status(404).json({ error: "Family not found" });
+      }
+
+      // ✅ FIX: Make sure hasDirectDebit is calculated correctly
+      const hasDirectDebit =
+        family.directDebit &&
+        (family.directDebit.status === "active" ||
+          family.directDebit.status === "pending");
+
+      res.json({
+        hasDirectDebit: hasDirectDebit, // ✅ This must be true for pending status
+        directDebit: hasDirectDebit ? family.directDebit : null,
+      });
+    } catch (error) {
+      console.error("Error checking Direct Debit setup:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
   router.get("/:id", async (req, res) => {
     const id = req.params.id;
     if (!ObjectId.isValid(id)) {
@@ -892,6 +923,32 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
     } catch (err) {
       console.error("Error in unpaid-families route:", err);
       res.status(500).send({ error: "Server error" });
+    }
+  });
+
+  // ✅ Cancel Direct Debit
+  router.patch("/cancel-direct-debit", async (req, res) => {
+    try {
+      const { familyId } = req.body;
+
+      const result = await familiesCollection.updateOne(
+        { _id: new ObjectId(familyId) },
+        {
+          $set: {
+            "directDebit.status": "cancelled",
+            "directDebit.mandateStatus": "cancelled", // Add this line
+            "directDebit.cancelledAt": new Date(),
+          },
+        }
+      );
+
+      res.json({
+        success: true,
+        modifiedCount: result.modifiedCount,
+      });
+    } catch (error) {
+      console.error("Error cancelling Direct Debit:", error);
+      res.status(500).json({ error: error.message });
     }
   });
 
