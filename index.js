@@ -29,6 +29,7 @@ const createReviewsRouter = require("./routes/reviews.routes");
 
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 let familiesCollection;
+let feesCollection;
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -47,6 +48,7 @@ app.post(
         sig,
         process.env.STRIPE_WEBHOOK_SECRET
       );
+      console.log("✅ Webhook verified - Event type:", event.type);
     } catch (err) {
       console.log(`❌ Webhook signature verification failed.`, err.message);
       return res.status(400).send(`Webhook Error: ${err.message}`);
@@ -82,6 +84,17 @@ app.post(
           await handleMandateUpdate(mandate);
           break;
 
+        // ✅ ADD PAYMENT INTENT SUCCESS HANDLING
+        case "payment_intent.succeeded":
+          await handleSuccessfulDirectDebitPayment(event.data.object);
+          break;
+
+        // ✅ ADD PAYMENT INTENT FAILURE HANDLING
+        case "payment_intent.payment_failed":
+          console.log("❌ Payment intent failed:", event.data.object.id);
+          await handleFailedDirectDebitPayment(event.data.object);
+          break;
+
         case "setup_intent.succeeded":
           break;
 
@@ -101,6 +114,9 @@ app.post(
 async function processSuccessfulSetupIntent(setupIntent, familyId) {
   try {
     if (!familiesCollection) {
+      console.log(
+        "❌ Database not ready yet - familiesCollection is undefined"
+      );
       return;
     }
 
@@ -108,7 +124,6 @@ async function processSuccessfulSetupIntent(setupIntent, familyId) {
     const paymentMethod = await stripe.paymentMethods.retrieve(
       setupIntent.payment_method
     );
-
     if (paymentMethod.type === "bacs_debit") {
       // ✅ GET MANDATE INFORMATION
       const mandateId = setupIntent.mandate;
@@ -131,6 +146,7 @@ async function processSuccessfulSetupIntent(setupIntent, familyId) {
               stripePaymentMethodId: paymentMethod.id,
               stripeSetupIntentId: setupIntent.id,
               stripeMandateId: mandateId, // ✅ STORE MANDATE ID
+              stripeCustomerId: setupIntent.customer, // ✅ STORE CUSTOMER ID FOR PAYMENTS
               bankName: paymentMethod.bacs_debit?.bank_name || "Unknown Bank",
               last4: paymentMethod.bacs_debit?.last4 || "****",
               setupDate: new Date(),
@@ -158,6 +174,7 @@ async function processSuccessfulSetupIntent(setupIntent, familyId) {
 async function handleMandateUpdate(mandate) {
   try {
     if (!familiesCollection) {
+      console.log("❌ Database not ready - familiesCollection is undefined");
       return;
     }
 
@@ -167,6 +184,7 @@ async function handleMandateUpdate(mandate) {
     });
 
     if (!family) {
+      console.log("❌ No family found with mandate ID:", mandate.id);
       return;
     }
 
@@ -182,6 +200,7 @@ async function handleMandateUpdate(mandate) {
     // If mandate is revoked or failed, update status accordingly
     else if (mandate.status === "inactive" || mandate.status === "revoked") {
       updateData["directDebit.status"] = "cancelled";
+      console.log("❌ Mandate is inactive/revoked - Direct Debit cancelled");
     }
 
     const result = await familiesCollection.updateOne(
@@ -190,6 +209,80 @@ async function handleMandateUpdate(mandate) {
     );
   } catch (error) {
     console.error("❌ Error handling mandate update:", error);
+  }
+}
+
+// ✅ NEW FUNCTION: Handle successful Direct Debit payments
+async function handleSuccessfulDirectDebitPayment(paymentIntent) {
+  try {
+    if (!feesCollection) {
+      console.log("❌ Database not ready - feesCollection is undefined");
+      return;
+    }
+
+    const { familyId, month, year, description } = paymentIntent.metadata;
+
+    // Update fee status to 'paid' if not already done
+    const result = await feesCollection.updateOne(
+      { stripePaymentIntentId: paymentIntent.id },
+      {
+        $set: {
+          status: "paid",
+          "payments.0.status": "succeeded",
+          updatedAt: new Date(),
+        },
+      }
+    );
+
+    if (result.modifiedCount > 0) {
+      console.log(
+        `✅ Payment ${paymentIntent.id} marked as successful in database`
+      );
+    } else {
+      console.log(
+        `ℹ️ Payment ${paymentIntent.id} already marked as successful`
+      );
+    }
+  } catch (error) {
+    console.error("❌ Error handling successful payment:", error);
+  }
+}
+
+// ✅ NEW FUNCTION: Handle failed Direct Debit payments
+async function handleFailedDirectDebitPayment(paymentIntent) {
+  try {
+    console.log("❌ Processing failed Direct Debit payment:", paymentIntent.id);
+
+    if (!feesCollection) {
+      console.log("❌ Database not ready - feesCollection is undefined");
+      return;
+    }
+
+    const { familyId } = paymentIntent.metadata;
+
+    // Update fee status to 'failed'
+    const result = await feesCollection.updateOne(
+      { stripePaymentIntentId: paymentIntent.id },
+      {
+        $set: {
+          status: "failed",
+          "payments.0.status": "failed",
+          "payments.0.failure_reason":
+            paymentIntent.last_payment_error?.message,
+          updatedAt: new Date(),
+        },
+      }
+    );
+
+    if (result.modifiedCount > 0) {
+      console.log(
+        `❌ Payment ${paymentIntent.id} marked as failed in database`
+      );
+    } else {
+      console.log(`ℹ️ Payment ${paymentIntent.id} already marked as failed`);
+    }
+  } catch (error) {
+    console.error("❌ Error handling failed payment:", error);
   }
 }
 //Must remove "/" from your production URL
@@ -247,7 +340,7 @@ async function run() {
     const usersCollection = client.db("alyaqeenDb").collection("users");
     const studentsCollection = client.db("alyaqeenDb").collection("students");
     familiesCollection = client.db("alyaqeenDb").collection("families");
-    const feesCollection = client.db("alyaqeenDb").collection("fees");
+    feesCollection = client.db("alyaqeenDb").collection("fees");
     const teachersCollection = client.db("alyaqeenDb").collection("teachers");
     const prayerTimesCollection = client
       .db("alyaqeenDb")

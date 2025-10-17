@@ -2,7 +2,7 @@ const express = require("express");
 const { ObjectId } = require("mongodb");
 const studentEnrichmentStages = require("../config/studentEnrichmentStages");
 const router = express.Router();
-
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 module.exports = (familiesCollection, studentsCollection, feesCollection) => {
   router.get("/", async (req, res) => {
     try {
@@ -47,6 +47,196 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
       res.status(500).json({ error: error.message });
     }
   });
+  // ✅ Get Direct Debit families with fee payment data
+  router.get("/admin/direct-debit-families-with-fees", async (req, res) => {
+    try {
+      const result = await familiesCollection
+        .aggregate([
+          // 1. Only include families with Direct Debit setup
+          {
+            $match: {
+              directDebit: { $exists: true },
+            },
+          },
+          // 2. Convert _id to string for fee matching
+          {
+            $addFields: {
+              familyIdString: { $toString: "$_id" },
+            },
+          },
+          // 3. Lookup student documents
+          {
+            $lookup: {
+              from: studentsCollection.collectionName,
+              let: { childUids: "$children" },
+              pipeline: [
+                {
+                  $match: {
+                    $expr: {
+                      $and: [
+                        { $in: ["$uid", "$$childUids"] },
+                        { $in: ["$status", ["enrolled", "hold", "approved"]] },
+                      ],
+                    },
+                  },
+                },
+                ...studentEnrichmentStages(),
+              ],
+              as: "childrenDocs",
+            },
+          },
+          // 4. Lookup fee payments
+          {
+            $lookup: {
+              from: feesCollection.collectionName,
+              localField: "familyIdString",
+              foreignField: "familyId",
+              as: "feePayments",
+            },
+          },
+          // 5. Calculate statistics
+          {
+            $addFields: {
+              totalPaidAmount: {
+                $sum: {
+                  $map: {
+                    input: {
+                      $filter: {
+                        input: "$feePayments",
+                        as: "fee",
+                        cond: { $eq: ["$$fee.status", "paid"] },
+                      },
+                    },
+                    as: "paidFee",
+                    in: "$$paidFee.amount",
+                  },
+                },
+              },
+              totalPendingAmount: {
+                $sum: {
+                  $map: {
+                    input: {
+                      $filter: {
+                        input: "$feePayments",
+                        as: "fee",
+                        cond: { $ne: ["$$fee.status", "paid"] },
+                      },
+                    },
+                    as: "pendingFee",
+                    in: "$$pendingFee.amount",
+                  },
+                },
+              },
+            },
+          },
+          {
+            $sort: {
+              "directDebit.status": 1,
+              name: 1,
+            },
+          },
+          // 6. Remove temporary field
+          { $unset: "familyIdString" },
+        ])
+        .toArray();
+
+      // Calculate statistics
+      const stats = {
+        total: result.length,
+        active: result.filter((f) => f.directDebit?.status === "active").length,
+        pending: result.filter((f) => f.directDebit?.status === "pending")
+          .length,
+        cancelled: result.filter((f) => f.directDebit?.status === "cancelled")
+          .length,
+      };
+
+      res.json({
+        success: true,
+        count: result.length,
+        stats: stats,
+        families: result,
+      });
+    } catch (error) {
+      console.error("Admin Direct Debit with fees fetch error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+  // ✅ Get specific family Direct Debit details
+  // router.get("/admin/direct-debit-family/:id", async (req, res) => {
+  //   try {
+  //     const { id } = req.params;
+
+  //     if (!ObjectId.isValid(id)) {
+  //       return res.status(400).json({ error: "Invalid family ID" });
+  //     }
+
+  //     const family = await familiesCollection
+  //       .aggregate([
+  //         {
+  //           $match: { _id: new ObjectId(id) },
+  //         },
+  //         {
+  //           $lookup: {
+  //             from: studentsCollection.collectionName,
+  //             localField: "children",
+  //             foreignField: "uid",
+  //             as: "childrenDocs",
+  //           },
+  //         },
+  //         {
+  //           $lookup: {
+  //             from: feesCollection.collectionName,
+  //             let: { familyId: { $toString: "$_id" } },
+  //             pipeline: [
+  //               {
+  //                 $match: {
+  //                   $expr: { $eq: ["$familyId", "$$familyId"] },
+  //                   status: "paid",
+  //                 },
+  //               },
+  //               { $sort: { paymentDate: -1 } },
+  //               { $limit: 5 }, // Last 5 payments
+  //             ],
+  //             as: "recentPayments",
+  //           },
+  //         },
+  //         {
+  //           $project: {
+  //             _id: 1,
+  //             name: 1,
+  //             email: 1,
+  //             phone: 1,
+  //             fatherName: 1,
+  //             discount: 1,
+  //             feeChoice: 1,
+  //             createdAt: 1,
+  //             updatedAt: 1,
+  //             "childrenDocs._id": 1,
+  //             "childrenDocs.name": 1,
+  //             "childrenDocs.status": 1,
+  //             "childrenDocs.activity": 1,
+  //             "childrenDocs.monthly_fee": 1,
+  //             directDebit: 1,
+  //             recentPayments: 1,
+  //           },
+  //         },
+  //       ])
+  //       .toArray();
+
+  //     if (family.length === 0) {
+  //       return res.status(404).json({ error: "Family not found" });
+  //     }
+
+  //     res.json({
+  //       success: true,
+  //       family: family[0],
+  //     });
+  //   } catch (error) {
+  //     console.error("Admin Direct Debit family details error:", error);
+  //     res.status(500).json({ error: error.message });
+  //   }
+  // });
+
   router.get("/:id", async (req, res) => {
     const id = req.params.id;
     if (!ObjectId.isValid(id)) {
@@ -485,47 +675,6 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
     }
   });
 
-  // router.patch("/update-by-admin/:id", async (req, res) => {
-  //   try {
-  //     const id = req.params.id;
-  //     if (!ObjectId.isValid(id)) {
-  //       return res.status(400).send({ error: "Invalid ID format" });
-  //     }
-  //     const query = { _id: new ObjectId(id) };
-
-  //     const { name, children, discount, newlyAddedChildren = [] } = req.body;
-
-  //     if (!Array.isArray(children)) {
-  //       return res.status(400).json({ error: "Invalid children array" });
-  //     }
-
-  //     const updatedDoc = {
-  //       $set: {
-  //         name,
-  //         discount: Number(discount) || 0,
-  //         children,
-  //         updatedAt: new Date(),
-  //       },
-  //     };
-
-  //     const familyResult = await familiesCollection.updateOne(
-  //       query,
-  //       updatedDoc
-  //     );
-
-  //     // ✅ Only update newly added students to "enrolled"
-  //     if (newlyAddedChildren.length > 0) {
-  //       await studentsCollection.updateMany(
-  //         { uid: { $in: newlyAddedChildren } },
-  //         { $set: { status: "enrolled" } }
-  //       );
-  //     }
-
-  //     res.send({ success: true, modifiedCount: familyResult.modifiedCount });
-  //   } catch (error) {
-  //     res.status(500).send({ error: "Failed to update family" });
-  //   }
-  // });
   router.get("/with-children/enrolled-fee-summary", async (req, res) => {
     try {
       const result = await familiesCollection
@@ -951,6 +1100,74 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
       res.status(500).json({ error: error.message });
     }
   });
+  // ✅ Manual Direct Debit payment collection (for admin)
+  router.post("/admin/collect-payment", async (req, res) => {
+    try {
+      const { familyId, amount, description, month, year } = req.body;
 
+      if (!familyId || !amount) {
+        return res.status(400).json({
+          error: "Family ID and amount are required",
+        });
+      }
+
+      // Get family with Direct Debit details
+      const family = await familiesCollection.findOne({
+        _id: new ObjectId(familyId),
+        "directDebit.status": "active",
+        "directDebit.mandateStatus": "active",
+      });
+
+      if (!family) {
+        return res.status(400).json({
+          error: "Family not found or Direct Debit not active",
+        });
+      }
+
+      // ✅ ACTUAL STRIPE PAYMENT PROCESSING
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: Math.round(amount * 100), // Convert to pence
+        currency: "gbp",
+        customer: family.directDebit.stripeCustomerId,
+        payment_method: family.directDebit.stripePaymentMethodId,
+        mandate: family.directDebit.stripeMandateId,
+        confirm: true,
+        off_session: true,
+        metadata: {
+          familyId: familyId,
+          familyName: family.name,
+          description: description || "Direct Debit payment",
+          month: month,
+          year: year,
+        },
+      });
+
+      // ✅ REMOVED: Don't create fee document here
+      // ✅ JUST return the payment intent info to frontend
+
+      res.json({
+        success: true,
+        message: `Payment of £${amount} collected from ${family.name}`,
+        familyName: family.name,
+        amount: amount,
+        description: description,
+        paymentIntentId: paymentIntent.id,
+        status: paymentIntent.status,
+      });
+    } catch (error) {
+      console.error("Direct Debit payment error:", error);
+
+      // Handle specific Stripe errors
+      if (error.type === "StripeCardError") {
+        return res.status(400).json({
+          error: `Payment failed: ${error.message}`,
+        });
+      }
+
+      res.status(500).json({
+        error: error.message,
+      });
+    }
+  });
   return router;
 };
