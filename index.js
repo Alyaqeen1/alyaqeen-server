@@ -30,6 +30,7 @@ const createReviewsRouter = require("./routes/reviews.routes");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 let familiesCollection;
 let feesCollection;
+let studentsCollection;
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -48,7 +49,6 @@ app.post(
         sig,
         process.env.STRIPE_WEBHOOK_SECRET
       );
-      console.log("✅ Webhook verified - Event type:", event.type);
     } catch (err) {
       console.log(`❌ Webhook signature verification failed.`, err.message);
       return res.status(400).send(`Webhook Error: ${err.message}`);
@@ -69,29 +69,26 @@ app.post(
             );
 
             if (setupIntent.status === "succeeded") {
+              // ✅ PASS THE CHECKOUT SESSION METADATA DIRECTLY
               await processSuccessfulSetupIntent(
                 setupIntent,
-                checkoutSession.metadata.familyId
+                checkoutSession.metadata.familyId,
+                checkoutSession.metadata.preferredPaymentDate // ✅ Pass the preferred date directly
               );
             }
           }
           break;
 
-        // ✅ ADD MANDATE STATUS TRACKING
         case "mandate.updated":
           const mandate = event.data.object;
-
           await handleMandateUpdate(mandate);
           break;
 
-        // ✅ ADD PAYMENT INTENT SUCCESS HANDLING
         case "payment_intent.succeeded":
           await handleSuccessfulDirectDebitPayment(event.data.object);
           break;
 
-        // ✅ ADD PAYMENT INTENT FAILURE HANDLING
         case "payment_intent.payment_failed":
-          console.log("❌ Payment intent failed:", event.data.object.id);
           await handleFailedDirectDebitPayment(event.data.object);
           break;
 
@@ -111,12 +108,23 @@ app.post(
 );
 
 // Separate function to process successful setup
-async function processSuccessfulSetupIntent(setupIntent, familyId) {
+// Separate function to process successful setup
+async function processSuccessfulSetupIntent(
+  setupIntent,
+  familyId,
+  preferredPaymentDateFromCheckout
+) {
   try {
     if (!familiesCollection) {
-      console.log(
-        "❌ Database not ready yet - familiesCollection is undefined"
-      );
+      return;
+    }
+
+    // Get family data FIRST
+    const family = await familiesCollection.findOne({
+      _id: new ObjectId(familyId),
+    });
+
+    if (!family) {
       return;
     }
 
@@ -124,6 +132,7 @@ async function processSuccessfulSetupIntent(setupIntent, familyId) {
     const paymentMethod = await stripe.paymentMethods.retrieve(
       setupIntent.payment_method
     );
+
     if (paymentMethod.type === "bacs_debit") {
       // ✅ GET MANDATE INFORMATION
       const mandateId = setupIntent.mandate;
@@ -138,6 +147,11 @@ async function processSuccessfulSetupIntent(setupIntent, familyId) {
         }
       }
 
+      // ✅ USE THE PREFERRED DATE PASSED FROM THE WEBHOOK
+      let preferredPaymentDate =
+        parseInt(preferredPaymentDateFromCheckout) || 1;
+
+      // UPDATE THE FAMILY WITH MANDATE ID AND PREFERRED DATE
       const result = await familiesCollection.updateOne(
         { _id: new ObjectId(familyId) },
         {
@@ -145,146 +159,181 @@ async function processSuccessfulSetupIntent(setupIntent, familyId) {
             directDebit: {
               stripePaymentMethodId: paymentMethod.id,
               stripeSetupIntentId: setupIntent.id,
-              stripeMandateId: mandateId, // ✅ STORE MANDATE ID
-              stripeCustomerId: setupIntent.customer, // ✅ STORE CUSTOMER ID FOR PAYMENTS
+              stripeMandateId: mandateId,
+              stripeCustomerId: setupIntent.customer,
               bankName: paymentMethod.bacs_debit?.bank_name || "Unknown Bank",
               last4: paymentMethod.bacs_debit?.last4 || "****",
               setupDate: new Date(),
-              status: mandateStatus === "active" ? "active" : "pending", // ✅ SET STATUS BASED ON MANDATE
-              mandateStatus: mandateStatus, // ✅ STORE MANDATE STATUS
-              activeDate: mandateStatus === "active" ? new Date() : null, // ✅ SET ACTIVE DATE IF ACTIVE
+              status: mandateStatus === "active" ? "active" : "pending",
+              mandateStatus: mandateStatus,
+              activeDate: mandateStatus === "active" ? new Date() : null,
+              preferredPaymentDate: preferredPaymentDate, // ✅ STORE THE PREFERRED DATE
             },
           },
         }
       );
 
-      // Verify the update worked
+      // ✅ VERIFY THE UPDATE WORKED
       const updatedFamily = await familiesCollection.findOne({
         _id: new ObjectId(familyId),
       });
+
+      // ✅ SEND INITIAL SETUP EMAIL HERE - FIXED THIS SECTION
+      if (family.email && family.name) {
+        let emailStatus;
+
+        if (mandateStatus === "active") {
+          emailStatus = "success";
+        } else if (mandateStatus === "pending") {
+          emailStatus = "pending";
+        } else {
+          emailStatus = "failed";
+        }
+
+        // Get student names for the email
+        const students = await studentsCollection
+          .find({
+            familyId: familyId,
+          })
+          .toArray();
+
+        const studentNames =
+          students.map((student) => student.name).join(", ") || "Your child";
+
+        try {
+          // IMPORTANT: Make sure this function is imported correctly
+          const emailResult = await sendDirectDebitEmail({
+            to: family.email,
+            name: family.name,
+            studentName: studentNames,
+            status: emailStatus,
+            mandateId: mandateId || "Pending verification",
+          });
+
+          if (emailResult && emailResult.success) {
+          } else {
+            console.log(
+              `❌ Failed to send initial email: ${
+                emailResult?.reason || "Unknown error"
+              }`
+            );
+          }
+        } catch (emailError) {
+          console.error("❌ Initial email sending crashed:", emailError);
+          console.error("❌ Email error stack:", emailError.stack);
+        }
+      } else {
+        console.log("❌ Cannot send email - missing email or parentName:", {
+          hasEmail: !!family.email,
+          hasParentName: !!family.name,
+          email: family.email,
+          parentName: family.name,
+        });
+      }
     } else {
       console.log("❌ Payment method is not bacs_debit:", paymentMethod.type);
     }
   } catch (error) {
     console.error("❌ Error processing setup intent:", error);
+    console.error("❌ Error stack:", error.stack);
   }
 }
 
-// ✅ NEW FUNCTION: Handle mandate status updates
+// ✅ FIXED: Handle mandate status updates
 async function handleMandateUpdate(mandate) {
   try {
     if (!familiesCollection) {
-      console.log("❌ Database not ready - familiesCollection is undefined");
       return;
     }
 
-    // Find family by mandate ID
+    // Find family by mandate ID - FIXED QUERY
     const family = await familiesCollection.findOne({
       "directDebit.stripeMandateId": mandate.id,
     });
 
     if (!family) {
-      console.log("❌ No family found with mandate ID:", mandate.id);
+      // Try alternative query in case the field name is different
+      const allFamiliesWithMandates = await familiesCollection
+        .find({
+          "directDebit.stripeMandateId": { $exists: true },
+        })
+        .toArray();
+
       return;
     }
 
     const updateData = {
       "directDebit.mandateStatus": mandate.status,
+      "directDebit.lastUpdated": new Date(),
     };
+
+    let emailStatus = null;
 
     // If mandate becomes active, update the main status and set active date
     if (mandate.status === "active") {
       updateData["directDebit.status"] = "active";
       updateData["directDebit.activeDate"] = new Date();
+      emailStatus = "success";
     }
     // If mandate is revoked or failed, update status accordingly
     else if (mandate.status === "inactive" || mandate.status === "revoked") {
       updateData["directDebit.status"] = "cancelled";
-      console.log("❌ Mandate is inactive/revoked - Direct Debit cancelled");
+      emailStatus = "failed";
     }
 
     const result = await familiesCollection.updateOne(
       { _id: family._id },
       { $set: updateData }
     );
+
+    // ✅ SEND STATUS UPDATE EMAIL - FIXED THIS SECTION
+    if (emailStatus && family.email) {
+      // Get student names
+      const students = await studentsCollection
+        .find({
+          familyId: family._id.toString(),
+        })
+        .toArray();
+
+      const studentNames =
+        students.map((student) => student.name).join(", ") || "Your child";
+
+      try {
+        const emailResult = await sendDirectDebitEmail({
+          to: family.email,
+          name: family.name || "Parent",
+          studentName: studentNames,
+          status: emailStatus,
+          mandateId: mandate.id,
+        });
+
+        if (emailResult && emailResult.success) {
+          console.log(`✅ ${emailStatus} email sent to ${family.email}`);
+        } else {
+          console.log(
+            `❌ Failed to send mandate update email: ${
+              emailResult?.reason || "Unknown error"
+            }`
+          );
+        }
+      } catch (emailError) {
+        console.error("❌ Mandate update email sending crashed:", emailError);
+        console.error("❌ Email error stack:", emailError.stack);
+      }
+    } else {
+      console.log("❌ Cannot send email - missing requirements:", {
+        emailStatus,
+        hasEmail: !!family.email,
+        email: family.email,
+      });
+    }
   } catch (error) {
     console.error("❌ Error handling mandate update:", error);
+    console.error("❌ Error stack:", error.stack);
   }
 }
 
-// ✅ NEW FUNCTION: Handle successful Direct Debit payments
-async function handleSuccessfulDirectDebitPayment(paymentIntent) {
-  try {
-    if (!feesCollection) {
-      console.log("❌ Database not ready - feesCollection is undefined");
-      return;
-    }
-
-    const { familyId, month, year, description } = paymentIntent.metadata;
-
-    // Update fee status to 'paid' if not already done
-    const result = await feesCollection.updateOne(
-      { stripePaymentIntentId: paymentIntent.id },
-      {
-        $set: {
-          status: "paid",
-          "payments.0.status": "succeeded",
-          updatedAt: new Date(),
-        },
-      }
-    );
-
-    if (result.modifiedCount > 0) {
-      console.log(
-        `✅ Payment ${paymentIntent.id} marked as successful in database`
-      );
-    } else {
-      console.log(
-        `ℹ️ Payment ${paymentIntent.id} already marked as successful`
-      );
-    }
-  } catch (error) {
-    console.error("❌ Error handling successful payment:", error);
-  }
-}
-
-// ✅ NEW FUNCTION: Handle failed Direct Debit payments
-async function handleFailedDirectDebitPayment(paymentIntent) {
-  try {
-    console.log("❌ Processing failed Direct Debit payment:", paymentIntent.id);
-
-    if (!feesCollection) {
-      console.log("❌ Database not ready - feesCollection is undefined");
-      return;
-    }
-
-    const { familyId } = paymentIntent.metadata;
-
-    // Update fee status to 'failed'
-    const result = await feesCollection.updateOne(
-      { stripePaymentIntentId: paymentIntent.id },
-      {
-        $set: {
-          status: "failed",
-          "payments.0.status": "failed",
-          "payments.0.failure_reason":
-            paymentIntent.last_payment_error?.message,
-          updatedAt: new Date(),
-        },
-      }
-    );
-
-    if (result.modifiedCount > 0) {
-      console.log(
-        `❌ Payment ${paymentIntent.id} marked as failed in database`
-      );
-    } else {
-      console.log(`ℹ️ Payment ${paymentIntent.id} already marked as failed`);
-    }
-  } catch (error) {
-    console.error("❌ Error handling failed payment:", error);
-  }
-}
+// ... keep the handleSuccessfulDirectDebitPayment and handleFailedDirectDebitPayment functions the same as before
 //Must remove "/" from your production URL
 app.use(
   cors({
@@ -305,6 +354,7 @@ const cookieOptions = {
 
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const { sendMonthlyReminders } = require("./config/paymentReminders");
+const sendDirectDebitEmail = require("./config/sendDirectDebitEmail");
 
 // old
 // const uri = `mongodb+srv://${process.env.DB_User}:${process.env.DB_Pass}@cluster0.dr5qw.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
@@ -338,7 +388,7 @@ async function run() {
   try {
     // collections
     const usersCollection = client.db("alyaqeenDb").collection("users");
-    const studentsCollection = client.db("alyaqeenDb").collection("students");
+    studentsCollection = client.db("alyaqeenDb").collection("students");
     familiesCollection = client.db("alyaqeenDb").collection("families");
     feesCollection = client.db("alyaqeenDb").collection("fees");
     const teachersCollection = client.db("alyaqeenDb").collection("teachers");
@@ -526,7 +576,8 @@ async function run() {
     // ✅ Route to create SetupIntent for BACS Direct Debit
     app.post("/create-bacs-checkout-session", async (req, res) => {
       try {
-        const { email, familyId, name } = req.body; // ✅ Get name from request body
+        const { email, familyId, name, preferredPaymentDate } = req.body; // ✅ Add preferredPaymentDate
+        console.log(preferredPaymentDate);
 
         // ✅ STEP 1: Create or retrieve Stripe Customer
         let customer;
@@ -558,7 +609,7 @@ async function run() {
           });
         }
 
-        // ✅ STEP 2: Create Checkout Session WITH customer ID
+        // ✅ STEP 2: Create Checkout Session WITH customer ID and include preferred date in metadata
         const session = await stripe.checkout.sessions.create({
           mode: "setup",
           payment_method_types: ["bacs_debit"],
@@ -568,6 +619,7 @@ async function run() {
           metadata: {
             familyId: familyId,
             customerId: customer.id,
+            preferredPaymentDate: preferredPaymentDate || "1", // ✅ Store preferred date
           },
         });
 

@@ -218,10 +218,148 @@ module.exports = (
           .send({ message: "No matching students found in the database." });
       }
 
+      // ✅ NEW: Check if this is a monthly payment with multiple months
+      const isMonthlyPayment =
+        paymentType === "monthly" || paymentType === "monthlyOnHold";
+
+      if (isMonthlyPayment) {
+        // ✅ GROUP PAYMENTS BY MONTH-YEAR COMBINATION
+        const monthlyPayments = [];
+
+        students.forEach((student) => {
+          student.monthsPaid?.forEach((monthData) => {
+            if (monthData.paid > 0) {
+              const monthYearKey = `${monthData.month}-${monthData.year}`;
+
+              // Find or create month entry
+              let monthEntry = monthlyPayments.find(
+                (m) => m.monthYear === monthYearKey
+              );
+              if (!monthEntry) {
+                monthEntry = {
+                  monthYear: monthYearKey,
+                  month: monthData.month,
+                  year: monthData.year,
+                  students: [],
+                  totalAmount: 0,
+                };
+                monthlyPayments.push(monthEntry);
+              }
+
+              // Add student to this month
+              monthEntry.students.push({
+                studentId: student.studentId,
+                name: student.name,
+                monthData: monthData,
+                subtotal: monthData.paid,
+              });
+
+              monthEntry.totalAmount += monthData.paid;
+            }
+          });
+        });
+        // ✅ CREATE SEPARATE DOCUMENTS FOR EACH MONTH
+        if (monthlyPayments.length > 0) {
+          const results = [];
+
+          for (const monthPayment of monthlyPayments) {
+            // ✅ FIX: Get the actual payment method from the payments array
+            const actualMethod = feesData.payments?.[0]?.method || method;
+
+            // ✅ FIX: Set status based on payment type
+            const status = paymentType === "monthlyOnHold" ? "pending" : "paid";
+
+            // Create individual fee document for each month
+            const individualFeeData = {
+              familyId: familyId,
+              name: familyName,
+              email: familyEmail,
+              students: monthPayment.students.map((s) => ({
+                studentId: s.studentId,
+                name: s.name,
+                monthsPaid: [s.monthData], // Only one month per document
+                subtotal: s.subtotal,
+              })),
+              expectedTotal: monthPayment.totalAmount,
+              remaining: 0, // Since we're creating separate documents, each is fully paid
+              status: status, // ✅ FIXED: Use dynamic status
+              paymentType: paymentType,
+              payments: [
+                {
+                  amount: monthPayment.totalAmount,
+                  method: actualMethod, // ✅ FIXED: Use actual method from payments
+                  date:
+                    feesData.payments?.[0]?.date ||
+                    new Date().toISOString().slice(0, 10),
+                },
+              ],
+              timestamp: new Date(),
+            };
+
+            // Save individual month document
+            const result = await feesCollection.insertOne(individualFeeData);
+            results.push(result);
+          }
+
+          // ✅ SEND SINGLE COMBINED EMAIL FOR ALL MONTHS
+          try {
+            // ✅ FIX: Also use actual method for email
+            const actualMethod = feesData.payments?.[0]?.method || method;
+
+            // Prepare combined students data for email (all months together)
+            const studentsForEmail = students.map((student) => ({
+              name: student.name,
+              monthsPaid: student.monthsPaid || [],
+              subtotal: student.subtotal,
+            }));
+
+            // Calculate totals for email
+            const totalPaidAmount = studentsForEmail.reduce(
+              (sum, student) => sum + student.subtotal,
+              0
+            );
+
+            await sendMonthlyFeeEmail({
+              to: familyEmail,
+              parentName: familyName,
+              students: studentsForEmail,
+              totalAmount: totalPaidAmount,
+              method: actualMethod, // ✅ FIXED: Use actual method for email
+              paymentDate:
+                feesData.payments?.[0]?.date ||
+                new Date().toISOString().slice(0, 10),
+              isOnHold: paymentType === "monthlyOnHold",
+              remainingAmount: 0, // Since we're creating separate paid documents
+            });
+          } catch (emailError) {
+            console.error("❌ Monthly fee email failed:", emailError);
+          }
+
+          return res.send({
+            message: `Created ${monthlyPayments.length} monthly fee document(s)`,
+            insertedIds: results.map((r) => r.insertedId),
+            monthlyBreakdown: monthlyPayments.map((m) => ({
+              month: m.month,
+              year: m.year,
+              totalAmount: m.totalAmount,
+            })),
+          });
+        }
+      }
+
+      // ✅ EXISTING LOGIC FOR NON-MONTHLY PAYMENTS (admission, etc.)
       // 4. Optionally add timestamp
       feesData.timestamp = new Date();
+      if (
+        paymentType === "admissionOnHold" ||
+        paymentType === "monthlyOnHold"
+      ) {
+        feesData.status = "pending";
+      } else {
+        feesData.status = "paid";
+      }
 
-      // 5. Save fee document
+      // 5. Save fee document (for non-monthly payments)
       const result = await feesCollection.insertOne(feesData);
 
       // ✅ FIXED: Calculate actual values from payments array
@@ -235,40 +373,7 @@ module.exports = (
         feesData.payments?.[0]?.date || new Date().toISOString().slice(0, 10);
       const remainingAmount = feesData.remaining || 0;
 
-      // ✅ FIXED: Monthly email with correct data
-      // 5. Send Monthly Email with month info
-      if (paymentType === "monthly" || paymentType === "monthlyOnHold") {
-        try {
-          // Prepare students data for email
-          const studentsForEmail = feesData.students.map((s) => ({
-            name: s.name,
-            monthsPaid: (s.monthsPaid || []).map((m) => ({
-              month: m.month,
-              year: m.year,
-              monthlyFee: m.monthlyFee,
-              discountedFee: m.discountedFee,
-              paid: m.paid,
-            })),
-            subtotal: s.subtotal,
-          }));
-
-          await sendMonthlyFeeEmail({
-            to: familyEmail,
-            parentName: familyName,
-            students: studentsForEmail,
-            totalAmount: paidAmount,
-            method: paymentMethod,
-            paymentDate: paymentDate,
-            isOnHold: paymentType === "monthlyOnHold",
-            remainingAmount: remainingAmount,
-          });
-        } catch (emailError) {
-          console.error("❌ Monthly fee email failed:", emailError);
-        }
-      }
-
-      // 6. Send Email based on type
-      // 6. Send Email based on type
+      // ✅ EXISTING EMAIL LOGIC FOR ADMISSION PAYMENTS
       if (paymentType === "admissionOnHold") {
         try {
           await sendHoldEmail({
@@ -276,7 +381,7 @@ module.exports = (
             parentName: familyName,
             studentNames: allStudents.map((s) => s.name),
             method: paymentMethod,
-            amount: paidAmount, // ✅ ADD THIS - pass the actual paid amount
+            amount: paidAmount,
           });
           console.log("✅ Hold email sent successfully");
         } catch (emailError) {
@@ -292,9 +397,7 @@ module.exports = (
             classesCollection
           );
 
-          // ✅ SIMPLIFIED: Only show paid amounts and enrollment confirmation
           const studentBreakdown = enrichedStudents.map((enrichedStudent) => {
-            // Find the original fee data for this student
             const originalStudent = feesData.students.find(
               (s) => String(s.studentId) === String(enrichedStudent._id)
             );
@@ -302,9 +405,8 @@ module.exports = (
             const totalPaid = originalStudent?.subtotal || 0;
 
             return {
-              ...enrichedStudent, // Academic info
-              subtotal: totalPaid, // Only show what was actually paid
-              // Remove all expected/remaining calculations
+              ...enrichedStudent,
+              subtotal: totalPaid,
             };
           });
 
@@ -312,18 +414,14 @@ module.exports = (
             to: familyEmail,
             parentName: familyName,
             students: studentBreakdown,
-            totalAmount: paidAmount, // This shows the actual paid amount
+            totalAmount: paidAmount,
             method: paymentMethod,
             paymentDate: paymentDate,
-            // ✅ REMOVED: remainingAmount - don't show remaining balance
-            // ✅ REMOVED: studentBreakdown with remaining calculations
             studentBreakdown: studentBreakdown,
-            // Add enrollment confirmation message
             isEnrollmentConfirmed: true,
           });
         } catch (admissionError) {
           console.error("❌ Admission email process failed:", admissionError);
-          // Don't fail the request if email fails
         }
       } else {
         console.log("ℹ️ No email sent for payment type:", paymentType);
@@ -338,6 +436,170 @@ module.exports = (
       });
     }
   });
+
+  // router.post("/", async (req, res) => {
+  //   const feesData = req.body;
+  //   const {
+  //     familyId,
+  //     amount,
+  //     paymentType,
+  //     students = [],
+  //     method = "Unknown",
+  //   } = feesData;
+
+  //   try {
+  //     // 1. Get the family document
+  //     const family = await familiesCollection.findOne({
+  //       _id: new ObjectId(familyId),
+  //     });
+
+  //     if (!family || !Array.isArray(family.children)) {
+  //       return res
+  //         .status(404)
+  //         .send({ message: "Family not found or has no children." });
+  //     }
+
+  //     const familyName = family?.name || "Parent";
+  //     const familyEmail = family?.email;
+
+  //     if (!familyEmail) {
+  //       return res.status(400).send({ message: "Family email is required." });
+  //     }
+
+  //     // 2. Extract studentIds from students
+  //     const studentIds = students?.map((s) => new ObjectId(s.studentId));
+
+  //     // 3. Fetch full student records
+  //     const allStudents = await studentsCollection
+  //       .find({ _id: { $in: studentIds } })
+  //       .toArray();
+
+  //     if (!allStudents.length) {
+  //       return res
+  //         .status(404)
+  //         .send({ message: "No matching students found in the database." });
+  //     }
+
+  //     // 4. Optionally add timestamp
+  //     feesData.timestamp = new Date();
+
+  //     // 5. Save fee document
+  //     const result = await feesCollection.insertOne(feesData);
+
+  //     // ✅ FIXED: Calculate actual values from payments array
+  //     const paidAmount =
+  //       feesData.payments?.reduce(
+  //         (sum, payment) => sum + (payment.amount || 0),
+  //         0
+  //       ) || 0;
+  //     const paymentMethod = feesData.payments?.[0]?.method || method;
+  //     const paymentDate =
+  //       feesData.payments?.[0]?.date || new Date().toISOString().slice(0, 10);
+  //     const remainingAmount = feesData.remaining || 0;
+
+  //     // ✅ FIXED: Monthly email with correct data
+  //     // 5. Send Monthly Email with month info
+  //     if (paymentType === "monthly" || paymentType === "monthlyOnHold") {
+  //       try {
+  //         // Prepare students data for email
+  //         const studentsForEmail = feesData.students.map((s) => ({
+  //           name: s.name,
+  //           monthsPaid: (s.monthsPaid || []).map((m) => ({
+  //             month: m.month,
+  //             year: m.year,
+  //             monthlyFee: m.monthlyFee,
+  //             discountedFee: m.discountedFee,
+  //             paid: m.paid,
+  //           })),
+  //           subtotal: s.subtotal,
+  //         }));
+
+  //         await sendMonthlyFeeEmail({
+  //           to: familyEmail,
+  //           parentName: familyName,
+  //           students: studentsForEmail,
+  //           totalAmount: paidAmount,
+  //           method: paymentMethod,
+  //           paymentDate: paymentDate,
+  //           isOnHold: paymentType === "monthlyOnHold",
+  //           remainingAmount: remainingAmount,
+  //         });
+  //       } catch (emailError) {
+  //         console.error("❌ Monthly fee email failed:", emailError);
+  //       }
+  //     }
+
+  //     // 6. Send Email based on type
+  //     // 6. Send Email based on type
+  //     if (paymentType === "admissionOnHold") {
+  //       try {
+  //         await sendHoldEmail({
+  //           to: familyEmail,
+  //           parentName: familyName,
+  //           studentNames: allStudents.map((s) => s.name),
+  //           method: paymentMethod,
+  //           amount: paidAmount, // ✅ ADD THIS - pass the actual paid amount
+  //         });
+  //         console.log("✅ Hold email sent successfully");
+  //       } catch (emailError) {
+  //         console.error("❌ Hold email failed:", emailError);
+  //       }
+  //     } else if (paymentType === "admission") {
+  //       console.log("📧 Processing admission email...");
+  //       try {
+  //         const enrichedStudents = await enrichStudents(
+  //           feesData.students,
+  //           studentsCollection,
+  //           departmentsCollection,
+  //           classesCollection
+  //         );
+
+  //         // ✅ SIMPLIFIED: Only show paid amounts and enrollment confirmation
+  //         const studentBreakdown = enrichedStudents.map((enrichedStudent) => {
+  //           // Find the original fee data for this student
+  //           const originalStudent = feesData.students.find(
+  //             (s) => String(s.studentId) === String(enrichedStudent._id)
+  //           );
+
+  //           const totalPaid = originalStudent?.subtotal || 0;
+
+  //           return {
+  //             ...enrichedStudent, // Academic info
+  //             subtotal: totalPaid, // Only show what was actually paid
+  //             // Remove all expected/remaining calculations
+  //           };
+  //         });
+
+  //         await sendEmailViaAPI({
+  //           to: familyEmail,
+  //           parentName: familyName,
+  //           students: studentBreakdown,
+  //           totalAmount: paidAmount, // This shows the actual paid amount
+  //           method: paymentMethod,
+  //           paymentDate: paymentDate,
+  //           // ✅ REMOVED: remainingAmount - don't show remaining balance
+  //           // ✅ REMOVED: studentBreakdown with remaining calculations
+  //           studentBreakdown: studentBreakdown,
+  //           // Add enrollment confirmation message
+  //           isEnrollmentConfirmed: true,
+  //         });
+  //       } catch (admissionError) {
+  //         console.error("❌ Admission email process failed:", admissionError);
+  //         // Don't fail the request if email fails
+  //       }
+  //     } else {
+  //       console.log("ℹ️ No email sent for payment type:", paymentType);
+  //     }
+
+  //     res.send(result);
+  //   } catch (err) {
+  //     console.error("💥 CRITICAL ERROR in fee creation:", err);
+  //     res.status(500).send({
+  //       message: "Internal server error",
+  //       error: err.message,
+  //     });
+  //   }
+  // });
 
   router.get("/student-summary/:studentId", async (req, res) => {
     try {
