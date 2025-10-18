@@ -2124,22 +2124,40 @@ module.exports = (
       // ✅ FIX: Calculate remaining amount properly
       const remainingAmount = fee.remaining || 0;
 
-      // ✅ FIX: Ensure monthsPaid has the correct paid amounts
+      // ✅ FIX: Only update monthsPaid for MONTHLY payments, not for ADMISSION payments
       const updatedStudents = fee.students.map((student) => {
-        const updatedMonthsPaid =
-          student.monthsPaid?.map((month) => ({
-            ...month,
-            // ✅ Ensure paid field exists and has correct value
-            paid:
-              month.paid !== undefined
-                ? month.paid
-                : month.discountedFee || month.monthlyFee || 0,
-          })) || [];
+        // For admission payments, don't touch monthsPaid - it shouldn't exist
+        if (
+          fee.paymentType === "admission" ||
+          fee.paymentType === "admissionOnHold"
+        ) {
+          // Return student as-is, don't add monthsPaid field
+          return student;
+        }
 
-        return {
-          ...student,
-          monthsPaid: updatedMonthsPaid,
-        };
+        // Only for monthly payments, ensure monthsPaid has correct structure
+        if (
+          fee.paymentType === "monthly" ||
+          fee.paymentType === "monthlyOnHold"
+        ) {
+          const updatedMonthsPaid =
+            student.monthsPaid?.map((month) => ({
+              ...month,
+              // ✅ Ensure paid field exists and has correct value
+              paid:
+                month.paid !== undefined
+                  ? month.paid
+                  : month.discountedFee || month.monthlyFee || 0,
+            })) || [];
+
+          return {
+            ...student,
+            monthsPaid: updatedMonthsPaid,
+          };
+        }
+
+        // For other payment types, return student as-is
+        return student;
       });
 
       // ✅ FIX: Update BOTH the status AND the students data in database
