@@ -64,7 +64,7 @@ const enrichStudents = async (
     };
   });
 };
-
+module.exports.enrichStudents = enrichStudents;
 module.exports = (
   feesCollection,
   studentsCollection,
@@ -259,6 +259,7 @@ module.exports = (
           });
         });
         // ✅ CREATE SEPARATE DOCUMENTS FOR EACH MONTH
+        // ✅ CREATE SEPARATE DOCUMENTS FOR EACH MONTH
         if (monthlyPayments.length > 0) {
           const results = [];
 
@@ -267,7 +268,12 @@ module.exports = (
             const actualMethod = feesData.payments?.[0]?.method || method;
 
             // ✅ FIX: Set status based on payment type
-            const status = paymentType === "monthlyOnHold" ? "pending" : "paid";
+            const isDirectDebit =
+              feesData.payments?.[0]?.method === "direct_debit";
+            const status =
+              paymentType === "monthlyOnHold" || isDirectDebit
+                ? "pending"
+                : "paid";
 
             // Create individual fee document for each month
             const individualFeeData = {
@@ -277,20 +283,21 @@ module.exports = (
               students: monthPayment.students.map((s) => ({
                 studentId: s.studentId,
                 name: s.name,
-                monthsPaid: [s.monthData], // Only one month per document
+                monthsPaid: [s.monthData],
                 subtotal: s.subtotal,
               })),
               expectedTotal: monthPayment.totalAmount,
-              remaining: 0, // Since we're creating separate documents, each is fully paid
-              status: status, // ✅ FIXED: Use dynamic status
+              remaining: 0,
+              status: status,
               paymentType: paymentType,
-              payments: [
+              payments: feesData.payments?.map((payment) => ({
+                ...payment,
+                amount: monthPayment.totalAmount,
+              })) || [
                 {
                   amount: monthPayment.totalAmount,
-                  method: actualMethod, // ✅ FIXED: Use actual method from payments
-                  date:
-                    feesData.payments?.[0]?.date ||
-                    new Date().toISOString().slice(0, 10),
+                  method: actualMethod,
+                  date: new Date().toISOString().slice(0, 10),
                 },
               ],
               timestamp: new Date(),
@@ -301,38 +308,38 @@ module.exports = (
             results.push(result);
           }
 
-          // ✅ SEND SINGLE COMBINED EMAIL FOR ALL MONTHS
-          try {
-            // ✅ FIX: Also use actual method for email
-            const actualMethod = feesData.payments?.[0]?.method || method;
+          // ✅ FIXED: ONLY send email for NON-Direct Debit payments (immediate payments)
+          const isDirectDebit =
+            feesData.payments?.[0]?.method === "direct_debit";
+          if (!isDirectDebit) {
+            try {
+              const actualMethod = feesData.payments?.[0]?.method || method;
+              const studentsForEmail = students.map((student) => ({
+                name: student.name,
+                monthsPaid: student.monthsPaid || [],
+                subtotal: student.subtotal,
+              }));
 
-            // Prepare combined students data for email (all months together)
-            const studentsForEmail = students.map((student) => ({
-              name: student.name,
-              monthsPaid: student.monthsPaid || [],
-              subtotal: student.subtotal,
-            }));
+              const totalPaidAmount = studentsForEmail.reduce(
+                (sum, student) => sum + student.subtotal,
+                0
+              );
 
-            // Calculate totals for email
-            const totalPaidAmount = studentsForEmail.reduce(
-              (sum, student) => sum + student.subtotal,
-              0
-            );
-
-            await sendMonthlyFeeEmail({
-              to: familyEmail,
-              parentName: familyName,
-              students: studentsForEmail,
-              totalAmount: totalPaidAmount,
-              method: actualMethod, // ✅ FIXED: Use actual method for email
-              paymentDate:
-                feesData.payments?.[0]?.date ||
-                new Date().toISOString().slice(0, 10),
-              isOnHold: paymentType === "monthlyOnHold",
-              remainingAmount: 0, // Since we're creating separate paid documents
-            });
-          } catch (emailError) {
-            console.error("❌ Monthly fee email failed:", emailError);
+              await sendMonthlyFeeEmail({
+                to: familyEmail,
+                parentName: familyName,
+                students: studentsForEmail,
+                totalAmount: totalPaidAmount,
+                method: actualMethod,
+                paymentDate:
+                  feesData.payments?.[0]?.date ||
+                  new Date().toISOString().slice(0, 10),
+                isOnHold: paymentType === "monthlyOnHold",
+                remainingAmount: 0,
+              });
+            } catch (emailError) {
+              console.error("❌ Monthly fee email failed:", emailError);
+            }
           }
 
           return res.send({
@@ -349,10 +356,16 @@ module.exports = (
 
       // ✅ EXISTING LOGIC FOR NON-MONTHLY PAYMENTS (admission, etc.)
       // 4. Optionally add timestamp
+      // ✅ EXISTING LOGIC FOR NON-MONTHLY PAYMENTS (admission, etc.)
+      // 4. Optionally add timestamp
       feesData.timestamp = new Date();
+
+      // ✅ FIX: Set status based on payment method for admission too
+      const isDirectDebit = feesData.payments?.[0]?.method === "direct_debit";
       if (
         paymentType === "admissionOnHold" ||
-        paymentType === "monthlyOnHold"
+        paymentType === "monthlyOnHold" ||
+        isDirectDebit
       ) {
         feesData.status = "pending";
       } else {
@@ -373,58 +386,106 @@ module.exports = (
         feesData.payments?.[0]?.date || new Date().toISOString().slice(0, 10);
       const remainingAmount = feesData.remaining || 0;
 
-      // ✅ EXISTING EMAIL LOGIC FOR ADMISSION PAYMENTS
-      if (paymentType === "admissionOnHold") {
-        try {
-          await sendHoldEmail({
-            to: familyEmail,
-            parentName: familyName,
-            studentNames: allStudents.map((s) => s.name),
-            method: paymentMethod,
-            amount: paidAmount,
-          });
-          console.log("✅ Hold email sent successfully");
-        } catch (emailError) {
-          console.error("❌ Hold email failed:", emailError);
-        }
-      } else if (paymentType === "admission") {
-        console.log("📧 Processing admission email...");
-        try {
-          const enrichedStudents = await enrichStudents(
-            feesData.students,
-            studentsCollection,
-            departmentsCollection,
-            classesCollection
-          );
-
-          const studentBreakdown = enrichedStudents.map((enrichedStudent) => {
-            const originalStudent = feesData.students.find(
-              (s) => String(s.studentId) === String(enrichedStudent._id)
+      // ✅ FIXED: ONLY send email for NON-Direct Debit payments
+      if (!isDirectDebit) {
+        // ✅ EXISTING EMAIL LOGIC FOR ADMISSION PAYMENTS
+        if (paymentType === "admissionOnHold") {
+          try {
+            await sendHoldEmail({
+              to: familyEmail,
+              parentName: familyName,
+              studentNames: allStudents.map((s) => s.name),
+              method: paymentMethod,
+              amount: paidAmount,
+            });
+            console.log("✅ Hold email sent successfully");
+          } catch (emailError) {
+            console.error("❌ Hold email failed:", emailError);
+          }
+        } else if (paymentType === "admission") {
+          console.log("📧 Processing admission email...");
+          try {
+            const enrichedStudents = await enrichStudents(
+              feesData.students,
+              studentsCollection,
+              departmentsCollection,
+              classesCollection
             );
 
-            const totalPaid = originalStudent?.subtotal || 0;
+            const studentBreakdown = enrichedStudents.map((enrichedStudent) => {
+              const originalStudent = feesData.students.find(
+                (s) => String(s.studentId) === String(enrichedStudent._id)
+              );
 
-            return {
-              ...enrichedStudent,
-              subtotal: totalPaid,
-            };
-          });
+              const totalPaid = originalStudent?.subtotal || 0;
 
-          await sendEmailViaAPI({
-            to: familyEmail,
-            parentName: familyName,
-            students: studentBreakdown,
-            totalAmount: paidAmount,
-            method: paymentMethod,
-            paymentDate: paymentDate,
-            studentBreakdown: studentBreakdown,
-            isEnrollmentConfirmed: true,
-          });
-        } catch (admissionError) {
-          console.error("❌ Admission email process failed:", admissionError);
+              return {
+                ...enrichedStudent,
+                subtotal: totalPaid,
+              };
+            });
+
+            await sendEmailViaAPI({
+              to: familyEmail,
+              parentName: familyName,
+              students: studentBreakdown,
+              totalAmount: paidAmount,
+              method: paymentMethod,
+              paymentDate: paymentDate,
+              studentBreakdown: studentBreakdown,
+              isEnrollmentConfirmed: true,
+            });
+          } catch (admissionError) {
+            console.error("❌ Admission email process failed:", admissionError);
+          }
+        } else {
+          console.log("ℹ️ No email sent for payment type:", paymentType);
         }
       } else {
-        console.log("ℹ️ No email sent for payment type:", paymentType);
+        // ✅ NEW: Handle Direct Debit admission emails
+        if (paymentType === "admission") {
+          console.log("📧 Processing Direct Debit admission email...");
+          try {
+            const enrichedStudents = await enrichStudents(
+              feesData.students,
+              studentsCollection,
+              departmentsCollection,
+              classesCollection
+            );
+
+            const studentBreakdown = enrichedStudents.map((enrichedStudent) => {
+              const originalStudent = feesData.students.find(
+                (s) => String(s.studentId) === String(enrichedStudent._id)
+              );
+
+              const totalPaid = originalStudent?.subtotal || 0;
+
+              return {
+                ...enrichedStudent,
+                subtotal: totalPaid,
+              };
+            });
+
+            // Send a "pending" admission email for Direct Debit
+            await sendEmailViaAPI({
+              to: familyEmail,
+              parentName: familyName,
+              students: studentBreakdown,
+              totalAmount: paidAmount,
+              method: paymentMethod,
+              paymentDate: paymentDate,
+              studentBreakdown: studentBreakdown,
+              isEnrollmentConfirmed: false, // Set to false since it's pending
+              isDirectDebit: true, // Add this flag
+            });
+            console.log("✅ Direct Debit admission email sent successfully");
+          } catch (admissionError) {
+            console.error(
+              "❌ Direct Debit admission email failed:",
+              admissionError
+            );
+          }
+        }
       }
 
       res.send(result);

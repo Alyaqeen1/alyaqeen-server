@@ -1080,12 +1080,49 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
     try {
       const { familyId } = req.body;
 
+      const family = await familiesCollection.findOne({
+        _id: new ObjectId(familyId),
+      });
+
+      if (!family || !family.directDebit) {
+        return res.status(404).json({ error: "No direct debit setup found" });
+      }
+
+      // ✅ OPTIONAL: Actually revoke the mandate in Stripe (if it exists)
+      try {
+        if (family.directDebit.stripeMandateId) {
+          // First check if mandate exists
+          const mandate = await stripe.mandates.retrieve(
+            family.directDebit.stripeMandateId
+          );
+
+          // Only revoke if it's active
+          if (mandate.status === "active") {
+            await stripe.mandates.update(family.directDebit.stripeMandateId, {
+              status: "revoked",
+            });
+            console.log(
+              `✅ Revoked Stripe mandate: ${family.directDebit.stripeMandateId}`
+            );
+          } else {
+            console.log(
+              `ℹ️ Mandate already ${mandate.status}, no need to revoke`
+            );
+          }
+        }
+      } catch (stripeError) {
+        console.log(
+          "⚠️ Could not revoke Stripe mandate (might already be inactive or not exist):",
+          stripeError.message
+        );
+      }
+
       const result = await familiesCollection.updateOne(
         { _id: new ObjectId(familyId) },
         {
           $set: {
             "directDebit.status": "cancelled",
-            "directDebit.mandateStatus": "cancelled", // Add this line
+            "directDebit.mandateStatus": "cancelled",
             "directDebit.cancelledAt": new Date(),
           },
         }
@@ -1101,9 +1138,10 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
     }
   });
   // ✅ Manual Direct Debit payment collection (for admin)
+  // In your families.routes.js or wherever this route is defined
   router.post("/admin/collect-payment", async (req, res) => {
     try {
-      const { familyId, amount, description, month, year } = req.body;
+      const { familyId, amount, description, month, year, feeType } = req.body;
 
       if (!familyId || !amount) {
         return res.status(400).json({
@@ -1124,7 +1162,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
         });
       }
 
-      // ✅ ACTUAL STRIPE PAYMENT PROCESSING
+      // ✅ Create the payment intent with comprehensive metadata
       const paymentIntent = await stripe.paymentIntents.create({
         amount: Math.round(amount * 100), // Convert to pence
         currency: "gbp",
@@ -1136,28 +1174,34 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
         metadata: {
           familyId: familyId,
           familyName: family.name,
+          familyEmail: family.email,
           description: description || "Direct Debit payment",
-          month: month,
-          year: year,
+          month: month || "",
+          year: year || "",
+          feeType: feeType || "direct_debit", // ✅ Add feeType
+          source: "admin_triggered", // ✅ Identify admin-triggered payments
+          amount: amount.toString(), // ✅ Store amount as string
         },
       });
 
-      // ✅ REMOVED: Don't create fee document here
-      // ✅ JUST return the payment intent info to frontend
+      console.log(`💰 Payment Intent created:`, {
+        id: paymentIntent.id,
+        status: paymentIntent.status,
+        amount: paymentIntent.amount,
+      });
 
+      // ✅ RETURN payment intent ID so frontend can save it
       res.json({
         success: true,
-        message: `Payment of £${amount} collected from ${family.name}`,
+        message: `Direct Debit payment of £${amount} initiated for ${family.name}. Status: ${paymentIntent.status}`,
         familyName: family.name,
         amount: amount,
-        description: description,
         paymentIntentId: paymentIntent.id,
         status: paymentIntent.status,
       });
     } catch (error) {
       console.error("Direct Debit payment error:", error);
 
-      // Handle specific Stripe errors
       if (error.type === "StripeCardError") {
         return res.status(400).json({
           error: `Payment failed: ${error.message}`,

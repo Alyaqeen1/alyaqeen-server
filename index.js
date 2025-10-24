@@ -31,11 +31,13 @@ const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 let familiesCollection;
 let feesCollection;
 let studentsCollection;
+let departmentsCollection;
+let classesCollection;
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
-
+let emailSent = new Set(); // Add this back
 app.post(
   "/webhook",
   express.raw({ type: "application/json" }),
@@ -91,7 +93,36 @@ app.post(
         case "payment_intent.payment_failed":
           await handleFailedDirectDebitPayment(event.data.object);
           break;
+        case "charge.failed":
+          console.log(`❌ CHARGE FAILED:`, event.data.object.id);
+          await handleFailedCharge(event.data.object);
+          break;
+        case "payment_intent.processing":
+          console.log(`🔄 PAYMENT PROCESSING:`, event.data.object.id);
+          break;
 
+        case "payment_intent.created":
+          console.log(`🆕 PAYMENT CREATED:`, event.data.object.id);
+          break;
+
+        case "charge.pending":
+          console.log(`🔄 CHARGE PENDING:`, event.data.object.id);
+          await handlePendingCharge(event.data.object);
+          break;
+
+        case "charge.updated":
+          console.log(`📝 CHARGE UPDATED:`, event.data.object.id);
+          await handleChargeUpdated(event.data.object);
+          break;
+
+        case "payment_intent.requires_action":
+          console.log(`⚠️ PAYMENT REQUIRES ACTION:`, event.data.object.id);
+          break;
+
+        case "payment_intent.canceled":
+          console.log(`❌ PAYMENT CANCELED:`, event.data.object.id);
+          await handlePaymentCanceled(event.data.object);
+          break;
         case "setup_intent.succeeded":
           break;
 
@@ -115,43 +146,22 @@ async function processSuccessfulSetupIntent(
   preferredPaymentDateFromCheckout
 ) {
   try {
-    if (!familiesCollection) {
-      return;
-    }
+    if (!familiesCollection) return;
 
-    // Get family data FIRST
     const family = await familiesCollection.findOne({
       _id: new ObjectId(familyId),
     });
+    if (!family) return;
 
-    if (!family) {
-      return;
-    }
-
-    // Get the payment method details
     const paymentMethod = await stripe.paymentMethods.retrieve(
       setupIntent.payment_method
     );
 
     if (paymentMethod.type === "bacs_debit") {
-      // ✅ GET MANDATE INFORMATION
       const mandateId = setupIntent.mandate;
-      let mandateStatus = "pending";
 
-      if (mandateId) {
-        try {
-          const mandate = await stripe.mandates.retrieve(mandateId);
-          mandateStatus = mandate.status;
-        } catch (error) {
-          console.log("❌ Could not retrieve mandate:", error.message);
-        }
-      }
-
-      // ✅ USE THE PREFERRED DATE PASSED FROM THE WEBHOOK
-      let preferredPaymentDate =
-        parseInt(preferredPaymentDateFromCheckout) || 1;
-
-      // UPDATE THE FAMILY WITH MANDATE ID AND PREFERRED DATE
+      // ✅ FIX: ALWAYS SET TO PENDING INITIALLY
+      // Don't check mandate status here - let the webhook handle it
       const result = await familiesCollection.updateOne(
         { _id: new ObjectId(familyId) },
         {
@@ -164,121 +174,115 @@ async function processSuccessfulSetupIntent(
               bankName: paymentMethod.bacs_debit?.bank_name || "Unknown Bank",
               last4: paymentMethod.bacs_debit?.last4 || "****",
               setupDate: new Date(),
-              status: mandateStatus === "active" ? "active" : "pending",
-              mandateStatus: mandateStatus,
-              activeDate: mandateStatus === "active" ? new Date() : null,
-              preferredPaymentDate: preferredPaymentDate, // ✅ STORE THE PREFERRED DATE
+              status: "pending", // ← ALWAYS start as pending
+              mandateStatus: "pending", // ← ALWAYS start as pending
+              activeDate: null,
+              preferredPaymentDate:
+                parseInt(preferredPaymentDateFromCheckout) || 1,
             },
           },
         }
       );
 
-      // ✅ VERIFY THE UPDATE WORKED
-      const updatedFamily = await familiesCollection.findOne({
-        _id: new ObjectId(familyId),
-      });
+      console.log(
+        `✅ Database updated with PENDING status: ${result.modifiedCount} documents`
+      );
 
-      // ✅ SEND INITIAL SETUP EMAIL HERE - FIXED THIS SECTION
+      // ✅ SEND PENDING EMAIL HERE
       if (family.email && family.name) {
-        let emailStatus;
-
-        if (mandateStatus === "active") {
-          emailStatus = "success";
-        } else if (mandateStatus === "pending") {
-          emailStatus = "pending";
-        } else {
-          emailStatus = "failed";
-        }
-
-        // Get student names for the email
         const students = await studentsCollection
-          .find({
-            familyId: familyId,
-          })
+          .find({ familyId: familyId })
           .toArray();
 
         const studentNames =
           students.map((student) => student.name).join(", ") || "Your child";
 
         try {
-          // IMPORTANT: Make sure this function is imported correctly
           const emailResult = await sendDirectDebitEmail({
             to: family.email,
             name: family.name,
             studentName: studentNames,
-            status: emailStatus,
+            status: "pending",
             mandateId: mandateId || "Pending verification",
           });
 
           if (emailResult && emailResult.success) {
-          } else {
-            console.log(
-              `❌ Failed to send initial email: ${
-                emailResult?.reason || "Unknown error"
-              }`
-            );
+            console.log(`✅ Pending email sent to ${family.email}`);
           }
         } catch (emailError) {
-          console.error("❌ Initial email sending crashed:", emailError);
-          console.error("❌ Email error stack:", emailError.stack);
+          console.error("❌ Pending email sending crashed:", emailError);
         }
-      } else {
-        console.log("❌ Cannot send email - missing email or parentName:", {
-          hasEmail: !!family.email,
-          hasParentName: !!family.name,
-          email: family.email,
-          parentName: family.name,
-        });
       }
     } else {
       console.log("❌ Payment method is not bacs_debit:", paymentMethod.type);
     }
   } catch (error) {
     console.error("❌ Error processing setup intent:", error);
-    console.error("❌ Error stack:", error.stack);
   }
 }
 
 // ✅ FIXED: Handle mandate status updates
 async function handleMandateUpdate(mandate) {
   try {
+    console.log(`🔄 handleMandateUpdate CALLED with mandate:`, {
+      id: mandate.id,
+      status: mandate.status,
+    });
+
     if (!familiesCollection) {
+      console.log("❌ familiesCollection not available");
       return;
     }
 
-    // Find family by mandate ID - FIXED QUERY
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
     const family = await familiesCollection.findOne({
       "directDebit.stripeMandateId": mandate.id,
     });
 
     if (!family) {
-      // Try alternative query in case the field name is different
-      const allFamiliesWithMandates = await familiesCollection
-        .find({
-          "directDebit.stripeMandateId": { $exists: true },
-        })
-        .toArray();
-
+      console.log(`❌ No family found with mandate ID: ${mandate.id}`);
       return;
     }
 
+    console.log(
+      `✅ Found family: ${family.name}, current status: ${family.directDebit.status}`
+    );
+
+    let newStatus = family.directDebit.status;
+    let emailStatus = null;
+    let shouldSendEmail = false;
+
+    // ✅ DETERMINE STATUS AND EMAIL TYPE
+    if (mandate.status === "active") {
+      newStatus = "active";
+      // Only send email if status is changing from pending to active
+      if (family.directDebit.status === "pending") {
+        emailStatus = "success";
+        shouldSendEmail = true;
+        console.log(
+          `✅ Updating status from ${family.directDebit.status} to ${newStatus} - will send success email`
+        );
+      } else {
+        console.log(`ℹ️ Mandate already active, no email needed`);
+      }
+    } else if (mandate.status === "inactive" || mandate.status === "revoked") {
+      newStatus = "cancelled";
+      emailStatus = "failed";
+      shouldSendEmail = true;
+      console.log(`❌ Mandate ${mandate.status} - will send failed email`);
+    }
+
+    // ✅ UPDATE THE DATABASE
     const updateData = {
+      "directDebit.status": newStatus,
       "directDebit.mandateStatus": mandate.status,
       "directDebit.lastUpdated": new Date(),
     };
 
-    let emailStatus = null;
-
-    // If mandate becomes active, update the main status and set active date
-    if (mandate.status === "active") {
-      updateData["directDebit.status"] = "active";
+    // ✅ SET activeDate ONLY WHEN BECOMING ACTIVE
+    if (mandate.status === "active" && family.directDebit.status !== "active") {
       updateData["directDebit.activeDate"] = new Date();
-      emailStatus = "success";
-    }
-    // If mandate is revoked or failed, update status accordingly
-    else if (mandate.status === "inactive" || mandate.status === "revoked") {
-      updateData["directDebit.status"] = "cancelled";
-      emailStatus = "failed";
     }
 
     const result = await familiesCollection.updateOne(
@@ -286,9 +290,24 @@ async function handleMandateUpdate(mandate) {
       { $set: updateData }
     );
 
-    // ✅ SEND STATUS UPDATE EMAIL - FIXED THIS SECTION
-    if (emailStatus && family.email) {
-      // Get student names
+    console.log(
+      `✅ Database update result: ${result.modifiedCount} documents modified`
+    );
+
+    // ✅ VERIFY THE UPDATE
+    if (result.modifiedCount > 0) {
+      const updatedFamily = await familiesCollection.findOne({
+        _id: family._id,
+      });
+      console.log(`✅ VERIFICATION - New status:`, {
+        status: updatedFamily.directDebit.status,
+        mandateStatus: updatedFamily.directDebit.mandateStatus,
+        activeDate: updatedFamily.directDebit.activeDate,
+      });
+    }
+
+    // ✅ SEND STATUS UPDATE EMAIL ONLY WHEN NEEDED
+    if (shouldSendEmail && emailStatus && family.email) {
       const students = await studentsCollection
         .find({
           familyId: family._id.toString(),
@@ -309,30 +328,490 @@ async function handleMandateUpdate(mandate) {
 
         if (emailResult && emailResult.success) {
           console.log(`✅ ${emailStatus} email sent to ${family.email}`);
+
+          // ✅ MARK THAT EMAIL WAS SENT
+          if (emailStatus === "success") {
+            emailSent.add(family._id.toString());
+          }
         } else {
           console.log(
-            `❌ Failed to send mandate update email: ${
+            `❌ Failed to send ${emailStatus} email: ${
               emailResult?.reason || "Unknown error"
             }`
           );
         }
       } catch (emailError) {
-        console.error("❌ Mandate update email sending crashed:", emailError);
-        console.error("❌ Email error stack:", emailError.stack);
+        console.error(`❌ ${emailStatus} email sending crashed:`, emailError);
       }
     } else {
-      console.log("❌ Cannot send email - missing requirements:", {
+      console.log(`ℹ️ No email sent - conditions:`, {
+        shouldSendEmail,
         emailStatus,
         hasEmail: !!family.email,
-        email: family.email,
       });
     }
   } catch (error) {
     console.error("❌ Error handling mandate update:", error);
-    console.error("❌ Error stack:", error.stack);
+  }
+}
+async function handleSuccessfulDirectDebitPayment(paymentIntent) {
+  try {
+    console.log(`💰 Handling successful payment:`, paymentIntent.id);
+
+    if (!feesCollection || !familiesCollection) return;
+
+    // Find fee by payment intent ID
+    let existingFee = await feesCollection.findOne({
+      "payments.stripePaymentIntentId": paymentIntent.id,
+    });
+
+    if (existingFee) {
+      console.log(`✅ Found fee to update: ${existingFee._id}`);
+
+      // Update the fee status to paid
+      await feesCollection.updateOne(
+        { _id: existingFee._id },
+        {
+          $set: {
+            status: "paid",
+            remaining: 0,
+            updatedAt: new Date(),
+          },
+        }
+      );
+      console.log(`✅ Fee ${existingFee._id} marked as paid`);
+
+      // ✅ SEND SUCCESS EMAIL BASED ON PAYMENT TYPE
+      try {
+        if (
+          existingFee.paymentType === "monthly" ||
+          existingFee.paymentType === "monthlyOnHold"
+        ) {
+          // Monthly payment email
+          await sendMonthlyFeeEmail({
+            to: existingFee.email,
+            parentName: existingFee.name,
+            students: existingFee.students.map((student) => ({
+              name: student.name,
+              monthsPaid: student.monthsPaid || [],
+              subtotal: student.subtotal,
+            })),
+            totalAmount: existingFee.expectedTotal,
+            method: "direct_debit",
+            paymentDate:
+              existingFee.payments?.[0]?.date ||
+              new Date().toISOString().slice(0, 10),
+            isOnHold: false,
+            remainingAmount: 0,
+          });
+          console.log(`✅ Monthly success email sent to ${existingFee.email}`);
+        } else if (existingFee.paymentType === "admission") {
+          // Admission payment email
+          const enrichedStudents = await createFeesRouter?.enrichStudents(
+            existingFee.students,
+            studentsCollection,
+            departmentsCollection,
+            classesCollection
+          );
+
+          const studentBreakdown = enrichedStudents.map((enrichedStudent) => {
+            const originalStudent = existingFee.students.find(
+              (s) => String(s.studentId) === String(enrichedStudent._id)
+            );
+            const totalPaid = originalStudent?.subtotal || 0;
+
+            return {
+              ...enrichedStudent,
+              subtotal: totalPaid,
+            };
+          });
+
+          await sendEmailViaAPI({
+            to: existingFee.email,
+            parentName: existingFee.name,
+            students: studentBreakdown,
+            totalAmount: existingFee.expectedTotal,
+            method: "direct_debit",
+            paymentDate:
+              existingFee.payments?.[0]?.date ||
+              new Date().toISOString().slice(0, 10),
+            studentBreakdown: studentBreakdown,
+            isEnrollmentConfirmed: true,
+          });
+          console.log(
+            `✅ Admission success email sent to ${existingFee.email}`
+          );
+        }
+      } catch (emailError) {
+        console.error("❌ Success email failed:", emailError);
+      }
+    } else {
+      console.log(`❌ No fee found for payment intent: ${paymentIntent.id}`);
+    }
+
+    // Update family payment history
+    const family = await familiesCollection.findOne({
+      "directDebit.stripeCustomerId": paymentIntent.customer,
+    });
+
+    if (family) {
+      await familiesCollection.updateOne(
+        { _id: family._id },
+        {
+          $set: {
+            "directDebit.lastSuccessfulPayment": new Date(),
+            "directDebit.lastPaymentIntentId": paymentIntent.id,
+          },
+        }
+      );
+    }
+  } catch (error) {
+    console.error("❌ Error handling successful payment:", error);
+  }
+}
+// In your index.js, add this route:
+app.post("/reconcile-payment", async (req, res) => {
+  try {
+    const { paymentIntentId } = req.body;
+
+    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+    const fee = await feesCollection.findOne({
+      "payments.stripePaymentIntentId": paymentIntentId,
+    });
+
+    res.json({
+      paymentIntent: {
+        id: paymentIntent.id,
+        status: paymentIntent.status,
+        amount: paymentIntent.amount / 100,
+        metadata: paymentIntent.metadata,
+      },
+      fee: fee
+        ? {
+            id: fee._id,
+            status: fee.status,
+            paymentIntentId: fee.payments?.[0]?.stripePaymentIntentId,
+          }
+        : null,
+      match: !!fee,
+    });
+  } catch (error) {
+    console.error("Reconciliation error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Helper function for admission fees
+// async function createAdmissionFeeStructure(studentData, totalAmount) {
+//   const admissionFeePerStudent = 20;
+//   const students = studentData.selectedStudents;
+//   const discountPercent = studentData.discountPercent || 0;
+
+//   // Calculate allocations
+//   const totalAdmissionNeeded = admissionFeePerStudent * students.length;
+//   const totalMonthlyNeeded = students.reduce(
+//     (sum, student) =>
+//       sum + calculateDiscountedFee(student.monthly_fee, discountPercent),
+//     0
+//   );
+
+//   const expectedTotal = totalAdmissionNeeded + totalMonthlyNeeded;
+
+//   let allocations = [];
+
+//   if (totalAmount >= expectedTotal) {
+//     // Full payment
+//     allocations = students.map((student) => ({
+//       studentId: student.studentId,
+//       name: student.name,
+//       paidAdmission: admissionFeePerStudent,
+//       paidMonthly: calculateDiscountedFee(student.monthly_fee, discountPercent),
+//     }));
+//   } else {
+//     // Partial payment - prioritize admission fees
+//     const totalAdmissionAllocated = Math.min(totalAmount, totalAdmissionNeeded);
+//     const admissionPerStudent = totalAdmissionAllocated / students.length;
+//     const remainingAfterAdmission = totalAmount - totalAdmissionAllocated;
+
+//     allocations = students.map((student) => {
+//       const monthlyShare =
+//         totalMonthlyNeeded > 0
+//           ? (calculateDiscountedFee(student.monthly_fee, discountPercent) /
+//               totalMonthlyNeeded) *
+//             remainingAfterAdmission
+//           : 0;
+
+//       return {
+//         studentId: student.studentId,
+//         name: student.name,
+//         paidAdmission: toTwo(admissionPerStudent),
+//         paidMonthly: toTwo(monthlyShare),
+//       };
+//     });
+//   }
+
+//   // Create student payload
+//   return allocations.map((allocation) => {
+//     const student = students.find((s) => s.studentId === allocation.studentId);
+//     const startingDate = new Date(student.startingDate);
+
+//     return {
+//       studentId: allocation.studentId,
+//       name: allocation.name,
+//       admissionFee: admissionFeePerStudent,
+//       monthlyFee: student.monthly_fee,
+//       discountedFee: calculateDiscountedFee(
+//         student.monthly_fee,
+//         discountPercent
+//       ),
+//       joiningMonth: (startingDate.getMonth() + 1).toString().padStart(2, "0"),
+//       joiningYear: startingDate.getFullYear(),
+//       payments: [
+//         {
+//           amount: allocation.paidAdmission,
+//           date: studentData.paymentDate
+//             ? new Date(studentData.paymentDate)
+//             : new Date(),
+//           method: "direct_debit",
+//         },
+//         ...(allocation.paidMonthly > 0
+//           ? [
+//               {
+//                 amount: allocation.paidMonthly,
+//                 date: studentData.paymentDate
+//                   ? new Date(studentData.paymentDate)
+//                   : new Date(),
+//                 method: "direct_debit",
+//               },
+//             ]
+//           : []),
+//       ],
+//       subtotal: toTwo(allocation.paidAdmission + allocation.paidMonthly),
+//     };
+//   });
+// }
+
+// Helper function for monthly fees
+// async function createMonthlyFeeStructure(
+//   studentData,
+//   month,
+//   year,
+//   totalAmount
+// ) {
+//   const students = studentData.selectedStudents;
+//   const discountPercent = studentData.discountPercent || 0;
+
+//   const totalExpected = students.reduce(
+//     (sum, student) =>
+//       sum + calculateDiscountedFee(student.monthly_fee, discountPercent),
+//     0
+//   );
+
+//   // Allocate payment proportionally
+//   let allocations = students.map((student) => ({
+//     studentId: student.studentId,
+//     name: student.name,
+//     rawPaid:
+//       totalExpected > 0
+//         ? (calculateDiscountedFee(student.monthly_fee, discountPercent) /
+//             totalExpected) *
+//           totalAmount
+//         : 0,
+//   }));
+
+//   // Round allocations to avoid floating point issues
+//   allocations.forEach((a) => (a.paid = Math.floor(a.rawPaid * 100) / 100));
+
+//   let allocatedSum = allocations.reduce((sum, a) => sum + a.paid, 0);
+//   let remainderCents = Math.round((totalAmount - allocatedSum) * 100);
+
+//   // Distribute remainder
+//   if (remainderCents > 0) {
+//     allocations.sort((a, b) => b.rawPaid - b.paid - (a.rawPaid - a.paid));
+//     for (let i = 0; i < allocations.length && remainderCents > 0; i++) {
+//       allocations[i].paid = toTwo(allocations[i].paid + 0.01);
+//       remainderCents--;
+//     }
+//   }
+
+//   return allocations.map((allocation) => ({
+//     studentId: allocation.studentId,
+//     name: allocation.name,
+//     monthsPaid: [
+//       {
+//         month: (month || "").padStart(2, "0"),
+//         year: year || new Date().getFullYear(),
+//         monthlyFee: students.find((s) => s.studentId === allocation.studentId)
+//           .monthly_fee,
+//         discountedFee: calculateDiscountedFee(
+//           students.find((s) => s.studentId === allocation.studentId)
+//             .monthly_fee,
+//           discountPercent
+//         ),
+//         paid: allocation.paid,
+//       },
+//     ],
+//     subtotal: allocation.paid,
+//   }));
+// }
+
+function calculateDiscountedFee(baseFee, discountPercent) {
+  return toTwo(baseFee - (baseFee * (discountPercent || 0)) / 100);
+}
+
+function toTwo(num) {
+  return Number(Number(num).toFixed(2));
+}
+// ✅ NEW FUNCTION: Handle failed Direct Debit payments
+async function handleFailedDirectDebitPayment(paymentIntent) {
+  try {
+    console.log(`❌ Handling failed payment:`, paymentIntent.id);
+
+    if (!feesCollection) return;
+
+    // Find fee by payment intent ID
+    const fee = await feesCollection.findOne({
+      "payments.stripePaymentIntentId": paymentIntent.id,
+    });
+
+    if (fee) {
+      console.log(`✅ Found fee to mark as failed: ${fee._id}`);
+
+      await feesCollection.updateOne(
+        { _id: fee._id },
+        {
+          $set: {
+            status: "failed",
+            updatedAt: new Date(),
+          },
+        }
+      );
+      console.log(`✅ Fee ${fee._id} marked as failed`);
+    }
+  } catch (error) {
+    console.error("❌ Error handling failed payment:", error);
   }
 }
 
+async function handlePendingCharge(charge) {
+  try {
+    console.log(`🔄 Processing pending charge:`, charge.id);
+
+    if (!feesCollection) return;
+
+    // Find fee by payment intent ID
+    const paymentIntent = await stripe.paymentIntents.retrieve(
+      charge.payment_intent
+    );
+
+    const fee = await feesCollection.findOne({
+      "payments.stripePaymentIntentId": paymentIntent.id,
+    });
+
+    if (fee) {
+      // If fee exists, update to pending
+      await feesCollection.updateOne(
+        { _id: fee._id },
+        {
+          $set: {
+            status: "pending",
+            updatedAt: new Date(),
+          },
+        }
+      );
+      console.log(`✅ Fee ${fee._id} marked as pending`);
+    } else {
+      console.log(
+        `⏳ No fee found yet for payment intent: ${paymentIntent.id}`
+      );
+      console.log(`📋 Payment intent metadata:`, paymentIntent.metadata);
+
+      // ✅ DON'T create a new fee here - wait for frontend to create the proper fee structure
+      // The frontend will create the complete fee record with student details
+      // We'll just log this and let the successful payment webhook handle the update later
+
+      console.log(
+        `ℹ️ Waiting for frontend to create proper fee record for payment intent: ${paymentIntent.id}`
+      );
+    }
+  } catch (error) {
+    console.error("❌ Error handling pending charge:", error);
+  }
+}
+
+async function handleFailedCharge(charge) {
+  try {
+    console.log(`❌ Handling failed charge:`, charge.id);
+
+    if (!feesCollection) return;
+
+    // Get the payment intent to find the fee
+    const paymentIntent = await stripe.paymentIntents.retrieve(
+      charge.payment_intent
+    );
+
+    const fee = await feesCollection.findOne({
+      "payments.stripePaymentIntentId": paymentIntent.id,
+    });
+
+    if (fee) {
+      console.log(`✅ Found fee to mark as failed: ${fee._id}`);
+
+      await feesCollection.updateOne(
+        { _id: fee._id },
+        {
+          $set: {
+            status: "failed",
+            updatedAt: new Date(),
+          },
+        }
+      );
+      console.log(`✅ Fee ${fee._id} marked as failed`);
+    }
+  } catch (error) {
+    console.error("❌ Error handling failed charge:", error);
+  }
+}
+
+async function handleChargeUpdated(charge) {
+  try {
+    console.log(`📝 Charge updated:`, charge.id, charge.status);
+    // You can add specific logic here if needed
+  } catch (error) {
+    console.error("❌ Error handling charge update:", error);
+  }
+}
+
+async function handlePaymentCanceled(paymentIntent) {
+  try {
+    console.log(`❌ Payment canceled:`, paymentIntent.id);
+
+    if (!feesCollection) return;
+
+    const fee = await feesCollection.findOne({
+      "payments.stripePaymentIntentId": paymentIntent.id,
+    });
+
+    if (fee) {
+      await feesCollection.updateOne(
+        { _id: fee._id },
+        {
+          $set: {
+            status: "canceled",
+            updatedAt: new Date(),
+          },
+        }
+      );
+      console.log(`✅ Fee ${fee._id} marked as canceled`);
+    } else {
+      console.log(
+        `ℹ️ No fee found to mark as canceled for payment intent: ${paymentIntent.id}`
+      );
+    }
+  } catch (error) {
+    console.error("❌ Error handling canceled payment:", error);
+  }
+}
 // ... keep the handleSuccessfulDirectDebitPayment and handleFailedDirectDebitPayment functions the same as before
 //Must remove "/" from your production URL
 app.use(
@@ -355,6 +834,8 @@ const cookieOptions = {
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const { sendMonthlyReminders } = require("./config/paymentReminders");
 const sendDirectDebitEmail = require("./config/sendDirectDebitEmail");
+const sendMonthlyFeeEmail = require("./config/sendMonthlyFeeEmail");
+const sendEmailViaAPI = require("./config/sendAdmissionEmail");
 
 // old
 // const uri = `mongodb+srv://${process.env.DB_User}:${process.env.DB_Pass}@cluster0.dr5qw.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
@@ -395,10 +876,8 @@ async function run() {
     const prayerTimesCollection = client
       .db("alyaqeenDb")
       .collection("prayer-times");
-    const departmentsCollection = client
-      .db("alyaqeenDb")
-      .collection("departments");
-    const classesCollection = client.db("alyaqeenDb").collection("classes");
+    departmentsCollection = client.db("alyaqeenDb").collection("departments");
+    classesCollection = client.db("alyaqeenDb").collection("classes");
     const subjectsCollection = client.db("alyaqeenDb").collection("subjects");
     const groupsCollection = client.db("alyaqeenDb").collection("groups");
     const meritsCollection = client.db("alyaqeenDb").collection("merits");
@@ -574,52 +1053,122 @@ async function run() {
     });
 
     // ✅ Route to create SetupIntent for BACS Direct Debit
+    // ✅ Route to create SetupIntent for BACS Direct Debit
     app.post("/create-bacs-checkout-session", async (req, res) => {
       try {
-        const { email, familyId, name, preferredPaymentDate } = req.body; // ✅ Add preferredPaymentDate
-        console.log(preferredPaymentDate);
+        const { email, familyId, name, preferredPaymentDate } = req.body;
 
-        // ✅ STEP 1: Create or retrieve Stripe Customer
-        let customer;
-
-        // Check if customer already exists by email
-        const existingCustomers = await stripe.customers.list({
-          email: email,
-          limit: 1,
+        // ✅ STEP 1: Check if family already has a Stripe customer
+        const family = await familiesCollection.findOne({
+          _id: new ObjectId(familyId),
         });
 
-        if (existingCustomers.data.length > 0) {
-          customer = existingCustomers.data[0];
+        let customer;
 
-          // ✅ UPDATE: If customer exists but name is different, update it
-          if (name && customer.name !== name) {
-            customer = await stripe.customers.update(customer.id, {
-              name: name,
-            });
+        // ✅ If family already has a Stripe customer ID, try to REUSE IT
+        if (family.directDebit && family.directDebit.stripeCustomerId) {
+          console.log(
+            `♻️ Attempting to reuse existing Stripe customer: ${family.directDebit.stripeCustomerId}`
+          );
+
+          try {
+            // ✅ TRY to retrieve the existing customer
+            customer = await stripe.customers.retrieve(
+              family.directDebit.stripeCustomerId
+            );
+            console.log(
+              `✅ Successfully reused existing customer: ${customer.id}`
+            );
+
+            // Update customer details if needed
+            if (name && customer.name !== name) {
+              customer = await stripe.customers.update(customer.id, {
+                name: name,
+                email: email,
+              });
+            }
+          } catch (stripeError) {
+            if (stripeError.code === "resource_missing") {
+              // ✅ CUSTOMER DOESN'T EXIST IN STRIPE - CREATE NEW ONE
+              console.log(
+                `❌ Customer not found in Stripe, creating new one...`
+              );
+
+              customer = await stripe.customers.create({
+                email: email,
+                name: name,
+                metadata: {
+                  familyId: familyId,
+                  source: "bacs_direct_debit_setup_recreated",
+                },
+              });
+              console.log(`🆕 Created new Stripe customer: ${customer.id}`);
+
+              // ✅ UPDATE THE FAMILY RECORD WITH THE NEW CUSTOMER ID
+              await familiesCollection.updateOne(
+                { _id: new ObjectId(familyId) },
+                {
+                  $set: {
+                    "directDebit.stripeCustomerId": customer.id,
+                    "directDebit.status": "pending",
+                    "directDebit.mandateStatus": "pending",
+                    "directDebit.setupDate": new Date(),
+                  },
+                }
+              );
+              console.log(`✅ Updated family record with new customer ID`);
+            } else {
+              // Some other Stripe error - rethrow it
+              throw stripeError;
+            }
           }
         } else {
-          // Create new customer WITH ACTUAL NAME
-          customer = await stripe.customers.create({
+          // ✅ No existing customer - CREATE NEW ONE
+          console.log(`🆕 No existing customer found, creating new one...`);
+
+          // First check if customer exists by email
+          const existingCustomers = await stripe.customers.list({
             email: email,
-            name: name, // ✅ Use the actual name from checkout form
-            metadata: {
-              familyId: familyId,
-              source: "bacs_direct_debit_setup",
-            },
+            limit: 1,
           });
+
+          if (existingCustomers.data.length > 0) {
+            customer = existingCustomers.data[0];
+            console.log(
+              `🔍 Found existing Stripe customer by email: ${customer.id}`
+            );
+
+            // Update customer details
+            if (name && customer.name !== name) {
+              customer = await stripe.customers.update(customer.id, {
+                name: name,
+              });
+            }
+          } else {
+            // Create new customer
+            customer = await stripe.customers.create({
+              email: email,
+              name: name,
+              metadata: {
+                familyId: familyId,
+                source: "bacs_direct_debit_setup_new",
+              },
+            });
+            console.log(`🆕 Created new Stripe customer: ${customer.id}`);
+          }
         }
 
-        // ✅ STEP 2: Create Checkout Session WITH customer ID and include preferred date in metadata
+        // ✅ STEP 2: Create Checkout Session
         const session = await stripe.checkout.sessions.create({
           mode: "setup",
           payment_method_types: ["bacs_debit"],
-          customer: customer.id, // ← CRITICAL: Link to customer
+          customer: customer.id,
           success_url: `${process.env.FRONTEND_URL}/dashboard/parent/payment-success`,
           cancel_url: `${process.env.FRONTEND_URL}/dashboard/parent/payment-cancel`,
           metadata: {
             familyId: familyId,
             customerId: customer.id,
-            preferredPaymentDate: preferredPaymentDate || "1", // ✅ Store preferred date
+            preferredPaymentDate: preferredPaymentDate || "1",
           },
         });
 
