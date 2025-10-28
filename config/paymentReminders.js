@@ -234,7 +234,30 @@ const sendReminderEmail = async ({ to, name, studentName }, reminderType) => {
   apiKey.apiKey = process.env.BREVO_PASS;
 
   const apiInstance = new SibApiV3Sdk.TransactionalEmailsApi();
+  const getMonthNames = () => {
+    const months = [
+      "January",
+      "February",
+      "March",
+      "April",
+      "May",
+      "June",
+      "July",
+      "August",
+      "September",
+      "October",
+      "November",
+      "December",
+    ];
 
+    const currentDate = new Date();
+    const currentMonth = months[currentDate.getMonth()];
+    const nextMonth = months[(currentDate.getMonth() + 1) % 12];
+
+    return { currentMonth, nextMonth };
+  };
+
+  const { currentMonth, nextMonth } = getMonthNames();
   const emailTemplates = {
     10: {
       subject: "🔔 Fee Reminder – Alyaqeen Academy",
@@ -251,25 +274,38 @@ const sendReminderEmail = async ({ to, name, studentName }, reminderType) => {
       `,
     },
     20: {
-      subject: "⚠️ Important: Monthly Fee Payment Overdue",
+      subject: "Reminder – Monthly Fee Due",
       content: `
         <p>Dear <strong>${name}</strong>,</p>
-        <p>We notice that the monthly fee for ${studentName} is now overdue.</p>
-        <p>Please make the payment as soon as possible: <strong>https://alyaqeen.vercel.app/login</strong></p>
+        <p>السلام عليكم ورحمة الله وبركاته</p>
+        <p>We hope you are well. This is a kind reminder that the monthly fee for ${studentName} is still pending.</p>
+        <p>Please make the payment at your earliest convenience by visiting:</p>
+        <p>👉 <strong>https://alyaqeen.vercel.app/login</strong></p>
+        <p>As mentioned before, fees should be paid within the first seven working days of each month.</p>
+        <p>Your timely payment helps us continue serving our students effectively.</p>
         <p>If you've already paid, please disregard this message.</p>
+        <p>جزاكم الله خيراً</p>
         <br/>
-        <p>Best regards,<br/>Alyaqeen Team</p>
+        <p>Alyaqeen Team</p>
       `,
     },
     29: {
-      subject: "🚨 Final Notice: Urgent Payment Required",
+      subject: "⚠️ Important: Monthly Fee Payment Still Unpaid",
       content: `
         <p>Dear <strong>${name}</strong>,</p>
-        <p>This is our final reminder regarding the overdue payment for ${studentName}.</p>
-        <p>Please settle the amount immediately to avoid any disruption: <strong>https://alyaqeen.vercel.app/login</strong></p>
-        <p>If payment is not received, we may need to suspend services.</p>
+        <p>Assalamu Alaikum wa Rahmatullah.</p>
+        <p>We hope you and your family are well.</p>
+        <p>Despite two previous reminders, we have noticed that this month’s fee for ${studentName} has still not been paid.</p>
+        <p>As an Islamic academy, we believe that paying fees on time is a matter of trust (amanah) and commitment between parents and the institution. When payments are delayed, it causes real difficulty for the academy and affects our ability to stay focused on providing quality Islamic and academic education.</p>
+        
+        <p>It is truly disappointing for us to send repeated reminders for the same matter. We humbly request you to please make the payment for both  the current (${currentMonth}) and upcoming (${nextMonth}) months without further delay so we can avoid calling, messaging, or emailing again.</p>
+
+        <p>Please use the link below to complete your payment today:</p>
+        <p>👉 <strong>https://alyaqeen.vercel.app/login</strong></p>
+        <p>Your timely cooperation reflects your sincerity towards your child’s Islamic education and helps us continue our work smoothly.</p>
         <br/>
-        <p>Best regards,<br/>Alyaqeen Team</p>
+        <p>JazakAllahu khairan for your immediate attention,</p>
+        <p>Alyaqeen Academy</p>
       `,
     },
   };
