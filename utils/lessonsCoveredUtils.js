@@ -1829,7 +1829,7 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
   return [
     {
       $match: {
-        teacher_id: teacher_id,
+        teacher_id: teacher_id, // Filter by teacher_id
         year: year,
         $or: [
           { yearly_publish: { $exists: false } },
@@ -1844,6 +1844,7 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
           student_id: "$student_id",
           month: "$month",
           class_id: "$class_id",
+          teacher_id: "$teacher_id", // Include teacher_id in grouping
         },
         entries: {
           $push: {
@@ -1851,9 +1852,11 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
             lessons: "$lessons",
             type: "$type",
             original_id: "$original_id",
+            teacher_id: "$teacher_id",
           },
         },
         document_ids: { $addToSet: "$original_id" },
+        teacher_id: { $first: "$teacher_id" },
       },
     },
     {
@@ -1862,6 +1865,7 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
         student_id: "$_id.student_id",
         month: "$_id.month",
         class_id: "$_id.class_id",
+        teacher_id: 1,
         document_ids: 1,
         beginning: {
           $arrayElemAt: [
@@ -1889,9 +1893,10 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
         },
       },
     },
+    // Only include months that have BOTH beginning AND ending
     {
       $match: {
-        ending: { $ne: null },
+        $and: [{ beginning: { $ne: null } }, { ending: { $ne: null } }],
       },
     },
     {
@@ -1899,6 +1904,7 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
         student_id: 1,
         month: 1,
         class_id: 1,
+        teacher_id: 1,
         document_ids: 1,
         type: {
           $cond: [
@@ -1908,7 +1914,7 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
           ],
         },
 
-        // Calculate monthly progress for each lesson type with proper null handling
+        // Calculate monthly progress for each lesson type
         qaidah_quran_monthly: {
           $cond: [
             {
@@ -2162,7 +2168,6 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
                   },
                 },
               },
-              // FIXED: Store beginning and ending targets for display
               beginning_target: "$beginning.lessons.dua_surah.target",
               ending_target: "$ending.lessons.dua_surah.target",
               dua_number_progress: {
@@ -2267,7 +2272,6 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
                   },
                 },
               },
-              // FIXED: Store beginning and ending targets for display
               beginning_target: "$beginning.lessons.gift_for_muslim.target",
               ending_target: "$ending.lessons.gift_for_muslim.target",
               beginning_level: "$beginning.lessons.gift_for_muslim.level",
@@ -2300,6 +2304,7 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
           year: { $literal: parseInt(year) },
         },
         processedDocumentIds: { $addToSet: "$document_ids" },
+        teacher_id: { $first: "$teacher_id" },
 
         // Sum up yearly progress for numeric fields
         qaidah_quran_yearly: {
@@ -2325,7 +2330,6 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
         dua_surah_pages_yearly: {
           $sum: "$dua_surah_monthly.page_progress",
         },
-        // REMOVED: dua_surah_targets_yearly calculation since we're not doing subtraction
         dua_surah_numbers_yearly: {
           $sum: "$dua_surah_monthly.dua_number_progress",
         },
@@ -2333,7 +2337,6 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
         gift_for_muslim_pages_yearly: {
           $sum: "$gift_for_muslim_monthly.page_progress",
         },
-        // REMOVED: gift_for_muslim_targets_yearly calculation since we're not doing subtraction
 
         // Get the first and last values for text fields
         first_qaidah_level: {
@@ -2369,7 +2372,6 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
           $first: "$dua_surah_monthly.beginning_lesson_name",
         },
         last_dua_lesson: { $last: "$dua_surah_monthly.ending_lesson_name" },
-        // ADDED: First and last targets for display
         first_dua_target: { $first: "$dua_surah_monthly.beginning_target" },
         last_dua_target: { $last: "$dua_surah_monthly.ending_target" },
 
@@ -2383,7 +2385,6 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
         last_gift_lesson: {
           $last: "$gift_for_muslim_monthly.ending_lesson_name",
         },
-        // ADDED: First and last targets for display
         first_gift_target: {
           $first: "$gift_for_muslim_monthly.beginning_target",
         },
@@ -2409,6 +2410,7 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
         _id: 0,
         student_id: "$_id.student_id",
         class_id: "$_id.class_id",
+        teacher_id: 1,
         type: "$_id.type",
         year: "$_id.year",
         processedDocumentIds: {
@@ -2488,7 +2490,6 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
                   },
                   {
                     page_progress: "$gift_for_muslim_pages_yearly",
-                    // FIXED: Show target display instead of target progress
                     target_display: {
                       $cond: [
                         { $and: ["$first_gift_target", "$last_gift_target"] },
@@ -2650,7 +2651,6 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
                   },
                   {
                     page_progress: "$dua_surah_pages_yearly",
-                    // FIXED: Show target display instead of target progress
                     target_display: {
                       $cond: [
                         { $and: ["$first_dua_target", "$last_dua_target"] },
