@@ -950,7 +950,6 @@ export const buildYearlySummaryPipeline = (year) => {
         },
       },
     },
-    // Only include months that have BOTH beginning AND ending
     {
       $match: {
         $and: [{ beginning: { $ne: null } }, { ending: { $ne: null } }],
@@ -1017,41 +1016,18 @@ export const buildYearlySummaryPipeline = (year) => {
                   },
                 },
               },
-              line_progress: {
-                $let: {
-                  vars: {
-                    startPage: {
-                      $ifNull: [
-                        "$beginning.lessons.qaidah_quran.data.page",
-                        "0",
-                      ],
-                    },
-                    startLine: {
-                      $ifNull: [
-                        "$beginning.lessons.qaidah_quran.data.line",
-                        "0",
-                      ],
-                    },
-                    endPage: {
-                      $ifNull: ["$ending.lessons.qaidah_quran.data.page", "0"],
-                    },
-                    endLine: {
-                      $ifNull: ["$ending.lessons.qaidah_quran.data.line", "0"],
-                    },
-                  },
-                  in: {
-                    $concat: [
-                      "page ",
-                      "$$startPage",
-                      " line ",
-                      "$$startLine",
-                      " - page ",
-                      "$$endPage",
-                      " line ",
-                      "$$endLine",
-                    ],
-                  },
-                },
+              // FIX: Store beginning and ending page/line for yearly line progress
+              beginning_page: {
+                $ifNull: ["$beginning.lessons.qaidah_quran.data.page", "0"],
+              },
+              beginning_line: {
+                $ifNull: ["$beginning.lessons.qaidah_quran.data.line", "0"],
+              },
+              ending_page: {
+                $ifNull: ["$ending.lessons.qaidah_quran.data.page", "0"],
+              },
+              ending_line: {
+                $ifNull: ["$ending.lessons.qaidah_quran.data.line", "0"],
               },
               para_progress: {
                 $cond: [
@@ -1109,7 +1085,10 @@ export const buildYearlySummaryPipeline = (year) => {
             },
             {
               page_progress: 0,
-              line_progress: "page 0 line 0 - page 0 line 0",
+              beginning_page: "0",
+              beginning_line: "0",
+              ending_page: "0",
+              ending_line: "0",
               para_progress: 0,
               beginning_level: null,
               ending_level: null,
@@ -1225,7 +1204,6 @@ export const buildYearlySummaryPipeline = (year) => {
                   },
                 },
               },
-              // FIXED: Store beginning and ending targets for display
               beginning_target: "$beginning.lessons.dua_surah.target",
               ending_target: "$ending.lessons.dua_surah.target",
               dua_number_progress: {
@@ -1330,7 +1308,6 @@ export const buildYearlySummaryPipeline = (year) => {
                   },
                 },
               },
-              // FIXED: Store beginning and ending targets for display
               beginning_target: "$beginning.lessons.gift_for_muslim.target",
               ending_target: "$ending.lessons.gift_for_muslim.target",
               beginning_level: "$beginning.lessons.gift_for_muslim.level",
@@ -1369,15 +1346,6 @@ export const buildYearlySummaryPipeline = (year) => {
         qaidah_quran_yearly: {
           $sum: "$qaidah_quran_monthly.page_progress",
         },
-        qaidah_quran_lines_yearly: {
-          $sum: {
-            $cond: [
-              { $ne: ["$qaidah_quran_monthly.line_progress", null] },
-              1,
-              0,
-            ],
-          },
-        },
         qaidah_quran_para_yearly: {
           $sum: "$qaidah_quran_monthly.para_progress",
         },
@@ -1389,7 +1357,6 @@ export const buildYearlySummaryPipeline = (year) => {
         dua_surah_pages_yearly: {
           $sum: "$dua_surah_monthly.page_progress",
         },
-        // REMOVED: dua_surah_targets_yearly calculation since we're not doing subtraction
         dua_surah_numbers_yearly: {
           $sum: "$dua_surah_monthly.dua_number_progress",
         },
@@ -1397,7 +1364,6 @@ export const buildYearlySummaryPipeline = (year) => {
         gift_for_muslim_pages_yearly: {
           $sum: "$gift_for_muslim_monthly.page_progress",
         },
-        // REMOVED: gift_for_muslim_targets_yearly calculation since we're not doing subtraction
 
         // Get the first and last values for text fields
         first_qaidah_level: {
@@ -1411,6 +1377,20 @@ export const buildYearlySummaryPipeline = (year) => {
           $last: "$qaidah_quran_monthly.ending_lesson_name",
         },
         qaidah_selected: { $first: "$qaidah_quran_monthly.selected" },
+
+        // FIX: Get first and last page/line for yearly line progress
+        first_qaidah_page: {
+          $first: "$qaidah_quran_monthly.beginning_page",
+        },
+        first_qaidah_line: {
+          $first: "$qaidah_quran_monthly.beginning_line",
+        },
+        last_qaidah_page: {
+          $last: "$qaidah_quran_monthly.ending_page",
+        },
+        last_qaidah_line: {
+          $last: "$qaidah_quran_monthly.ending_line",
+        },
 
         first_islamic_book: {
           $first: "$islamic_studies_monthly.beginning_book",
@@ -1433,7 +1413,6 @@ export const buildYearlySummaryPipeline = (year) => {
           $first: "$dua_surah_monthly.beginning_lesson_name",
         },
         last_dua_lesson: { $last: "$dua_surah_monthly.ending_lesson_name" },
-        // ADDED: First and last targets for display
         first_dua_target: { $first: "$dua_surah_monthly.beginning_target" },
         last_dua_target: { $last: "$dua_surah_monthly.ending_target" },
 
@@ -1447,7 +1426,6 @@ export const buildYearlySummaryPipeline = (year) => {
         last_gift_lesson: {
           $last: "$gift_for_muslim_monthly.ending_lesson_name",
         },
-        // ADDED: First and last targets for display
         first_gift_target: {
           $first: "$gift_for_muslim_monthly.beginning_target",
         },
@@ -1462,7 +1440,6 @@ export const buildYearlySummaryPipeline = (year) => {
       },
     },
 
-    // Only include students who have at least one complete month
     {
       $match: {
         months_with_both: { $gt: 0 },
@@ -1489,7 +1466,6 @@ export const buildYearlySummaryPipeline = (year) => {
           $cond: [
             { $eq: ["$_id.type", "gift_muslim"] },
             {
-              // Gift for Muslim type structure
               qaidah_quran_progress: {
                 $cond: [
                   {
@@ -1501,11 +1477,28 @@ export const buildYearlySummaryPipeline = (year) => {
                   {
                     selected: "$qaidah_selected",
                     page_progress: "$qaidah_quran_yearly",
+                    // FIX: Use actual first and last page/line for yearly progress
                     line_progress: {
-                      $concat: [
-                        "Completed ",
-                        { $toString: "$qaidah_quran_lines_yearly" },
-                        " months with line progress",
+                      $cond: [
+                        {
+                          $and: [
+                            { $ne: ["$first_qaidah_page", "0"] },
+                            { $ne: ["$last_qaidah_page", "0"] },
+                          ],
+                        },
+                        {
+                          $concat: [
+                            "page ",
+                            "$first_qaidah_page",
+                            " line ",
+                            "$first_qaidah_line",
+                            " - page ",
+                            "$last_qaidah_page",
+                            " line ",
+                            "$last_qaidah_line",
+                          ],
+                        },
+                        "N/A",
                       ],
                     },
                     para_progress: "$qaidah_quran_para_yearly",
@@ -1553,7 +1546,6 @@ export const buildYearlySummaryPipeline = (year) => {
                   },
                   {
                     page_progress: "$gift_for_muslim_pages_yearly",
-                    // FIXED: Show target display instead of target progress
                     target_display: {
                       $cond: [
                         { $and: ["$first_gift_target", "$last_gift_target"] },
@@ -1603,7 +1595,6 @@ export const buildYearlySummaryPipeline = (year) => {
               dua_surah_progress: null,
             },
             {
-              // Normal type structure
               qaidah_quran_progress: {
                 $cond: [
                   {
@@ -1615,11 +1606,28 @@ export const buildYearlySummaryPipeline = (year) => {
                   {
                     selected: "$qaidah_selected",
                     page_progress: "$qaidah_quran_yearly",
+                    // FIX: Use actual first and last page/line for yearly progress
                     line_progress: {
-                      $concat: [
-                        "Completed ",
-                        { $toString: "$qaidah_quran_lines_yearly" },
-                        " months with line progress",
+                      $cond: [
+                        {
+                          $and: [
+                            { $ne: ["$first_qaidah_page", "0"] },
+                            { $ne: ["$last_qaidah_page", "0"] },
+                          ],
+                        },
+                        {
+                          $concat: [
+                            "page ",
+                            "$first_qaidah_page",
+                            " line ",
+                            "$first_qaidah_line",
+                            " - page ",
+                            "$last_qaidah_page",
+                            " line ",
+                            "$last_qaidah_line",
+                          ],
+                        },
+                        "N/A",
                       ],
                     },
                     para_progress: "$qaidah_quran_para_yearly",
@@ -1715,7 +1723,6 @@ export const buildYearlySummaryPipeline = (year) => {
                   },
                   {
                     page_progress: "$dua_surah_pages_yearly",
-                    // FIXED: Show target display instead of target progress
                     target_display: {
                       $cond: [
                         { $and: ["$first_dua_target", "$last_dua_target"] },
@@ -1829,7 +1836,7 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
   return [
     {
       $match: {
-        teacher_id: teacher_id, // Filter by teacher_id
+        teacher_id: teacher_id,
         year: year,
         $or: [
           { yearly_publish: { $exists: false } },
@@ -1844,7 +1851,7 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
           student_id: "$student_id",
           month: "$month",
           class_id: "$class_id",
-          teacher_id: "$teacher_id", // Include teacher_id in grouping
+          teacher_id: "$teacher_id",
         },
         entries: {
           $push: {
@@ -1893,7 +1900,6 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
         },
       },
     },
-    // Only include months that have BOTH beginning AND ending
     {
       $match: {
         $and: [{ beginning: { $ne: null } }, { ending: { $ne: null } }],
@@ -1960,41 +1966,18 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
                   },
                 },
               },
-              line_progress: {
-                $let: {
-                  vars: {
-                    startPage: {
-                      $ifNull: [
-                        "$beginning.lessons.qaidah_quran.data.page",
-                        "0",
-                      ],
-                    },
-                    startLine: {
-                      $ifNull: [
-                        "$beginning.lessons.qaidah_quran.data.line",
-                        "0",
-                      ],
-                    },
-                    endPage: {
-                      $ifNull: ["$ending.lessons.qaidah_quran.data.page", "0"],
-                    },
-                    endLine: {
-                      $ifNull: ["$ending.lessons.qaidah_quran.data.line", "0"],
-                    },
-                  },
-                  in: {
-                    $concat: [
-                      "page ",
-                      "$$startPage",
-                      " line ",
-                      "$$startLine",
-                      " - page ",
-                      "$$endPage",
-                      " line ",
-                      "$$endLine",
-                    ],
-                  },
-                },
+              // FIX: Store beginning and ending page/line for yearly line progress
+              beginning_page: {
+                $ifNull: ["$beginning.lessons.qaidah_quran.data.page", "0"],
+              },
+              beginning_line: {
+                $ifNull: ["$beginning.lessons.qaidah_quran.data.line", "0"],
+              },
+              ending_page: {
+                $ifNull: ["$ending.lessons.qaidah_quran.data.page", "0"],
+              },
+              ending_line: {
+                $ifNull: ["$ending.lessons.qaidah_quran.data.line", "0"],
               },
               para_progress: {
                 $cond: [
@@ -2052,7 +2035,10 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
             },
             {
               page_progress: 0,
-              line_progress: "page 0 line 0 - page 0 line 0",
+              beginning_page: "0",
+              beginning_line: "0",
+              ending_page: "0",
+              ending_line: "0",
               para_progress: 0,
               beginning_level: null,
               ending_level: null,
@@ -2310,15 +2296,6 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
         qaidah_quran_yearly: {
           $sum: "$qaidah_quran_monthly.page_progress",
         },
-        qaidah_quran_lines_yearly: {
-          $sum: {
-            $cond: [
-              { $ne: ["$qaidah_quran_monthly.line_progress", null] },
-              1,
-              0,
-            ],
-          },
-        },
         qaidah_quran_para_yearly: {
           $sum: "$qaidah_quran_monthly.para_progress",
         },
@@ -2350,6 +2327,20 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
           $last: "$qaidah_quran_monthly.ending_lesson_name",
         },
         qaidah_selected: { $first: "$qaidah_quran_monthly.selected" },
+
+        // FIX: Get first and last page/line for yearly line progress
+        first_qaidah_page: {
+          $first: "$qaidah_quran_monthly.beginning_page",
+        },
+        first_qaidah_line: {
+          $first: "$qaidah_quran_monthly.beginning_line",
+        },
+        last_qaidah_page: {
+          $last: "$qaidah_quran_monthly.ending_page",
+        },
+        last_qaidah_line: {
+          $last: "$qaidah_quran_monthly.ending_line",
+        },
 
         first_islamic_book: {
           $first: "$islamic_studies_monthly.beginning_book",
@@ -2399,7 +2390,6 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
       },
     },
 
-    // Only include students who have at least one complete month
     {
       $match: {
         months_with_both: { $gt: 0 },
@@ -2426,7 +2416,6 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
           $cond: [
             { $eq: ["$_id.type", "gift_muslim"] },
             {
-              // Gift for Muslim type structure
               qaidah_quran_progress: {
                 $cond: [
                   {
@@ -2438,11 +2427,28 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
                   {
                     selected: "$qaidah_selected",
                     page_progress: "$qaidah_quran_yearly",
+                    // FIX: Use actual first and last page/line for yearly progress
                     line_progress: {
-                      $concat: [
-                        "Completed ",
-                        { $toString: "$qaidah_quran_lines_yearly" },
-                        " months with line progress",
+                      $cond: [
+                        {
+                          $and: [
+                            { $ne: ["$first_qaidah_page", "0"] },
+                            { $ne: ["$last_qaidah_page", "0"] },
+                          ],
+                        },
+                        {
+                          $concat: [
+                            "page ",
+                            "$first_qaidah_page",
+                            " line ",
+                            "$first_qaidah_line",
+                            " - page ",
+                            "$last_qaidah_page",
+                            " line ",
+                            "$last_qaidah_line",
+                          ],
+                        },
+                        "N/A",
                       ],
                     },
                     para_progress: "$qaidah_quran_para_yearly",
@@ -2539,7 +2545,6 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
               dua_surah_progress: null,
             },
             {
-              // Normal type structure
               qaidah_quran_progress: {
                 $cond: [
                   {
@@ -2551,11 +2556,28 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
                   {
                     selected: "$qaidah_selected",
                     page_progress: "$qaidah_quran_yearly",
+                    // FIX: Use actual first and last page/line for yearly progress
                     line_progress: {
-                      $concat: [
-                        "Completed ",
-                        { $toString: "$qaidah_quran_lines_yearly" },
-                        " months with line progress",
+                      $cond: [
+                        {
+                          $and: [
+                            { $ne: ["$first_qaidah_page", "0"] },
+                            { $ne: ["$last_qaidah_page", "0"] },
+                          ],
+                        },
+                        {
+                          $concat: [
+                            "page ",
+                            "$first_qaidah_page",
+                            " line ",
+                            "$first_qaidah_line",
+                            " - page ",
+                            "$last_qaidah_page",
+                            " line ",
+                            "$last_qaidah_line",
+                          ],
+                        },
+                        "N/A",
                       ],
                     },
                     para_progress: "$qaidah_quran_para_yearly",
