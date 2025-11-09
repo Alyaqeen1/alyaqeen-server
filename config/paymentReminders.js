@@ -259,21 +259,21 @@ const sendReminderEmail = async ({ to, name, studentName }, reminderType) => {
 
   const { currentMonth, nextMonth } = getMonthNames();
   const emailTemplates = {
-    10: {
-      subject: "🔔 Fee Reminder – Alyaqeen Academy",
-      content: `
-        <p>Dear <strong>${name}</strong>,</p>
-        <p>We hope you are well. This month’s fee is still outstanding.</p>
-        <p>Fees should be paid within the first seven working days of each month.</p>
-        <p>Please use the link below to make the payment, or contact the Academy</p>
-        <p>👉 <strong>https://alyaqeen.vercel.app/login</strong></p>
-        <p>If you have already made the payment, please ignore this message.</p>
-        <p>Jazakallahu khairan</p>
-        <br/>
-        <p>Best regards,<br/>Alyaqeen Team</p>
-      `,
-    },
-    20: {
+    // 10: {
+    //   subject: "🔔 Fee Reminder – Alyaqeen Academy",
+    //   content: `
+    //     <p>Dear <strong>${name}</strong>,</p>
+    //     <p>We hope you are well. This month’s fee is still outstanding.</p>
+    //     <p>Fees should be paid within the first seven working days of each month.</p>
+    //     <p>Please use the link below to make the payment, or contact the Academy</p>
+    //     <p>👉 <strong>https://alyaqeen.vercel.app/login</strong></p>
+    //     <p>If you have already made the payment, please ignore this message.</p>
+    //     <p>Jazakallahu khairan</p>
+    //     <br/>
+    //     <p>Best regards,<br/>Alyaqeen Team</p>
+    //   `,
+    // },
+    16: {
       subject: "Reminder – Monthly Fee Due",
       content: `
         <p>Dear <strong>${name}</strong>,</p>

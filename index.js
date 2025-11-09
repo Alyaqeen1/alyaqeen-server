@@ -1211,9 +1211,9 @@ app.get("/api/send-reminders", async (req, res) => {
 
   // Check if today is a reminder day
   let reminderDay;
-  if (currentDay === 10) reminderDay = 10;
-  else if (currentDay === 20) reminderDay = 20;
-  else if (currentDay === 29) reminderDay = 29;
+  if (currentDay === 16) reminderDay = 16; // Changed from 10 to 16
+  else if (currentDay === 29)
+    reminderDay = 29; // Keep 29, remove the 20th condition
   else {
     return res.json({ message: "Not a reminder day in UK time" });
   }
