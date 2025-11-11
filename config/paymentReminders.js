@@ -277,34 +277,23 @@ const sendReminderEmail = async ({ to, name, studentName }, reminderType) => {
       subject: "Reminder – Monthly Fee Due",
       content: `
         <p>Dear <strong>${name}</strong>,</p>
-        <p>السلام عليكم ورحمة الله وبركاته</p>
-        <p>We hope you are well. This is a kind reminder that the monthly fee for ${studentName} is still pending.</p>
-        <p>Please make the payment at your earliest convenience by visiting:</p>
-        <p>👉 <strong>https://alyaqeen.vercel.app/login</strong></p>
-        <p>As mentioned before, fees should be paid within the first seven working days of each month.</p>
-        <p>Your timely payment helps us continue serving our students effectively.</p>
-        <p>If you've already paid, please disregard this message.</p>
-        <p>جزاكم الله خيراً</p>
+        <p>I hope you are well. This is a kind reminder that half of the month has passed, and we have not yet received the fee for this month. We kindly request parents to make the payment during the first week of the month.</p>
+        <p>The sooner you are able to make the payment, the easier it becomes for us to focus on providing quality education to your children.</p>
+         <p>If you have already made the payment, please ignore this message.</p>
         <br/>
-        <p>Alyaqeen Team</p>
+        <p>JazakAllahu khayran for your cooperation.</p>
+        <p>Alyaqeen Academy</p>
       `,
     },
     29: {
       subject: "⚠️ Important: Monthly Fee Payment Still Unpaid",
       content: `
         <p>Dear <strong>${name}</strong>,</p>
-        <p>Assalamu Alaikum wa Rahmatullah.</p>
-        <p>We hope you and your family are well.</p>
-        <p>Despite two previous reminders, we have noticed that this month’s fee for ${studentName} has still not been paid.</p>
-        <p>As an Islamic academy, we believe that paying fees on time is a matter of trust (amanah) and commitment between parents and the institution. When payments are delayed, it causes real difficulty for the academy and affects our ability to stay focused on providing quality Islamic and academic education.</p>
-        
-        <p>It is truly disappointing for us to send repeated reminders for the same matter. We humbly request you to please make the payment for both  the current (${currentMonth}) and upcoming (${nextMonth}) months without further delay so we can avoid calling, messaging, or emailing again.</p>
-
-        <p>Please use the link below to complete your payment today:</p>
-        <p>👉 <strong>https://alyaqeen.vercel.app/login</strong></p>
-        <p>Your timely cooperation reflects your sincerity towards your child’s Islamic education and helps us continue our work smoothly.</p>
+        <p>I hope you are well. We had sent you an earlier reminder regarding the monthly fee. We understand that due to your busy schedule, the payment may have been delayed.</p>
+        <p>As the month is now ending, we kindly request you to please settle both this month’s fee and the upcoming month’s fee together, so that no further reminders or emails need to be sent and you are not disturbed again.</p>
+         <p>If you have already made the payment, please ignore this message.</p>
         <br/>
-        <p>JazakAllahu khairan for your immediate attention,</p>
+        <p>Thank you for your understanding and cooperation. JazakAllahu khayran.</p>
         <p>Alyaqeen Academy</p>
       `,
     },

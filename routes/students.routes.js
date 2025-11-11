@@ -133,6 +133,7 @@ module.exports = (
       });
 
       const activeCount = await studentsCollection.countDocuments({
+        status: "enrolled",
         activity: "active",
       });
       const inactiveCount = await studentsCollection.countDocuments({
