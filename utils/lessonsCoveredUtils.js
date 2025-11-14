@@ -2757,3 +2757,24 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
     },
   ];
 };
+
+// Function to build student monthly summary pipeline
+export const buildStudentMonthlySummaryPipeline = (matchConditions) => [
+  { $match: matchConditions },
+  commonPipelineStages.convertIds,
+  commonPipelineStages.groupAndSeparate({
+    student_id: "$student_id",
+    month: "$month",
+    year: "$year",
+  }),
+  commonPipelineStages.separateEntries,
+  commonPipelineStages.filterCompletePairs,
+  commonPipelineStages.calculateProgress,
+  commonPipelineStages.lookupRelatedData,
+  commonPipelineStages.unwindStudent,
+  commonPipelineStages.lookupClass,
+  commonPipelineStages.unwindClass,
+  commonPipelineStages.lookupTeacher,
+  commonPipelineStages.unwindTeacher,
+  commonPipelineStages.finalProjection,
+];
