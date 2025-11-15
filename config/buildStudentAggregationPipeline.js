@@ -2,142 +2,220 @@ const buildStudentAggregationPipeline = (match = {}) => [
   {
     $match: {
       ...match,
-      $and: [
-        {
-          $or: [
-            { "academic.dept_id": { $exists: false } },
-            { "academic.dept_id": null },
-            { "academic.dept_id": { $type: "string" } },
-            { "academic.dept_id": { $type: "objectId" } },
-          ],
-        },
-        {
-          $or: [
-            { "academic.class_id": { $exists: false } },
-            { "academic.class_id": null },
-            { "academic.class_id": { $type: "string" } },
-            { "academic.class_id": { $type: "objectId" } },
-          ],
-        },
-      ],
+      "academic.enrollments": { $exists: true, $type: "array" },
     },
   },
   {
     $addFields: {
-      deptObjectId: {
-        $cond: [
-          {
-            $and: [
-              { $ne: ["$academic.dept_id", null] },
+      // Convert all enrollment dept_ids and class_ids to ObjectId
+      enrollmentsWithObjectIds: {
+        $map: {
+          input: "$academic.enrollments",
+          as: "enrollment",
+          in: {
+            $mergeObjects: [
+              "$$enrollment",
               {
-                $or: [
-                  { $eq: [{ $type: "$academic.dept_id" }, "string"] },
-                  { $eq: [{ $type: "$academic.dept_id" }, "objectId"] },
-                ],
+                deptObjectId: {
+                  $cond: [
+                    {
+                      $and: [
+                        { $ne: ["$$enrollment.dept_id", null] },
+                        { $ne: ["$$enrollment.dept_id", ""] },
+                        {
+                          $or: [
+                            {
+                              $eq: [
+                                { $type: "$$enrollment.dept_id" },
+                                "string",
+                              ],
+                            },
+                            {
+                              $eq: [
+                                { $type: "$$enrollment.dept_id" },
+                                "objectId",
+                              ],
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                    {
+                      $convert: {
+                        input: "$$enrollment.dept_id",
+                        to: "objectId",
+                        onError: null,
+                        onNull: null,
+                      },
+                    },
+                    null,
+                  ],
+                },
+                classObjectId: {
+                  $cond: [
+                    {
+                      $and: [
+                        { $ne: ["$$enrollment.class_id", null] },
+                        { $ne: ["$$enrollment.class_id", ""] },
+                        {
+                          $or: [
+                            {
+                              $eq: [
+                                { $type: "$$enrollment.class_id" },
+                                "string",
+                              ],
+                            },
+                            {
+                              $eq: [
+                                { $type: "$$enrollment.class_id" },
+                                "objectId",
+                              ],
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                    {
+                      $convert: {
+                        input: "$$enrollment.class_id",
+                        to: "objectId",
+                        onError: null,
+                        onNull: null,
+                      },
+                    },
+                    null,
+                  ],
+                },
               },
             ],
           },
-          {
-            $convert: {
-              input: "$academic.dept_id",
-              to: "objectId",
-              onError: null,
-              onNull: null,
-            },
-          },
-          null,
-        ],
-      },
-
-      classObjectId: {
-        $cond: [
-          {
-            $and: [
-              { $ne: ["$academic.class_id", null] },
-              { $ne: ["$academic.class_id", ""] }, // avoid empty strings
-              {
-                $or: [
-                  { $eq: [{ $type: "$academic.class_id" }, "string"] },
-                  { $eq: [{ $type: "$academic.class_id" }, "objectId"] },
-                ],
-              },
-            ],
-          },
-          {
-            $convert: {
-              input: "$academic.class_id",
-              to: "objectId",
-              onError: null,
-              onNull: null,
-            },
-          },
-          null,
-        ],
+        },
       },
     },
   },
   {
     $lookup: {
       from: "departments",
-      let: { deptId: "$deptObjectId" },
-      pipeline: [
-        {
-          $match: {
-            $expr: {
-              $and: [
-                { $ne: ["$$deptId", null] },
-                { $eq: ["$_id", "$$deptId"] },
-              ],
-            },
-          },
-        },
-        { $project: { dept_name: 1 } },
-      ],
+      localField: "enrollmentsWithObjectIds.deptObjectId",
+      foreignField: "_id",
       as: "departmentInfo",
     },
   },
   {
     $lookup: {
       from: "classes",
-      let: { classId: "$classObjectId" },
-      pipeline: [
-        {
-          $match: {
-            $expr: {
-              $and: [
-                { $ne: ["$$classId", null] },
-                { $eq: ["$_id", "$$classId"] },
-              ],
-            },
-          },
-        },
-        { $project: { class_name: 1 } },
-      ],
+      localField: "enrollmentsWithObjectIds.classObjectId",
+      foreignField: "_id",
       as: "classInfo",
     },
   },
   {
     $addFields: {
-      "academic.department": {
-        $ifNull: [
-          { $arrayElemAt: ["$departmentInfo.dept_name", 0] },
-          "Unknown Department",
-        ],
+      // Enrich each enrollment with department and class names
+      "academic.enrollments": {
+        $map: {
+          input: "$enrollmentsWithObjectIds",
+          as: "enrollment",
+          in: {
+            $mergeObjects: [
+              "$$enrollment",
+              {
+                department: {
+                  $let: {
+                    vars: {
+                      dept: {
+                        $arrayElemAt: [
+                          {
+                            $filter: {
+                              input: "$departmentInfo",
+                              as: "dept",
+                              cond: {
+                                $eq: [
+                                  "$$dept._id",
+                                  "$$enrollment.deptObjectId",
+                                ],
+                              },
+                            },
+                          },
+                          0,
+                        ],
+                      },
+                    },
+                    in: { $ifNull: ["$$dept.dept_name", "Unknown Department"] },
+                  },
+                },
+                class: {
+                  $let: {
+                    vars: {
+                      cls: {
+                        $arrayElemAt: [
+                          {
+                            $filter: {
+                              input: "$classInfo",
+                              as: "cls",
+                              cond: {
+                                $eq: [
+                                  "$$cls._id",
+                                  "$$enrollment.classObjectId",
+                                ],
+                              },
+                            },
+                          },
+                          0,
+                        ],
+                      },
+                    },
+                    in: { $ifNull: ["$$cls.class_name", "Unknown Class"] },
+                  },
+                },
+              },
+            ],
+          },
+        },
       },
-      "academic.class": {
-        $ifNull: [
-          { $arrayElemAt: ["$classInfo.class_name", 0] },
-          "Unknown Class",
-        ],
+      // Calculate total monthly fee from all enrollments
+      totalMonthlyFee: {
+        $sum: {
+          $map: {
+            input: "$enrollmentsWithObjectIds",
+            as: "enrollment",
+            in: {
+              $let: {
+                vars: {
+                  dept: {
+                    $arrayElemAt: [
+                      {
+                        $filter: {
+                          input: "$departmentInfo",
+                          as: "dept",
+                          cond: {
+                            $eq: ["$$dept._id", "$$enrollment.deptObjectId"],
+                          },
+                        },
+                      },
+                      0,
+                    ],
+                  },
+                },
+                in: {
+                  $cond: [
+                    { $eq: ["$$enrollment.session", "weekend"] },
+                    "$$dept.weekend_fee",
+                    "$$dept.weekdays_fee",
+                  ],
+                },
+              },
+            },
+          },
+        },
       },
     },
   },
   {
     $project: {
+      enrollmentsWithObjectIds: 0,
       departmentInfo: 0,
       classInfo: 0,
-      deptObjectId: 0,
-      classObjectId: 0,
     },
   },
 ];

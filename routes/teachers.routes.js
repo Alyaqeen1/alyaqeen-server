@@ -2,12 +2,7 @@ const express = require("express");
 const { ObjectId } = require("mongodb");
 const router = express.Router();
 
-module.exports = (
-  teachersCollection,
-  departmentsCollection,
-  classesCollection,
-  subjectsCollection
-) => {
+module.exports = (teachersCollection) => {
   router.get("/", async (req, res) => {
     const result = await teachersCollection.find().toArray();
     res.send(result);

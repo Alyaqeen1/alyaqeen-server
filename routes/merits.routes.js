@@ -325,71 +325,159 @@ module.exports = (
           },
           { $unwind: "$student" },
           { $match: matchStage },
+          // Handle department lookup for both old and new structures
           {
             $lookup: {
               from: "departments",
-              let: { deptId: "$student.academic.dept_id" },
+              let: {
+                // Get dept_id from either enrollments array or old structure
+                deptIds: {
+                  $cond: {
+                    if: {
+                      $and: [
+                        { $isArray: "$student.academic.enrollments" },
+                        {
+                          $gt: [{ $size: "$student.academic.enrollments" }, 0],
+                        },
+                      ],
+                    },
+                    then: {
+                      $map: {
+                        input: "$student.academic.enrollments",
+                        as: "enrollment",
+                        in: "$$enrollment.dept_id",
+                      },
+                    },
+                    else: ["$student.academic.dept_id"],
+                  },
+                },
+              },
               pipeline: [
                 {
                   $match: {
                     $expr: {
-                      $eq: [
+                      $in: [
                         "$_id",
                         {
-                          $cond: [
-                            { $eq: [{ $type: "$$deptId" }, "string"] },
-                            { $toObjectId: "$$deptId" },
-                            "$$deptId",
-                          ],
+                          $map: {
+                            input: "$$deptIds",
+                            as: "deptId",
+                            in: {
+                              $cond: [
+                                { $eq: [{ $type: "$$deptId" }, "string"] },
+                                { $toObjectId: "$$deptId" },
+                                "$$deptId",
+                              ],
+                            },
+                          },
                         },
                       ],
                     },
                   },
                 },
               ],
-              as: "department",
+              as: "departments",
             },
           },
-          {
-            $unwind: { path: "$department", preserveNullAndEmptyArrays: true },
-          },
+          // Handle class lookup for both old and new structures
           {
             $lookup: {
               from: "classes",
-              let: { classId: "$student.academic.class_id" },
+              let: {
+                // Get class_id from either enrollments array or old structure
+                classIds: {
+                  $cond: {
+                    if: {
+                      $and: [
+                        { $isArray: "$student.academic.enrollments" },
+                        {
+                          $gt: [{ $size: "$student.academic.enrollments" }, 0],
+                        },
+                      ],
+                    },
+                    then: {
+                      $map: {
+                        input: "$student.academic.enrollments",
+                        as: "enrollment",
+                        in: "$$enrollment.class_id",
+                      },
+                    },
+                    else: ["$student.academic.class_id"],
+                  },
+                },
+              },
               pipeline: [
                 {
                   $match: {
                     $expr: {
-                      $eq: [
+                      $in: [
                         "$_id",
                         {
-                          $cond: [
-                            { $eq: [{ $type: "$$classId" }, "string"] },
-                            { $toObjectId: "$$classId" },
-                            "$$classId",
-                          ],
+                          $map: {
+                            input: "$$classIds",
+                            as: "classId",
+                            in: {
+                              $cond: [
+                                { $eq: [{ $type: "$$classId" }, "string"] },
+                                { $toObjectId: "$$classId" },
+                                "$$classId",
+                              ],
+                            },
+                          },
                         },
                       ],
                     },
                   },
                 },
               ],
-              as: "class",
+              as: "classes",
             },
           },
-          { $unwind: { path: "$class", preserveNullAndEmptyArrays: true } },
           {
             $project: {
               student_id: "$_id",
               totalMerit: 1,
               student_name: "$student.name",
               family_name: "$student.family_name",
+              // Handle multiple departments/classes
+              departments: {
+                $cond: {
+                  if: { $gt: [{ $size: "$departments" }, 0] },
+                  then: {
+                    $map: {
+                      input: "$departments",
+                      as: "dept",
+                      in: "$$dept.dept_name",
+                    },
+                  },
+                  else: ["Unknown Department"],
+                },
+              },
+              classes: {
+                $cond: {
+                  if: { $gt: [{ $size: "$classes" }, 0] },
+                  then: {
+                    $map: {
+                      input: "$classes",
+                      as: "cls",
+                      in: "$$cls.class_name",
+                    },
+                  },
+                  else: ["Unknown Class"],
+                },
+              },
+              // For backward compatibility - show first department/class
               department: {
-                $ifNull: ["$department.dept_name", "Unknown Department"],
+                $ifNull: [
+                  { $arrayElemAt: ["$departments.dept_name", 0] },
+                  "Unknown Department",
+                ],
               },
               class: {
-                $ifNull: ["$class.class_name", "Unknown Class"],
+                $ifNull: [
+                  { $arrayElemAt: ["$classes.class_name", 0] },
+                  "Unknown Class",
+                ],
               },
             },
           },

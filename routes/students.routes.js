@@ -236,26 +236,54 @@ module.exports = (
     try {
       const { classId } = req.params;
 
-      // 1️⃣  Sanity‑check the ID
+      // 1️⃣ Sanity-check the ID
       if (!ObjectId.isValid(classId))
         return res.status(400).send({ message: "Invalid class ID" });
 
-      // 2️⃣  Fetch the class we want to match against
+      // 2️⃣ Fetch the class we want to match against
       const cls = await classesCollection.findOne({
         _id: new ObjectId(classId),
       });
 
       if (!cls) return res.status(404).send({ message: "Class not found" });
 
-      // 3️⃣  Build the aggregation pipeline
+      // 3️⃣ Build the aggregation pipeline for NEW structure with enrollments array
       const matchStage = {
         $match: {
           $expr: {
             $and: [
-              { $eq: ["$academic.dept_id", cls.dept_id] },
-              { $eq: ["$academic.class_id", cls._id.toString()] },
-              { $eq: ["$academic.session", cls.session] },
-              { $eq: ["$academic.time", cls.session_time] },
+              // Check if any enrollment matches the class criteria
+              {
+                $gt: [
+                  {
+                    $size: {
+                      $filter: {
+                        input: "$academic.enrollments",
+                        as: "enrollment",
+                        cond: {
+                          $and: [
+                            { $eq: ["$$enrollment.dept_id", cls.dept_id] },
+                            {
+                              $eq: [
+                                "$$enrollment.class_id",
+                                cls._id.toString(),
+                              ],
+                            },
+                            { $eq: ["$$enrollment.session", cls.session] },
+                            {
+                              $eq: [
+                                "$$enrollment.session_time",
+                                cls.session_time,
+                              ],
+                            },
+                          ],
+                        },
+                      },
+                    },
+                  },
+                  0, // At least one enrollment matches
+                ],
+              },
               { $in: ["$status", ["enrolled", "hold"]] },
               { $eq: ["$activity", "active"] },
             ],
@@ -263,12 +291,64 @@ module.exports = (
         },
       };
 
+      // 4️⃣ SIMPLIFIED PROJECTION - Keep all fields and filter enrollments
+      const projectMatchingEnrollment = {
+        $project: {
+          // Include all student fields
+          name: 1,
+          email: 1,
+          status: 1,
+          activity: 1,
+          // Include all other fields you need
+          "mother.name": 1,
+          "father.name": 1,
+          emergency_number: 1,
+          family_name: 1,
+          school_year: 1,
+          gender: 1,
+          dob: 1,
+          startingDate: 1,
+          student_id: 1,
+          createdAt: 1,
+          uid: 1,
+          parentUid: 1,
+          address: 1,
+          post_code: 1,
+          language: 1,
+          signature: 1,
+          monthly_fee: 1,
+
+          // Filter academic to only show the matching enrollment
+          academic: {
+            enrollments: {
+              $filter: {
+                input: "$academic.enrollments",
+                as: "enrollment",
+                cond: {
+                  $and: [
+                    { $eq: ["$$enrollment.dept_id", cls.dept_id] },
+                    { $eq: ["$$enrollment.class_id", cls._id.toString()] },
+                    { $eq: ["$$enrollment.session", cls.session] },
+                    { $eq: ["$$enrollment.session_time", cls.session_time] },
+                  ],
+                },
+              },
+            },
+          },
+        },
+      };
+
       const students = await studentsCollection
-        .aggregate([matchStage, ...buildStudentAggregationPipeline()])
+        .aggregate([
+          matchStage,
+          projectMatchingEnrollment,
+          ...buildStudentAggregationPipeline(),
+        ])
         .toArray();
 
       res.send(students);
     } catch (err) {
+      console.error("Error in by-group route:", err);
       res.status(500).send({ error: "Internal Server Error" });
     }
   });

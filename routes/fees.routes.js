@@ -18,16 +18,29 @@ const enrichStudents = async (
     .find({ _id: { $in: studentIds }, activity: "active" })
     .toArray();
 
-  // Get all referenced departments and classes
-  const departmentIds = allStudents
-    .map((s) => s.academic?.dept_id)
-    .filter(Boolean)
-    .map((id) => new ObjectId(id));
+  // Get all referenced departments and classes from ALL enrollments
+  const departmentIds = [];
+  const classIds = [];
 
-  const classIds = allStudents
-    .map((s) => s.academic?.class_id)
-    .filter(Boolean)
-    .map((id) => new ObjectId(id));
+  allStudents.forEach((student) => {
+    if (
+      student.academic?.enrollments &&
+      Array.isArray(student.academic.enrollments)
+    ) {
+      // NEW STRUCTURE: Multiple enrollments
+      student.academic.enrollments.forEach((enrollment) => {
+        if (enrollment.dept_id)
+          departmentIds.push(new ObjectId(enrollment.dept_id));
+        if (enrollment.class_id)
+          classIds.push(new ObjectId(enrollment.class_id));
+      });
+    } else if (student.academic?.dept_id) {
+      // OLD STRUCTURE: Single enrollment
+      departmentIds.push(new ObjectId(student.academic.dept_id));
+      if (student.academic.class_id)
+        classIds.push(new ObjectId(student.academic.class_id));
+    }
+  });
 
   const [departments, classes] = await Promise.all([
     departmentsCollection.find({ _id: { $in: departmentIds } }).toArray(),
@@ -40,13 +53,42 @@ const enrichStudents = async (
       (s) => String(s.studentId) === String(student._id)
     );
 
-    const department = departments.find(
-      (d) => String(d._id) === String(student.academic?.dept_id)
-    );
+    // Handle both old and new academic structures
+    let academicData = { ...student.academic };
 
-    const classInfo = classes.find(
-      (c) => String(c._id) === String(student.academic?.class_id)
-    );
+    if (
+      student.academic?.enrollments &&
+      Array.isArray(student.academic.enrollments)
+    ) {
+      // NEW STRUCTURE: Enrich each enrollment
+      academicData.enrollments = student.academic.enrollments.map(
+        (enrollment) => {
+          const department = departments.find(
+            (d) => String(d._id) === String(enrollment.dept_id)
+          );
+          const classInfo = classes.find(
+            (c) => String(c._id) === String(enrollment.class_id)
+          );
+
+          return {
+            ...enrollment,
+            department: department?.dept_name || "-",
+            class: classInfo?.class_name || "-",
+          };
+        }
+      );
+    } else {
+      // OLD STRUCTURE: Single enrollment
+      const department = departments.find(
+        (d) => String(d._id) === String(student.academic?.dept_id)
+      );
+      const classInfo = classes.find(
+        (c) => String(c._id) === String(student.academic?.class_id)
+      );
+
+      academicData.department = department?.dept_name || "-";
+      academicData.class = classInfo?.class_name || "-";
+    }
 
     return {
       ...student,
@@ -56,11 +98,7 @@ const enrichStudents = async (
       monthlyFee: feeInfo?.monthlyFee || 0,
       monthly_fee: feeInfo?.monthlyFee || 0,
       subtotal: feeInfo?.subtotal || 0,
-      academic: {
-        ...student.academic,
-        department: department?.dept_name || "-",
-        class: classInfo?.class_name || "-",
-      },
+      academic: academicData,
     };
   });
 };
