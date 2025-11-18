@@ -140,12 +140,47 @@ module.exports = (
         activity: "inactive",
       });
 
-      const weekdaysCount = await studentsCollection.countDocuments({
-        "academic.session": "weekdays",
+      // For session counts, we need to use aggregation since it's in an array
+      const sessionCounts = await studentsCollection
+        .aggregate([
+          {
+            $unwind: "$academic.enrollments",
+          },
+          {
+            $group: {
+              _id: "$academic.enrollments.session",
+              count: { $sum: 1 },
+            },
+          },
+        ])
+        .toArray();
+
+      // Convert aggregation result to the format you need
+      let weekdaysCount = 0;
+      let weekendCount = 0;
+
+      sessionCounts.forEach((session) => {
+        if (session._id === "weekdays") {
+          weekdaysCount = session.count;
+        } else if (session._id === "weekend") {
+          weekendCount = session.count;
+        }
       });
-      const weekendCount = await studentsCollection.countDocuments({
-        "academic.session": "weekend",
-      });
+
+      // If you also want department counts, you can add this aggregation
+      const departmentCounts = await studentsCollection
+        .aggregate([
+          {
+            $unwind: "$academic.enrollments",
+          },
+          {
+            $group: {
+              _id: "$academic.enrollments.department",
+              count: { $sum: 1 },
+            },
+          },
+        ])
+        .toArray();
 
       res.send({
         total,
@@ -161,12 +196,12 @@ module.exports = (
           weekdays: weekdaysCount,
           weekend: weekendCount,
         },
+        // departments: departmentCounts // Optional: include department counts
       });
     } catch (error) {
       res.status(500).send({ message: "Failed to count students", error });
     }
   });
-
   // 🔹 GET: Students without enrolled or hold status
   router.get("/without-enrolled", async (req, res) => {
     try {
@@ -247,51 +282,67 @@ module.exports = (
 
       if (!cls) return res.status(404).send({ message: "Class not found" });
 
-      // 3️⃣ Build the aggregation pipeline for NEW structure with enrollments array
+      // 3️⃣ CORRECTED: Build the aggregation pipeline
       const matchStage = {
         $match: {
-          $expr: {
-            $and: [
-              // Check if any enrollment matches the class criteria
-              {
+          $and: [
+            { status: { $in: ["enrolled", "hold"] } }, // Fixed: removed $ prefix
+            { activity: "active" }, // Fixed: removed $ prefix
+            {
+              $expr: {
                 $gt: [
                   {
                     $size: {
-                      $filter: {
-                        input: "$academic.enrollments",
-                        as: "enrollment",
-                        cond: {
-                          $and: [
-                            { $eq: ["$$enrollment.dept_id", cls.dept_id] },
-                            {
-                              $eq: [
-                                "$$enrollment.class_id",
-                                cls._id.toString(),
+                      $ifNull: [
+                        {
+                          $filter: {
+                            input: "$academic.enrollments",
+                            as: "enrollment",
+                            cond: {
+                              $and: [
+                                // Match dept_id (use deptObjectId if available, otherwise dept_id)
+                                {
+                                  $or: [
+                                    {
+                                      $eq: [
+                                        "$$enrollment.deptObjectId",
+                                        cls.dept_id,
+                                      ],
+                                    },
+                                    {
+                                      $eq: [
+                                        "$$enrollment.dept_id",
+                                        cls.dept_id,
+                                      ],
+                                    },
+                                  ],
+                                },
+                                // Match class_id (it's stored as string in enrollments)
+                                { $eq: ["$$enrollment.class_id", classId] },
+                                { $eq: ["$$enrollment.session", cls.session] },
+                                {
+                                  $eq: [
+                                    "$$enrollment.session_time",
+                                    cls.session_time,
+                                  ],
+                                },
                               ],
                             },
-                            { $eq: ["$$enrollment.session", cls.session] },
-                            {
-                              $eq: [
-                                "$$enrollment.session_time",
-                                cls.session_time,
-                              ],
-                            },
-                          ],
+                          },
                         },
-                      },
+                        [], // Default to empty array if academic.enrollments is null
+                      ],
                     },
                   },
                   0, // At least one enrollment matches
                 ],
               },
-              { $in: ["$status", ["enrolled", "hold"]] },
-              { $eq: ["$activity", "active"] },
-            ],
-          },
+            },
+          ],
         },
       };
 
-      // 4️⃣ SIMPLIFIED PROJECTION - Keep all fields and filter enrollments
+      // 4️⃣ PROJECTION - Keep all fields and filter enrollments
       const projectMatchingEnrollment = {
         $project: {
           // Include all student fields
@@ -326,8 +377,15 @@ module.exports = (
                 as: "enrollment",
                 cond: {
                   $and: [
-                    { $eq: ["$$enrollment.dept_id", cls.dept_id] },
-                    { $eq: ["$$enrollment.class_id", cls._id.toString()] },
+                    // Match dept_id (use deptObjectId if available, otherwise dept_id)
+                    {
+                      $or: [
+                        { $eq: ["$$enrollment.deptObjectId", cls.dept_id] },
+                        { $eq: ["$$enrollment.dept_id", cls.dept_id] },
+                      ],
+                    },
+                    // Match class_id (it's stored as string in enrollments)
+                    { $eq: ["$$enrollment.class_id", classId] },
                     { $eq: ["$$enrollment.session", cls.session] },
                     { $eq: ["$$enrollment.session_time", cls.session_time] },
                   ],
@@ -339,11 +397,7 @@ module.exports = (
       };
 
       const students = await studentsCollection
-        .aggregate([
-          matchStage,
-          projectMatchingEnrollment,
-          ...buildStudentAggregationPipeline(),
-        ])
+        .aggregate([matchStage, projectMatchingEnrollment])
         .toArray();
 
       res.send(students);
@@ -352,7 +406,6 @@ module.exports = (
       res.status(500).send({ error: "Internal Server Error" });
     }
   });
-
   router.get("/by-activity/:activity", async (req, res) => {
     const activity = req.params.activity;
     const { search } = req.query;
