@@ -38,6 +38,148 @@ module.exports = (
   //   res.send(result);
   // });
 
+  // Get attendance for specific students and date range
+  router.get("/filtered", async (req, res) => {
+    try {
+      const { studentIds, startDate, endDate } = req.query;
+
+      if (!studentIds || !startDate || !endDate) {
+        return res.status(400).send({
+          message: "studentIds, startDate, and endDate are required",
+        });
+      }
+
+      // Parse studentIds from comma-separated string to array
+      const studentIdsArray = studentIds.split(",");
+
+      const attendance = await attendancesCollection
+        .find({
+          student_id: { $in: studentIdsArray },
+          date: {
+            $gte: startDate,
+            $lte: endDate,
+          },
+          attendance: "student",
+        })
+        .toArray();
+
+      res.send(attendance);
+    } catch (error) {
+      console.error("Error fetching filtered attendance:", error);
+      res.status(500).send({ message: "Error fetching attendance data" });
+    }
+  });
+
+  // Present all students for a specific date and class
+  // Present all students for a specific date and class
+  router.post("/present-all", async (req, res) => {
+    try {
+      const { studentIds, classId, date } = req.body;
+
+      if (!studentIds || !classId || !date) {
+        return res.status(400).send({
+          message: "studentIds, classId, and date are required",
+        });
+      }
+
+      // Parse studentIds from array
+      const studentIdsArray = Array.isArray(studentIds)
+        ? studentIds
+        : [studentIds];
+
+      // Check which students already have attendance for this date and class
+      const existingAttendances = await attendancesCollection
+        .find({
+          student_id: { $in: studentIdsArray },
+          date: date,
+          class_id: classId,
+        })
+        .toArray();
+
+      const existingStudentIds = existingAttendances.map(
+        (att) => att.student_id
+      );
+
+      // Filter out students who already have attendance for this date
+      const newStudentIds = studentIdsArray.filter(
+        (id) => !existingStudentIds.includes(id)
+      );
+
+      let insertedCount = 0;
+
+      // Create new attendance records only for students without existing records
+      if (newStudentIds.length > 0) {
+        const newAttendances = newStudentIds.map((studentId) => ({
+          class_id: classId,
+          student_id: studentId,
+          date: date,
+          status: "present",
+          attendance: "student",
+        }));
+
+        const result = await attendancesCollection.insertMany(newAttendances);
+        insertedCount = result.insertedCount;
+      }
+
+      // Update existing records to "present" status
+      let updatedCount = 0;
+      if (existingStudentIds.length > 0) {
+        const updateResult = await attendancesCollection.updateMany(
+          {
+            student_id: { $in: existingStudentIds },
+            date: date,
+            class_id: classId,
+          },
+          {
+            $set: {
+              status: "present",
+            },
+          }
+        );
+        updatedCount = updateResult.modifiedCount;
+      }
+
+      res.send({
+        message: `Marked ${
+          insertedCount + updatedCount
+        } students as present (${insertedCount} new, ${updatedCount} updated)`,
+        insertedCount: insertedCount,
+        updatedCount: updatedCount,
+        totalAffected: insertedCount + updatedCount,
+      });
+    } catch (error) {
+      console.error("Error marking all students present:", error);
+      res.status(500).send({ message: "Error marking students as present" });
+    }
+  });
+
+  // Remove all attendance for a specific date and class
+  router.delete("/remove-all", async (req, res) => {
+    try {
+      const { classId, date } = req.body;
+
+      if (!classId || !date) {
+        return res.status(400).send({
+          message: "classId and date are required",
+        });
+      }
+
+      const result = await attendancesCollection.deleteMany({
+        class_id: classId,
+        date: date,
+        attendance: "student",
+      });
+
+      res.send({
+        message: `Removed ${result.deletedCount} attendance records`,
+        deletedCount: result.deletedCount,
+      });
+    } catch (error) {
+      console.error("Error removing all attendance:", error);
+      res.status(500).send({ message: "Error removing attendance records" });
+    }
+  });
+
   router.get("/teacher/:teacherId/date/:date", async (req, res) => {
     try {
       const { teacherId, date } = req.params;
