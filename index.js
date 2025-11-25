@@ -26,6 +26,7 @@ const createLessonsCoveredRouter = require("./routes/lessons_covered.routes");
 const createNotificationsLogRouter = require("./routes/notifications_log.routes");
 const createHolidaysRouter = require("./routes/holidays.routes");
 const createReviewsRouter = require("./routes/reviews.routes");
+const createAnnouncementsRouter = require("./routes/announcements.routes");
 
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 let familiesCollection;
@@ -897,6 +898,9 @@ async function run() {
       .collection("notifications");
     // ADD THE COUNTERS COLLECTION HERE
     const countersCollection = client.db("alyaqeenDb").collection("counters");
+    const announcementsCollection = client
+      .db("alyaqeenDb")
+      .collection("announcements");
 
     // Initialize the counter if it doesn't exist
     // await countersCollection.updateOne(
@@ -1021,6 +1025,10 @@ async function run() {
     app.use(
       "/notifications-log",
       createNotificationsLogRouter(notificationsLogCollection)
+    );
+    app.use(
+      "/announcements",
+      createAnnouncementsRouter(announcementsCollection)
     );
     app.use(
       "/lessons-covered",
