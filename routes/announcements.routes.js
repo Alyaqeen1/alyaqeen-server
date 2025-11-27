@@ -14,20 +14,50 @@ module.exports = (announcementsCollection) => {
       res.status(500).send({ error: error.message });
     }
   });
+  // Get most recently created or updated public announcement
+  router.get("/public/latest", async (req, res) => {
+    try {
+      const result = await announcementsCollection
+        .find({ type: "public" })
+        .sort({
+          updatedAt: -1, // First sort by last update
+          createdAt: -1, // Then by creation date
+        })
+        .limit(1)
+        .toArray();
 
+      // Check if result exists and has at least one item
+      if (result && result.length > 0) {
+        res.send(result[0]);
+      } else {
+        res.send({}); // Send empty object when no public announcements found
+      }
+    } catch (error) {
+      res.status(500).send({ error: error.message });
+    }
+  });
   // Get announcement by type (teacher, parent, public) - returns single for teacher/parent
   router.get("/by-type/:type", async (req, res) => {
     try {
       const type = req.params.type;
-      // For teacher and parent, return the single announcement
+
+      // For teacher and parent → return a single announcement
       if (type === "teacher" || type === "parent") {
         const result = await announcementsCollection.findOne({ type });
-        res.send(result || null);
-      } else {
-        // For public, return all public announcements
-        const result = await announcementsCollection.find({ type }).toArray();
-        res.send(result);
+        return res.send(result || null);
       }
+
+      // For public → return all sorted by earliest date (createdAt or updatedAt)
+      const result = await announcementsCollection
+        .find({ type })
+        .sort({
+          // Sort by whichever field is earlier
+          createdAt: 1,
+          updatedAt: 1,
+        })
+        .toArray();
+
+      res.send(result);
     } catch (error) {
       res.status(500).send({ error: error.message });
     }
