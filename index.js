@@ -2,6 +2,11 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const { sendMonthlyReminders } = require("./config/paymentReminders");
+const sendDirectDebitEmail = require("./config/sendDirectDebitEmail");
+const sendMonthlyFeeEmail = require("./config/sendMonthlyFeeEmail");
+const sendEmailViaAPI = require("./config/sendAdmissionEmail");
 const port = process.env.PORT || 9000;
 const app = express();
 const admin = require("firebase-admin");
@@ -831,12 +836,6 @@ const cookieOptions = {
 };
 //localhost:5000 and localhost:5173 are treated as same site.  so sameSite value must be strict in development server.  in production sameSite will be none
 // in development server secure will false .  in production secure will be true
-
-const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
-const { sendMonthlyReminders } = require("./config/paymentReminders");
-const sendDirectDebitEmail = require("./config/sendDirectDebitEmail");
-const sendMonthlyFeeEmail = require("./config/sendMonthlyFeeEmail");
-const sendEmailViaAPI = require("./config/sendAdmissionEmail");
 
 // old
 // const uri = `mongodb+srv://${process.env.DB_User}:${process.env.DB_Pass}@cluster0.dr5qw.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;

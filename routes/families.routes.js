@@ -1137,7 +1137,171 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
       res.status(500).json({ error: error.message });
     }
   });
+  // ✅ Refresh ALL pending payments for ALL families
+  router.post("/refresh-all-pending-payments", async (req, res) => {
+    try {
+      console.log("🔄 Starting bulk refresh of ALL pending payments...");
+
+      // 1. Find ALL pending fees with payment intent IDs
+      const pendingFees = await feesCollection
+        .find({
+          status: "pending",
+          "payments.stripePaymentIntentId": { $exists: true, $ne: null },
+        })
+        .toArray();
+
+      console.log(
+        `📋 Found ${pendingFees.length} total pending payments to check`
+      );
+
+      const results = [];
+      let updatedCount = 0;
+      let errorCount = 0;
+
+      // 2. Process each pending fee
+      for (const fee of pendingFees) {
+        const paymentIntentId = fee.payments[0].stripePaymentIntentId;
+
+        try {
+          // 3. Check payment status with Stripe
+          const paymentIntent = await stripe.paymentIntents.retrieve(
+            paymentIntentId
+          );
+
+          // 4. If payment succeeded, update our database
+          if (paymentIntent.status === "succeeded" && fee.status !== "paid") {
+            // Update fee to paid
+            await feesCollection.updateOne(
+              { _id: fee._id },
+              {
+                $set: {
+                  status: "paid",
+                  remaining: 0,
+                  updatedAt: new Date(),
+                },
+              }
+            );
+
+            // Update family's last successful payment
+            if (fee.familyId) {
+              await familiesCollection.updateOne(
+                { _id: new ObjectId(fee.familyId) },
+                {
+                  $set: {
+                    "directDebit.lastSuccessfulPayment": new Date(),
+                    "directDebit.lastPaymentIntentId": paymentIntentId,
+                  },
+                }
+              );
+            }
+
+            updatedCount++;
+            console.log(`✅ Updated fee ${fee._id} from pending to paid`);
+
+            results.push({
+              feeId: fee._id,
+              paymentIntentId: paymentIntentId,
+              familyId: fee.familyId,
+              amount: fee.expectedTotal,
+              previousStatus: "pending",
+              newStatus: "paid",
+              success: true,
+              action: "updated",
+            });
+          } else if (paymentIntent.status === "processing") {
+            // Still processing, no change needed
+            results.push({
+              feeId: fee._id,
+              paymentIntentId: paymentIntentId,
+              familyId: fee.familyId,
+              amount: fee.expectedTotal,
+              status: "pending",
+              stripeStatus: paymentIntent.status,
+              success: true,
+              action: "no_change",
+            });
+          } else if (
+            paymentIntent.status === "requires_payment_method" ||
+            paymentIntent.status === "canceled"
+          ) {
+            // Payment failed
+            await feesCollection.updateOne(
+              { _id: fee._id },
+              {
+                $set: {
+                  status: "failed",
+                  updatedAt: new Date(),
+                },
+              }
+            );
+
+            results.push({
+              feeId: fee._id,
+              paymentIntentId: paymentIntentId,
+              familyId: fee.familyId,
+              amount: fee.expectedTotal,
+              previousStatus: "pending",
+              newStatus: "failed",
+              stripeStatus: paymentIntent.status,
+              success: true,
+              action: "marked_failed",
+            });
+          } else {
+            // Other statuses
+            results.push({
+              feeId: fee._id,
+              paymentIntentId: paymentIntentId,
+              familyId: fee.familyId,
+              amount: fee.expectedTotal,
+              status: fee.status,
+              stripeStatus: paymentIntent.status,
+              success: true,
+              action: "no_change",
+            });
+          }
+        } catch (error) {
+          errorCount++;
+          console.error(`❌ Error processing fee ${fee._id}:`, error.message);
+          results.push({
+            feeId: fee._id,
+            paymentIntentId: paymentIntentId,
+            familyId: fee.familyId,
+            error: error.message,
+            success: false,
+            action: "error",
+          });
+        }
+
+        // Small delay to avoid rate limiting
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+
+      // 5. Return comprehensive results
+      const summary = {
+        totalProcessed: pendingFees.length,
+        successfullyUpdated: updatedCount,
+        markedFailed: results.filter((r) => r.action === "marked_failed")
+          .length,
+        errors: errorCount,
+        noChange: results.filter((r) => r.action === "no_change").length,
+      };
+
+      console.log(`🎉 Bulk refresh completed:`, summary);
+
+      res.json({
+        success: true,
+        summary: summary,
+        timestamp: new Date().toISOString(),
+        details: results,
+      });
+    } catch (error) {
+      console.error("❌ Error in bulk refresh:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // ✅ Manual Direct Debit payment collection (for admin)
+
   // In your families.routes.js or wherever this route is defined
   router.post("/admin/collect-payment", async (req, res) => {
     try {
