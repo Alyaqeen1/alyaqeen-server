@@ -39,22 +39,24 @@ module.exports = (
   // });
 
   // Get attendance for specific students and date range
+  // In your attendance routes
   router.get("/filtered", async (req, res) => {
     try {
-      const { studentIds, startDate, endDate } = req.query;
+      const { studentIds, startDate, endDate, classId } = req.query; // Add classId
 
-      if (!studentIds || !startDate || !endDate) {
+      if (!studentIds || !startDate || !endDate || !classId) {
+        // Require classId
         return res.status(400).send({
-          message: "studentIds, startDate, and endDate are required",
+          message: "studentIds, startDate, endDate, and classId are required",
         });
       }
 
-      // Parse studentIds from comma-separated string to array
       const studentIdsArray = studentIds.split(",");
 
       const attendance = await attendancesCollection
         .find({
           student_id: { $in: studentIdsArray },
+          class_id: classId, // Add class filter
           date: {
             $gte: startDate,
             $lte: endDate,
