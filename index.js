@@ -1027,7 +1027,11 @@ async function run() {
     );
     app.use(
       "/announcements",
-      createAnnouncementsRouter(announcementsCollection)
+      createAnnouncementsRouter(
+        announcementsCollection,
+        familiesCollection,
+        teachersCollection
+      )
     );
     app.use(
       "/lessons-covered",

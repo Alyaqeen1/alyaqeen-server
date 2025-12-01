@@ -1,8 +1,13 @@
 const express = require("express");
 const router = express.Router();
 const { ObjectId } = require("mongodb");
+const sendAnnouncementEmail = require("../config/sendAnnouncementEmail");
 
-module.exports = (announcementsCollection) => {
+module.exports = (
+  announcementsCollection,
+  familiesCollection,
+  teachersCollection
+) => {
   // Get all announcements or filter by type
   router.get("/", async (req, res) => {
     try {
@@ -154,6 +159,68 @@ module.exports = (announcementsCollection) => {
       const query = { _id: new ObjectId(id) };
       const result = await announcementsCollection.findOne(query);
       res.send(result);
+    } catch (error) {
+      res.status(500).send({ error: error.message });
+    }
+  });
+
+  // Send announcement to parents (families with >1 child)
+  router.post("/send-to-parents/:id", async (req, res) => {
+    try {
+      const announcement = await announcementsCollection.findOne({
+        _id: new ObjectId(req.params.id),
+      });
+
+      if (!announcement) {
+        return res.status(404).send({ error: "Announcement not found" });
+      }
+
+      // Fetch families with more than 1 child
+      const families = await familiesCollection
+        .find({ "children.1": { $exists: true } }) // checks if second child exists
+        .toArray();
+
+      families.forEach((family) => {
+        sendAnnouncementEmail({
+          to: family?.email,
+          name: family?.name,
+          title: announcement.title,
+          content: announcement.content,
+        });
+      });
+
+      res.send({ message: "Emails sent to eligible families" });
+    } catch (error) {
+      res.status(500).send({ error: error.message });
+    }
+  });
+
+  // Send announcement to teachers (active & approved)
+  router.post("/send-to-teachers/:id", async (req, res) => {
+    try {
+      const announcement = await announcementsCollection.findOne({
+        _id: new ObjectId(req.params.id),
+      });
+
+      if (!announcement) {
+        return res.status(404).send({ error: "Announcement not found" });
+      }
+
+      // Fetch teachers who are active and approved
+      const teachers = await teachersCollection
+        .find({ activity: "active", status: "approved" })
+        .toArray();
+
+      teachers.forEach((teacher) => {
+        sendAnnouncementEmail({
+          to: teacher.email,
+          name: teacher.name,
+          title: announcement.title,
+          content: announcement.content,
+        });
+      });
+
+      res.send({ message: "Emails sent to eligible teachers" });
     } catch (error) {
       res.status(500).send({ error: error.message });
     }
