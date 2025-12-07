@@ -142,39 +142,76 @@ export const commonPipelineStages = {
           {
             selected: "$ending.lessons.qaidah_quran.selected",
             page_progress: {
-              $let: {
-                vars: {
-                  startPage: {
-                    $ifNull: [
-                      {
-                        $convert: {
-                          input: "$beginning.lessons.qaidah_quran.data.page",
-                          to: "double",
-                          onError: 0,
-                          onNull: 0,
-                        },
-                      },
-                      0,
-                    ],
-                  },
-                  endPage: {
-                    $ifNull: [
-                      {
-                        $convert: {
-                          input: "$ending.lessons.qaidah_quran.data.page",
-                          to: "double",
-                          onError: 0,
-                          onNull: 0,
-                        },
-                      },
-                      0,
-                    ],
-                  },
+              $cond: [
+                {
+                  $and: [
+                    "$beginning.lessons.qaidah_quran",
+                    "$ending.lessons.qaidah_quran",
+                  ],
                 },
-                in: {
-                  $subtract: ["$$endPage", "$$startPage"],
+                {
+                  // For Quran/Hifz: Show "Juz X page Y → Juz A page B"
+                  $cond: [
+                    {
+                      $in: [
+                        "$ending.lessons.qaidah_quran.selected",
+                        ["quran", "hifz"],
+                      ],
+                    },
+                    {
+                      $cond: [
+                        {
+                          $and: [
+                            "$beginning.lessons.qaidah_quran.data.para",
+                            "$ending.lessons.qaidah_quran.data.para",
+                            "$beginning.lessons.qaidah_quran.data.page",
+                            "$ending.lessons.qaidah_quran.data.page",
+                          ],
+                        },
+                        {
+                          $concat: [
+                            "Juz ",
+                            "$beginning.lessons.qaidah_quran.data.para",
+                            " page ",
+                            "$beginning.lessons.qaidah_quran.data.page",
+                            " → Juz ",
+                            "$ending.lessons.qaidah_quran.data.para",
+                            " page ",
+                            "$ending.lessons.qaidah_quran.data.page",
+                          ],
+                        },
+                        "N/A",
+                      ],
+                    },
+                    // For Qaidah/Tajweed: Show "Level X page Y → Level A page B"
+                    {
+                      $cond: [
+                        {
+                          $and: [
+                            "$beginning.lessons.qaidah_quran.data.level",
+                            "$ending.lessons.qaidah_quran.data.level",
+                            "$beginning.lessons.qaidah_quran.data.page",
+                            "$ending.lessons.qaidah_quran.data.page",
+                          ],
+                        },
+                        {
+                          $concat: [
+                            "$beginning.lessons.qaidah_quran.data.level",
+                            " page ",
+                            "$beginning.lessons.qaidah_quran.data.page",
+                            " → ",
+                            "$ending.lessons.qaidah_quran.data.level",
+                            " page ",
+                            "$ending.lessons.qaidah_quran.data.page",
+                          ],
+                        },
+                        "N/A",
+                      ],
+                    },
+                  ],
                 },
-              },
+                "N/A",
+              ],
             },
             line_progress: {
               $let: {
@@ -372,39 +409,28 @@ export const commonPipelineStages = {
           },
           {
             page_progress: {
-              $let: {
-                vars: {
-                  startPage: {
-                    $ifNull: [
-                      {
-                        $convert: {
-                          input: "$beginning.lessons.islamic_studies.page",
-                          to: "double",
-                          onError: 0,
-                          onNull: 0,
-                        },
-                      },
-                      0,
-                    ],
-                  },
-                  endPage: {
-                    $ifNull: [
-                      {
-                        $convert: {
-                          input: "$ending.lessons.islamic_studies.page",
-                          to: "double",
-                          onError: 0,
-                          onNull: 0,
-                        },
-                      },
-                      0,
-                    ],
-                  },
+              $cond: [
+                {
+                  $and: [
+                    "$beginning.lessons.islamic_studies.page",
+                    "$ending.lessons.islamic_studies.page",
+                    "$beginning.lessons.islamic_studies.book",
+                    "$ending.lessons.islamic_studies.book",
+                  ],
                 },
-                in: {
-                  $subtract: ["$$endPage", "$$startPage"],
+                {
+                  $concat: [
+                    "$beginning.lessons.islamic_studies.book",
+                    " page ",
+                    "$beginning.lessons.islamic_studies.page",
+                    " → ",
+                    "$ending.lessons.islamic_studies.book",
+                    " page ",
+                    "$ending.lessons.islamic_studies.page",
+                  ],
                 },
-              },
+                "N/A",
+              ],
             },
             book_display: {
               $cond: [
@@ -476,39 +502,28 @@ export const commonPipelineStages = {
           },
           {
             page_progress: {
-              $let: {
-                vars: {
-                  startPage: {
-                    $ifNull: [
-                      {
-                        $convert: {
-                          input: "$beginning.lessons.dua_surah.page",
-                          to: "double",
-                          onError: 0,
-                          onNull: 0,
-                        },
-                      },
-                      0,
-                    ],
-                  },
-                  endPage: {
-                    $ifNull: [
-                      {
-                        $convert: {
-                          input: "$ending.lessons.dua_surah.page",
-                          to: "double",
-                          onError: 0,
-                          onNull: 0,
-                        },
-                      },
-                      0,
-                    ],
-                  },
+              $cond: [
+                {
+                  $and: [
+                    "$beginning.lessons.dua_surah.page",
+                    "$ending.lessons.dua_surah.page",
+                    "$beginning.lessons.dua_surah.level",
+                    "$ending.lessons.dua_surah.level",
+                  ],
                 },
-                in: {
-                  $subtract: ["$$endPage", "$$startPage"],
+                {
+                  $concat: [
+                    "$beginning.lessons.dua_surah.level",
+                    " page ",
+                    "$beginning.lessons.dua_surah.page",
+                    " → ",
+                    "$ending.lessons.dua_surah.level",
+                    " page ",
+                    "$ending.lessons.dua_surah.page",
+                  ],
                 },
-              },
+                "N/A",
+              ],
             },
             // FIXED: Show beginning and ending target instead of subtraction
             target_display: {
@@ -654,39 +669,28 @@ export const commonPipelineStages = {
           },
           {
             page_progress: {
-              $let: {
-                vars: {
-                  startPage: {
-                    $ifNull: [
-                      {
-                        $convert: {
-                          input: "$beginning.lessons.gift_for_muslim.page",
-                          to: "double",
-                          onError: 0,
-                          onNull: 0,
-                        },
-                      },
-                      0,
-                    ],
-                  },
-                  endPage: {
-                    $ifNull: [
-                      {
-                        $convert: {
-                          input: "$ending.lessons.gift_for_muslim.page",
-                          to: "double",
-                          onError: 0,
-                          onNull: 0,
-                        },
-                      },
-                      0,
-                    ],
-                  },
+              $cond: [
+                {
+                  $and: [
+                    "$beginning.lessons.gift_for_muslim.page",
+                    "$ending.lessons.gift_for_muslim.page",
+                    "$beginning.lessons.gift_for_muslim.level",
+                    "$ending.lessons.gift_for_muslim.level",
+                  ],
                 },
-                in: {
-                  $subtract: ["$$endPage", "$$startPage"],
+                {
+                  $concat: [
+                    "$beginning.lessons.gift_for_muslim.level",
+                    " page ",
+                    "$beginning.lessons.gift_for_muslim.page",
+                    " → ",
+                    "$ending.lessons.gift_for_muslim.level",
+                    " page ",
+                    "$ending.lessons.gift_for_muslim.page",
+                  ],
                 },
-              },
+                "N/A",
+              ],
             },
             // FIXED: Show beginning and ending target instead of subtraction
             target_display: {
@@ -998,57 +1002,87 @@ export const getCommonYearlyPipelineStages = (year) => ({
               $ifNull: ["$ending.lessons.qaidah_quran.data.line", "0"],
             },
             // FIX: Only calculate para_progress for Quran/Hifz, set null for Qaidah/Tajweed
-            para_progress: {
+            // CHANGE: Instead of subtraction, show beginning → ending
+            page_progress: {
               $cond: [
                 {
                   $and: [
-                    "$beginning.lessons.qaidah_quran.data.para",
-                    "$ending.lessons.qaidah_quran.data.para",
+                    "$beginning.lessons.qaidah_quran.data.page",
+                    "$ending.lessons.qaidah_quran.data.page",
+                  ],
+                },
+                {
+                  // For Quran/Hifz: Show "Juz X page Y → Juz A page B"
+                  $cond: [
                     {
                       $in: [
                         "$ending.lessons.qaidah_quran.selected",
                         ["quran", "hifz"],
                       ],
                     },
+                    {
+                      $cond: [
+                        {
+                          $and: [
+                            "$beginning.lessons.qaidah_quran.data.para",
+                            "$ending.lessons.qaidah_quran.data.para",
+                          ],
+                        },
+                        {
+                          $concat: [
+                            "Juz ",
+                            "$beginning.lessons.qaidah_quran.data.para",
+                            " page ",
+                            "$beginning.lessons.qaidah_quran.data.page",
+                            " → Juz ",
+                            "$ending.lessons.qaidah_quran.data.para",
+                            " page ",
+                            "$ending.lessons.qaidah_quran.data.page",
+                          ],
+                        },
+                        {
+                          $concat: [
+                            "page ",
+                            "$beginning.lessons.qaidah_quran.data.page",
+                            " → page ",
+                            "$ending.lessons.qaidah_quran.data.page",
+                          ],
+                        },
+                      ],
+                    },
+                    // For Qaidah/Tajweed: Show "Level X page Y → Level A page B"
+                    {
+                      $cond: [
+                        {
+                          $and: [
+                            "$beginning.lessons.qaidah_quran.data.level",
+                            "$ending.lessons.qaidah_quran.data.level",
+                          ],
+                        },
+                        {
+                          $concat: [
+                            "$beginning.lessons.qaidah_quran.data.level",
+                            " page ",
+                            "$beginning.lessons.qaidah_quran.data.page",
+                            " → ",
+                            "$ending.lessons.qaidah_quran.data.level",
+                            " page ",
+                            "$ending.lessons.qaidah_quran.data.page",
+                          ],
+                        },
+                        {
+                          $concat: [
+                            "page ",
+                            "$beginning.lessons.qaidah_quran.data.page",
+                            " → page ",
+                            "$ending.lessons.qaidah_quran.data.page",
+                          ],
+                        },
+                      ],
+                    },
                   ],
                 },
-                {
-                  $let: {
-                    vars: {
-                      startPara: {
-                        $ifNull: [
-                          {
-                            $convert: {
-                              input:
-                                "$beginning.lessons.qaidah_quran.data.para",
-                              to: "double",
-                              onError: 0,
-                              onNull: 0,
-                            },
-                          },
-                          0,
-                        ],
-                      },
-                      endPara: {
-                        $ifNull: [
-                          {
-                            $convert: {
-                              input: "$ending.lessons.qaidah_quran.data.para",
-                              to: "double",
-                              onError: 0,
-                              onNull: 0,
-                            },
-                          },
-                          0,
-                        ],
-                      },
-                    },
-                    in: {
-                      $subtract: ["$$endPara", "$$startPara"],
-                    },
-                  },
-                },
-                null, // Set null for Qaidah/Tajweed or when para data is missing
+                "N/A",
               ],
             },
             beginning_level: "$beginning.lessons.qaidah_quran.data.level",
@@ -1084,39 +1118,28 @@ export const getCommonYearlyPipelineStages = (year) => ({
           },
           {
             page_progress: {
-              $let: {
-                vars: {
-                  startPage: {
-                    $ifNull: [
-                      {
-                        $convert: {
-                          input: "$beginning.lessons.islamic_studies.page",
-                          to: "double",
-                          onError: 0,
-                          onNull: 0,
-                        },
-                      },
-                      0,
-                    ],
-                  },
-                  endPage: {
-                    $ifNull: [
-                      {
-                        $convert: {
-                          input: "$ending.lessons.islamic_studies.page",
-                          to: "double",
-                          onError: 0,
-                          onNull: 0,
-                        },
-                      },
-                      0,
-                    ],
-                  },
+              $cond: [
+                {
+                  $and: [
+                    "$beginning.lessons.islamic_studies.page",
+                    "$ending.lessons.islamic_studies.page",
+                    "$beginning.lessons.islamic_studies.book",
+                    "$ending.lessons.islamic_studies.book",
+                  ],
                 },
-                in: {
-                  $subtract: ["$$endPage", "$$startPage"],
+                {
+                  $concat: [
+                    "$beginning.lessons.islamic_studies.book",
+                    " page ",
+                    "$beginning.lessons.islamic_studies.page",
+                    " → ",
+                    "$ending.lessons.islamic_studies.book",
+                    " page ",
+                    "$ending.lessons.islamic_studies.page",
+                  ],
                 },
-              },
+                "N/A",
+              ],
             },
             beginning_book: "$beginning.lessons.islamic_studies.book",
             ending_book: "$ending.lessons.islamic_studies.book",
@@ -1146,39 +1169,28 @@ export const getCommonYearlyPipelineStages = (year) => ({
           },
           {
             page_progress: {
-              $let: {
-                vars: {
-                  startPage: {
-                    $ifNull: [
-                      {
-                        $convert: {
-                          input: "$beginning.lessons.dua_surah.page",
-                          to: "double",
-                          onError: 0,
-                          onNull: 0,
-                        },
-                      },
-                      0,
-                    ],
-                  },
-                  endPage: {
-                    $ifNull: [
-                      {
-                        $convert: {
-                          input: "$ending.lessons.dua_surah.page",
-                          to: "double",
-                          onError: 0,
-                          onNull: 0,
-                        },
-                      },
-                      0,
-                    ],
-                  },
+              $cond: [
+                {
+                  $and: [
+                    "$beginning.lessons.dua_surah.page",
+                    "$ending.lessons.dua_surah.page",
+                    "$beginning.lessons.dua_surah.level",
+                    "$ending.lessons.dua_surah.level",
+                  ],
                 },
-                in: {
-                  $subtract: ["$$endPage", "$$startPage"],
+                {
+                  $concat: [
+                    "$beginning.lessons.dua_surah.level",
+                    " page ",
+                    "$beginning.lessons.dua_surah.page",
+                    " → ",
+                    "$ending.lessons.dua_surah.level",
+                    " page ",
+                    "$ending.lessons.dua_surah.page",
+                  ],
                 },
-              },
+                "N/A",
+              ],
             },
             beginning_target: "$beginning.lessons.dua_surah.target",
             ending_target: "$ending.lessons.dua_surah.target",
@@ -1251,39 +1263,28 @@ export const getCommonYearlyPipelineStages = (year) => ({
           },
           {
             page_progress: {
-              $let: {
-                vars: {
-                  startPage: {
-                    $ifNull: [
-                      {
-                        $convert: {
-                          input: "$beginning.lessons.gift_for_muslim.page",
-                          to: "double",
-                          onError: 0,
-                          onNull: 0,
-                        },
-                      },
-                      0,
-                    ],
-                  },
-                  endPage: {
-                    $ifNull: [
-                      {
-                        $convert: {
-                          input: "$ending.lessons.gift_for_muslim.page",
-                          to: "double",
-                          onError: 0,
-                          onNull: 0,
-                        },
-                      },
-                      0,
-                    ],
-                  },
+              $cond: [
+                {
+                  $and: [
+                    "$beginning.lessons.gift_for_muslim.page",
+                    "$ending.lessons.gift_for_muslim.page",
+                    "$beginning.lessons.gift_for_muslim.level",
+                    "$ending.lessons.gift_for_muslim.level",
+                  ],
                 },
-                in: {
-                  $subtract: ["$$endPage", "$$startPage"],
+                {
+                  $concat: [
+                    "$beginning.lessons.gift_for_muslim.level",
+                    " page ",
+                    "$beginning.lessons.gift_for_muslim.page",
+                    " → ",
+                    "$ending.lessons.gift_for_muslim.level",
+                    " page ",
+                    "$ending.lessons.gift_for_muslim.page",
+                  ],
                 },
-              },
+                "N/A",
+              ],
             },
             beginning_target: "$beginning.lessons.gift_for_muslim.target",
             ending_target: "$ending.lessons.gift_for_muslim.target",
@@ -1321,18 +1322,18 @@ export const getCommonYearlyPipelineStages = (year) => ({
       processedDocumentIds: { $addToSet: "$document_ids" },
       teacher_id: { $first: "$teacher_id" },
 
-      // Sum up yearly progress for numeric fields
       qaidah_quran_yearly: { $sum: "$qaidah_quran_monthly.page_progress" },
-      qaidah_quran_para_yearly: { $sum: "$qaidah_quran_monthly.para_progress" },
       islamic_studies_yearly: {
         $sum: "$islamic_studies_monthly.page_progress",
       },
       dua_surah_pages_yearly: { $sum: "$dua_surah_monthly.page_progress" },
-      dua_surah_numbers_yearly: {
-        $sum: "$dua_surah_monthly.dua_number_progress",
-      },
       gift_for_muslim_pages_yearly: {
         $sum: "$gift_for_muslim_monthly.page_progress",
+      },
+      // Sum up yearly progress for numeric fields
+      qaidah_quran_para_yearly: { $sum: "$qaidah_quran_monthly.para_progress" },
+      dua_surah_numbers_yearly: {
+        $sum: "$dua_surah_monthly.dua_number_progress",
       },
 
       // Get the first and last values for text fields
