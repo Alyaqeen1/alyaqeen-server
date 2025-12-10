@@ -822,7 +822,12 @@ async function handlePaymentCanceled(paymentIntent) {
 //Must remove "/" from your production URL
 app.use(
   cors({
-    origin: ["http://localhost:5173", "https://alyaqeen.vercel.app"],
+    origin: [
+      "http://localhost:5173",
+      "https://alyaqeen.vercel.app",
+      "https://alyaqeen-one.vercel.app",
+      process.env.FRONTEND_URL,
+    ],
     credentials: true,
   })
 );
