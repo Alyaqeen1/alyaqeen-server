@@ -32,6 +32,7 @@ const createNotificationsLogRouter = require("./routes/notifications_log.routes"
 const createHolidaysRouter = require("./routes/holidays.routes");
 const createReviewsRouter = require("./routes/reviews.routes");
 const createAnnouncementsRouter = require("./routes/announcements.routes");
+const createWebsiteSettingsRouter = require("./routes/website_settings.routes");
 
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 let familiesCollection;
@@ -507,160 +508,6 @@ app.post("/reconcile-payment", async (req, res) => {
   }
 });
 
-// Helper function for admission fees
-// async function createAdmissionFeeStructure(studentData, totalAmount) {
-//   const admissionFeePerStudent = 20;
-//   const students = studentData.selectedStudents;
-//   const discountPercent = studentData.discountPercent || 0;
-
-//   // Calculate allocations
-//   const totalAdmissionNeeded = admissionFeePerStudent * students.length;
-//   const totalMonthlyNeeded = students.reduce(
-//     (sum, student) =>
-//       sum + calculateDiscountedFee(student.monthly_fee, discountPercent),
-//     0
-//   );
-
-//   const expectedTotal = totalAdmissionNeeded + totalMonthlyNeeded;
-
-//   let allocations = [];
-
-//   if (totalAmount >= expectedTotal) {
-//     // Full payment
-//     allocations = students.map((student) => ({
-//       studentId: student.studentId,
-//       name: student.name,
-//       paidAdmission: admissionFeePerStudent,
-//       paidMonthly: calculateDiscountedFee(student.monthly_fee, discountPercent),
-//     }));
-//   } else {
-//     // Partial payment - prioritize admission fees
-//     const totalAdmissionAllocated = Math.min(totalAmount, totalAdmissionNeeded);
-//     const admissionPerStudent = totalAdmissionAllocated / students.length;
-//     const remainingAfterAdmission = totalAmount - totalAdmissionAllocated;
-
-//     allocations = students.map((student) => {
-//       const monthlyShare =
-//         totalMonthlyNeeded > 0
-//           ? (calculateDiscountedFee(student.monthly_fee, discountPercent) /
-//               totalMonthlyNeeded) *
-//             remainingAfterAdmission
-//           : 0;
-
-//       return {
-//         studentId: student.studentId,
-//         name: student.name,
-//         paidAdmission: toTwo(admissionPerStudent),
-//         paidMonthly: toTwo(monthlyShare),
-//       };
-//     });
-//   }
-
-//   // Create student payload
-//   return allocations.map((allocation) => {
-//     const student = students.find((s) => s.studentId === allocation.studentId);
-//     const startingDate = new Date(student.startingDate);
-
-//     return {
-//       studentId: allocation.studentId,
-//       name: allocation.name,
-//       admissionFee: admissionFeePerStudent,
-//       monthlyFee: student.monthly_fee,
-//       discountedFee: calculateDiscountedFee(
-//         student.monthly_fee,
-//         discountPercent
-//       ),
-//       joiningMonth: (startingDate.getMonth() + 1).toString().padStart(2, "0"),
-//       joiningYear: startingDate.getFullYear(),
-//       payments: [
-//         {
-//           amount: allocation.paidAdmission,
-//           date: studentData.paymentDate
-//             ? new Date(studentData.paymentDate)
-//             : new Date(),
-//           method: "direct_debit",
-//         },
-//         ...(allocation.paidMonthly > 0
-//           ? [
-//               {
-//                 amount: allocation.paidMonthly,
-//                 date: studentData.paymentDate
-//                   ? new Date(studentData.paymentDate)
-//                   : new Date(),
-//                 method: "direct_debit",
-//               },
-//             ]
-//           : []),
-//       ],
-//       subtotal: toTwo(allocation.paidAdmission + allocation.paidMonthly),
-//     };
-//   });
-// }
-
-// Helper function for monthly fees
-// async function createMonthlyFeeStructure(
-//   studentData,
-//   month,
-//   year,
-//   totalAmount
-// ) {
-//   const students = studentData.selectedStudents;
-//   const discountPercent = studentData.discountPercent || 0;
-
-//   const totalExpected = students.reduce(
-//     (sum, student) =>
-//       sum + calculateDiscountedFee(student.monthly_fee, discountPercent),
-//     0
-//   );
-
-//   // Allocate payment proportionally
-//   let allocations = students.map((student) => ({
-//     studentId: student.studentId,
-//     name: student.name,
-//     rawPaid:
-//       totalExpected > 0
-//         ? (calculateDiscountedFee(student.monthly_fee, discountPercent) /
-//             totalExpected) *
-//           totalAmount
-//         : 0,
-//   }));
-
-//   // Round allocations to avoid floating point issues
-//   allocations.forEach((a) => (a.paid = Math.floor(a.rawPaid * 100) / 100));
-
-//   let allocatedSum = allocations.reduce((sum, a) => sum + a.paid, 0);
-//   let remainderCents = Math.round((totalAmount - allocatedSum) * 100);
-
-//   // Distribute remainder
-//   if (remainderCents > 0) {
-//     allocations.sort((a, b) => b.rawPaid - b.paid - (a.rawPaid - a.paid));
-//     for (let i = 0; i < allocations.length && remainderCents > 0; i++) {
-//       allocations[i].paid = toTwo(allocations[i].paid + 0.01);
-//       remainderCents--;
-//     }
-//   }
-
-//   return allocations.map((allocation) => ({
-//     studentId: allocation.studentId,
-//     name: allocation.name,
-//     monthsPaid: [
-//       {
-//         month: (month || "").padStart(2, "0"),
-//         year: year || new Date().getFullYear(),
-//         monthlyFee: students.find((s) => s.studentId === allocation.studentId)
-//           .monthly_fee,
-//         discountedFee: calculateDiscountedFee(
-//           students.find((s) => s.studentId === allocation.studentId)
-//             .monthly_fee,
-//           discountPercent
-//         ),
-//         paid: allocation.paid,
-//       },
-//     ],
-//     subtotal: allocation.paid,
-//   }));
-// }
-
 function calculateDiscountedFee(baseFee, discountPercent) {
   return toTwo(baseFee - (baseFee * (discountPercent || 0)) / 100);
 }
@@ -905,6 +752,9 @@ async function run() {
     const announcementsCollection = client
       .db("alyaqeenDb")
       .collection("announcements");
+    const websiteSettingsCollection = client
+      .db("alyaqeenDb")
+      .collection("website-settings");
 
     // Initialize the counter if it doesn't exist
     // await countersCollection.updateOne(
@@ -1045,6 +895,10 @@ async function run() {
         studentsCollection,
         teachersCollection
       )
+    );
+    app.use(
+      "/website-settings",
+      createWebsiteSettingsRouter(websiteSettingsCollection)
     );
     app.use(
       "/merits",
