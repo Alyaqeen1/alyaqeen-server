@@ -29,6 +29,7 @@ module.exports = (websiteSettingsCollection) => {
             bestStudent: {},
             homeVideo: {},
             prayerCalendar: {},
+            gallery: {},
             createdAt: new Date(),
             updatedAt: new Date(),
           };
@@ -49,14 +50,29 @@ module.exports = (websiteSettingsCollection) => {
   router.patch("/:section", async (req, res) => {
     try {
       const { section } = req.params;
-      const updateData = req.body;
+      let updateData = req.body;
 
-      // Validate section
+      // If this is the gallery section, ensure each item has an ID
+      if (section === "gallery" && Array.isArray(updateData)) {
+        updateData = updateData.map((item) => {
+          // Add ID if it doesn't exist
+          if (!item.id) {
+            return {
+              ...item,
+              id: new ObjectId().toString(), // Generate new MongoDB-like ID
+            };
+          }
+          return item;
+        });
+      }
+
+      // VALID SECTIONS - ADD "gallery" HERE!
       const validSections = [
         "bestTeacher",
         "bestStudent",
         "homeVideo",
         "prayerCalendar",
+        "gallery", // ← ADD THIS LINE
       ];
 
       if (!validSections.includes(section)) {
