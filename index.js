@@ -92,7 +92,10 @@ app.post(
           const mandate = event.data.object;
           await handleMandateUpdate(mandate);
           break;
-
+        case "setup_intent.succeeded":
+          const setupIntentSucceeded = event.data.object;
+          await handleSetupIntentSucceeded(setupIntentSucceeded);
+          break;
         case "payment_intent.succeeded":
           await handleSuccessfulDirectDebitPayment(event.data.object);
           break;
@@ -130,8 +133,6 @@ app.post(
           console.log(`❌ PAYMENT CANCELED:`, event.data.object.id);
           await handlePaymentCanceled(event.data.object);
           break;
-        case "setup_intent.succeeded":
-          break;
 
         default:
           console.log(`🔵 Unhandled event type ${event.type}`);
@@ -144,8 +145,72 @@ app.post(
     }
   }
 );
+async function handleSetupIntentSucceeded(setupIntent) {
+  try {
+    console.log(`✅ SetupIntent Succeeded Webhook:`, setupIntent.id);
 
-// Separate function to process successful setup
+    // Retrieve the full setup intent with expand
+    const fullSetupIntent = await stripe.setupIntents.retrieve(setupIntent.id, {
+      expand: ["mandate", "customer"],
+    });
+
+    console.log(`🔍 SetupIntent Details:`, {
+      mandateId: fullSetupIntent.mandate?.id,
+      mandateStatus: fullSetupIntent.mandate?.status,
+      customerId: fullSetupIntent.customer,
+    });
+
+    // If we have a mandate and it's active, find family and update
+    if (
+      fullSetupIntent.mandate &&
+      fullSetupIntent.mandate.status === "active"
+    ) {
+      // Find family by customer ID
+      const family = await familiesCollection.findOne({
+        "directDebit.stripeCustomerId": fullSetupIntent.customer,
+      });
+
+      if (family && family.directDebit?.status !== "active") {
+        await familiesCollection.updateOne(
+          { _id: family._id },
+          {
+            $set: {
+              "directDebit.status": "active",
+              "directDebit.mandateStatus": "active",
+              "directDebit.activeDate": new Date(),
+              "directDebit.lastUpdated": new Date(),
+            },
+          }
+        );
+
+        console.log(
+          `✅ Updated family ${family._id} to ACTIVE via setup_intent.succeeded`
+        );
+
+        // Send success email if not already sent
+        if (family.email && !emailSent.has(family._id.toString())) {
+          const students = await studentsCollection
+            .find({ familyId: family._id.toString() })
+            .toArray();
+          const studentNames =
+            students.map((student) => student.name).join(", ") || "Your child";
+
+          await sendDirectDebitEmail({
+            to: family.email,
+            name: family.name,
+            studentName: studentNames,
+            status: "success",
+            mandateId: fullSetupIntent.mandate.id,
+          });
+
+          emailSent.add(family._id.toString());
+        }
+      }
+    }
+  } catch (error) {
+    console.error("❌ Error handling setup_intent.succeeded:", error);
+  }
+}
 // Separate function to process successful setup
 async function processSuccessfulSetupIntent(
   setupIntent,
@@ -167,8 +232,39 @@ async function processSuccessfulSetupIntent(
     if (paymentMethod.type === "bacs_debit") {
       const mandateId = setupIntent.mandate;
 
-      // ✅ FIX: ALWAYS SET TO PENDING INITIALLY
-      // Don't check mandate status here - let the webhook handle it
+      // ✅ DON'T ALWAYS SET TO PENDING - CHECK ACTUAL STATUS!
+      let mandateStatus = "pending";
+      let overallStatus = "pending";
+      let activeDate = null;
+
+      // ✅ CRITICAL: Check the actual mandate status from Stripe
+      if (mandateId) {
+        try {
+          const mandate = await stripe.mandates.retrieve(mandateId);
+          mandateStatus = mandate.status;
+
+          // If mandate is active, set status to active
+          if (mandateStatus === "active") {
+            overallStatus = "active";
+            activeDate = new Date();
+            console.log(`✅ Mandate ${mandateId} is ACTIVE immediately!`);
+          } else if (mandateStatus === "pending") {
+            overallStatus = "pending";
+            console.log(`⏳ Mandate ${mandateId} is PENDING`);
+          } else if (
+            mandateStatus === "inactive" ||
+            mandateStatus === "revoked"
+          ) {
+            overallStatus = "cancelled";
+            console.log(`❌ Mandate ${mandateId} is ${mandateStatus}`);
+          }
+        } catch (mandateError) {
+          console.log(`⚠️ Could not retrieve mandate: ${mandateError.message}`);
+          // Default to pending if we can't retrieve
+        }
+      }
+
+      // ✅ UPDATE WITH CORRECT STATUS
       const result = await familiesCollection.updateOne(
         { _id: new ObjectId(familyId) },
         {
@@ -181,9 +277,9 @@ async function processSuccessfulSetupIntent(
               bankName: paymentMethod.bacs_debit?.bank_name || "Unknown Bank",
               last4: paymentMethod.bacs_debit?.last4 || "****",
               setupDate: new Date(),
-              status: "pending", // ← ALWAYS start as pending
-              mandateStatus: "pending", // ← ALWAYS start as pending
-              activeDate: null,
+              status: overallStatus, // ← USE ACTUAL STATUS
+              mandateStatus: mandateStatus, // ← USE ACTUAL MANDATE STATUS
+              activeDate: activeDate, // ← SET IF ACTIVE
               preferredPaymentDate:
                 parseInt(preferredPaymentDateFromCheckout) || 1,
             },
@@ -192,10 +288,10 @@ async function processSuccessfulSetupIntent(
       );
 
       console.log(
-        `✅ Database updated with PENDING status: ${result.modifiedCount} documents`
+        `✅ Database updated: status=${overallStatus}, mandate=${mandateStatus}`
       );
 
-      // ✅ SEND PENDING EMAIL HERE
+      // ✅ SEND APPROPRIATE EMAIL
       if (family.email && family.name) {
         const students = await studentsCollection
           .find({ familyId: familyId })
@@ -209,15 +305,15 @@ async function processSuccessfulSetupIntent(
             to: family.email,
             name: family.name,
             studentName: studentNames,
-            status: "pending",
+            status: overallStatus === "active" ? "success" : "pending",
             mandateId: mandateId || "Pending verification",
           });
 
           if (emailResult && emailResult.success) {
-            console.log(`✅ Pending email sent to ${family.email}`);
+            console.log(`✅ ${overallStatus} email sent to ${family.email}`);
           }
         } catch (emailError) {
-          console.error("❌ Pending email sending crashed:", emailError);
+          console.error("❌ Email sending crashed:", emailError);
         }
       }
     } else {
