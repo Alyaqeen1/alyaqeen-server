@@ -65,7 +65,7 @@ const sendDirectDebitEmail = async ({
               <p>You can view your payment schedule and manage your account anytime through the parent portal.</p>
               
               <div style="text-align: center; margin: 30px 0;">
-                <a href="https://alyaqeen.vercel.app/login" 
+                <a href="https://www.alyaqeen.co.uk/login" 
                    style="background: #667eea; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">
                   View Parent Portal
                 </a>
@@ -143,7 +143,7 @@ const sendDirectDebitEmail = async ({
               </div>
 
               <div style="text-align: center; margin: 30px 0;">
-                <a href="https://alyaqeen.vercel.app/login" 
+                <a href="https://www.alyaqeen.co.uk/login" 
                    style="background: #667eea; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">
                   Try Setup Again
                 </a>
@@ -189,7 +189,7 @@ const sendDirectDebitEmail = async ({
               <p>We'll automatically retry this payment in 3-5 business days. To avoid interruption, please ensure sufficient funds are available.</p>
 
               <div style="text-align: center; margin: 30px 0;">
-                <a href="https://alyaqeen.vercel.app/login" 
+                <a href="https://www.alyaqeen.co.uk/login" 
                    style="background: #667eea; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">
                   Update Payment Method
                 </a>
@@ -229,7 +229,7 @@ const sendDirectDebitEmail = async ({
               </div>
 
               <div style="text-align: center; margin: 30px 0;">
-                <a href="https://alyaqeen.vercel.app/login" 
+                <a href="https://www.alyaqeen.co.uk/login" 
                    style="background: #667eea; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">
                   Renew Authorization
                 </a>

@@ -259,27 +259,13 @@ const sendReminderEmail = async ({ to, name, studentName }, reminderType) => {
 
   const { currentMonth, nextMonth } = getMonthNames();
   const emailTemplates = {
-    // 10: {
-    //   subject: "🔔 Fee Reminder – Alyaqeen Academy",
-    //   content: `
-    //     <p>Dear <strong>${name}</strong>,</p>
-    //     <p>We hope you are well. This month’s fee is still outstanding.</p>
-    //     <p>Fees should be paid within the first seven working days of each month.</p>
-    //     <p>Please use the link below to make the payment, or contact the Academy</p>
-    //     <p>👉 <strong>https://alyaqeen.vercel.app/login</strong></p>
-    //     <p>If you have already made the payment, please ignore this message.</p>
-    //     <p>Jazakallahu khairan</p>
-    //     <br/>
-    //     <p>Best regards,<br/>Alyaqeen Team</p>
-    //   `,
-    // },
     16: {
       subject: "Reminder – Monthly Fee Due",
       content: `
         <p>Dear <strong>${name}</strong>,</p>
         <p>I hope you are well. This is a kind reminder that half of the month has passed, and we have not yet received the fee for this month. We kindly request parents to make the payment during the first week of the month.</p>
         <p>Please use the link below to make the payment, or contact the Academy</p>
-        <p>👉 <strong>https://alyaqeen.vercel.app/login</strong></p>
+        <p>👉 <strong>https://www.alyaqeen.co.uk/login</strong></p>
         
         <p>The sooner you are able to make the payment, the easier it becomes for us to focus on providing quality education to your children.</p>
          <p>If you have already made the payment, please disregard this email. If you have an agreed payment date scheduled with us, kindly ignore this message as well.</p>
@@ -296,7 +282,7 @@ const sendReminderEmail = async ({ to, name, studentName }, reminderType) => {
        
         <p>As the month is now ending, we kindly request you to please settle both this month’s fee and the upcoming month’s fee together, so that no further reminders or emails need to be sent and you are not disturbed again.</p>
         <p>Please use the link below to make the payment, or contact the Academy</p>
-        <p>👉 <strong>https://alyaqeen.vercel.app/login</strong></p> 
+        <p>👉 <strong>https://www.alyaqeen.co.uk/login</strong></p> 
         <p>If you have already made the payment, please disregard this email. If you have an agreed payment date scheduled with us, kindly ignore this message as well.</p>
         <br/>
         <p>Thank you for your understanding and cooperation. JazakAllahu khayran.</p>

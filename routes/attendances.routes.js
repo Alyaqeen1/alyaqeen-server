@@ -13,6 +13,30 @@ module.exports = (
     const result = await attendancesCollection.find().toArray();
     res.send(result);
   });
+  // In your attendance routes
+  router.get("/student/:studentId", async (req, res) => {
+    try {
+      const { studentId } = req.params;
+
+      const result = await attendancesCollection
+        .find({ student_id: studentId })
+        .sort({ date: -1 })
+        .project({
+          student_id: 1,
+          class_id: 1, // optional
+          date: 1,
+          status: 1,
+          attendance: 1,
+          createdAt: 1,
+        })
+        .toArray();
+
+      res.status(200).json(result);
+    } catch (err) {
+      console.error("Attendance route error:", err);
+      res.status(500).json({ error: "Server error" });
+    }
+  });
 
   router.post("/", async (req, res) => {
     try {

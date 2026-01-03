@@ -31,7 +31,7 @@ const sendApprovalEmail = async ({ to, name, studentName }) => {
       <p>Dear <strong>${name}</strong>,</p>
       <p>We’re happy to inform you that your child ${studentName} has been approved for admission to Alyaqeen.</p>
       <p>To complete the enrollment process, we kindly ask you to take the next step. Please visit our website and log in to your account to proceed with the necessary actions (e.g., fee payment).</p>
-           <p>🔗 Website: https://alyaqeen.vercel.app/login.</p>
+           <p>🔗 Website: https://www.alyaqeen.co.uk/login.</p>
            <p>(Use your registered email and password to log in.)</p>
            <p>If you need any help or have questions, feel free to reply to this email.</p>
            <p>Thank you for choosing Alyaqeen. We’re looking forward to welcoming your child on board!</p>

@@ -71,19 +71,22 @@ const sendMonthlyFeeEmail = async ({
         (sum, m) => sum + (m.discountedFee || m.monthlyFee || 0),
         0
       );
-      const studentRemaining = studentExpectedTotal - studentTotalPaid;
+      const studentRemaining = Math.max(
+        0,
+        studentExpectedTotal - studentTotalPaid
+      );
 
       const monthsHtml = monthsPaid
-        .map(
-          (m) =>
-            `<li>${getMonthName(m.month)} ${m.year}: 
-       Paid: £${(m.paid || 0).toFixed(2)} | 
-       Expected: £${(m.discountedFee || m.monthlyFee || 0).toFixed(2)} |
-       Remaining: £${(
-         (m.discountedFee || m.monthlyFee || 0) - (m.paid || 0)
-       ).toFixed(2)}
-       </li>`
-        )
+        .map((m) => {
+          const monthPaid = m.paid || 0;
+          const monthExpected = m.discountedFee || m.monthlyFee || 0;
+          const monthRemaining = Math.max(0, monthExpected - monthPaid);
+          return `<li>${getMonthName(m.month)} ${m.year}: 
+        Paid: £${monthPaid.toFixed(2)} | 
+        Expected: £${monthExpected.toFixed(2)} |
+        Remaining: £${monthRemaining.toFixed(2)}
+      </li>`;
+        })
         .join("");
 
       return `

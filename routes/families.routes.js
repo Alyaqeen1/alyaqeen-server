@@ -675,17 +675,108 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
     }
   });
 
+  // router.get("/with-children/enrolled-fee-summary", async (req, res) => {
+  //   try {
+  //     const result = await familiesCollection
+  //       .aggregate([
+  //         // 1. Convert _id (ObjectId) to string for matching
+  //         {
+  //           $addFields: {
+  //             familyIdString: { $toString: "$_id" }, // Convert ObjectId to string
+  //           },
+  //         },
+  //         // 2. Lookup student documents for the children array
+  //         {
+  //           $lookup: {
+  //             from: studentsCollection.collectionName,
+  //             let: { childUids: "$children" },
+  //             pipeline: [
+  //               {
+  //                 $match: {
+  //                   $expr: {
+  //                     $and: [
+  //                       { $in: ["$uid", "$$childUids"] },
+  //                       { $in: ["$status", ["enrolled", "hold", "approved"]] },
+  //                       // { $eq: ["$activity", "active"] },
+  //                     ],
+  //                   },
+  //                 },
+  //               },
+  //               ...studentEnrichmentStages(),
+  //             ],
+  //             as: "childrenDocs",
+  //           },
+  //         },
+  //         // 3. Lookup fees using the string version of familyId
+  //         {
+  //           $lookup: {
+  //             from: feesCollection.collectionName,
+  //             localField: "familyIdString", // Use the converted string
+  //             foreignField: "familyId", // This is a string in feesCollection
+  //             as: "feePayments",
+  //           },
+  //         },
+  //         // 4. Calculate total paid and pending amounts
+  //         {
+  //           $addFields: {
+  //             totalPaidAmount: {
+  //               $sum: {
+  //                 $map: {
+  //                   input: {
+  //                     $filter: {
+  //                       input: "$feePayments",
+  //                       as: "fee",
+  //                       cond: { $eq: ["$$fee.status", "paid"] },
+  //                     },
+  //                   },
+  //                   as: "paidFee",
+  //                   in: "$$paidFee.amount",
+  //                 },
+  //               },
+  //             },
+  //             totalPendingAmount: {
+  //               $sum: {
+  //                 $map: {
+  //                   input: {
+  //                     $filter: {
+  //                       input: "$feePayments",
+  //                       as: "fee",
+  //                       cond: { $ne: ["$$fee.status", "paid"] },
+  //                     },
+  //                   },
+  //                   as: "pendingFee",
+  //                   in: "$$pendingFee.amount",
+  //                 },
+  //               },
+  //             },
+  //           },
+  //         },
+  //         {
+  //           $sort: { name: 1 },
+  //         },
+  //         // 5. (Optional) Remove the temporary field
+  //         { $unset: "familyIdString" },
+  //       ])
+  //       .toArray();
+
+  //     res.send(result);
+  //   } catch (err) {
+  //     res.status(500).send({ error: "Server error" });
+  //   }
+  // });
+
   router.get("/with-children/enrolled-fee-summary", async (req, res) => {
     try {
       const result = await familiesCollection
         .aggregate([
-          // 1. Convert _id (ObjectId) to string for matching
+          // Convert family _id → string
           {
             $addFields: {
-              familyIdString: { $toString: "$_id" }, // Convert ObjectId to string
+              familyIdString: { $toString: "$_id" },
             },
           },
-          // 2. Lookup student documents for the children array
+
+          // ---------- STUDENTS ----------
           {
             $lookup: {
               from: studentsCollection.collectionName,
@@ -697,26 +788,75 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
                       $and: [
                         { $in: ["$uid", "$$childUids"] },
                         { $in: ["$status", ["enrolled", "hold", "approved"]] },
-                        // { $eq: ["$activity", "active"] },
                       ],
                     },
                   },
                 },
-                ...studentEnrichmentStages(),
+
+                // ✅ REDUCE STUDENT FIELDS
+                {
+                  $project: {
+                    _id: 1,
+                    uid: 1,
+                    name: 1,
+                    startingDate: 1,
+                    monthly_fee: 1,
+                    activity: 1,
+                  },
+                },
               ],
               as: "childrenDocs",
             },
           },
-          // 3. Lookup fees using the string version of familyId
+
+          // ---------- FEES ----------
           {
             $lookup: {
               from: feesCollection.collectionName,
-              localField: "familyIdString", // Use the converted string
-              foreignField: "familyId", // This is a string in feesCollection
+              let: { famId: "$familyIdString" },
+              pipeline: [
+                {
+                  $match: {
+                    $expr: { $eq: ["$familyId", "$$famId"] },
+                  },
+                },
+
+                // ✅ ADD lastPaymentDate
+                {
+                  $addFields: {
+                    lastPaymentDate: {
+                      $ifNull: [
+                        { $arrayElemAt: ["$payments.date", 0] },
+                        "$timestamp",
+                      ],
+                    },
+                  },
+                },
+
+                // ✅ REDUCE FEE FIELDS
+                {
+                  $project: {
+                    paymentType: 1,
+                    status: 1,
+                    students: {
+                      studentId: 1,
+                      monthsPaid: {
+                        month: 1,
+                        year: 1,
+                        paid: 1,
+                        monthlyFee: 1,
+                        discountedFee: 1,
+                      },
+                    },
+                    lastPaymentDate: 1,
+                  },
+                },
+              ],
               as: "feePayments",
             },
           },
-          // 4. Calculate total paid and pending amounts
+
+          // ---------- TOTALS ----------
           {
             $addFields: {
               totalPaidAmount: {
@@ -725,37 +865,30 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
                     input: {
                       $filter: {
                         input: "$feePayments",
-                        as: "fee",
-                        cond: { $eq: ["$$fee.status", "paid"] },
+                        as: "f",
+                        cond: { $eq: ["$$f.status", "paid"] },
                       },
                     },
-                    as: "paidFee",
-                    in: "$$paidFee.amount",
-                  },
-                },
-              },
-              totalPendingAmount: {
-                $sum: {
-                  $map: {
-                    input: {
-                      $filter: {
-                        input: "$feePayments",
-                        as: "fee",
-                        cond: { $ne: ["$$fee.status", "paid"] },
-                      },
-                    },
-                    as: "pendingFee",
-                    in: "$$pendingFee.amount",
+                    as: "p",
+                    in: "$$p.amount",
                   },
                 },
               },
             },
           },
+
+          // ---------- FINAL SHAPE ----------
           {
-            $sort: { name: 1 },
+            $project: {
+              name: 1,
+              childrenDocs: 1,
+              feePayments: 1,
+              discount: 1,
+              totalPaidAmount: 1,
+            },
           },
-          // 5. (Optional) Remove the temporary field
-          { $unset: "familyIdString" },
+
+          { $sort: { name: 1 } },
         ])
         .toArray();
 
@@ -764,6 +897,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
       res.status(500).send({ error: "Server error" });
     }
   });
+
   router.get("/with-children/enrolled/by-id/:id", async (req, res) => {
     const id = req.params.id;
     if (!ObjectId.isValid(id)) {
