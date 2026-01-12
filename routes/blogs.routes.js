@@ -8,7 +8,22 @@ module.exports = (blogsCollection) => {
     const result = await blogsCollection.find().toArray();
     res.send(result);
   });
+  // Add to your backend routes
+  router.get("/latest", async (req, res) => {
+    try {
+      const result = await blogsCollection
+        .find()
+        .sort({ date: -1, createdAt: -1 }) // Sort by date descending
+        .limit(1) // Get only one
+        .toArray();
 
+      res.send(result[0] || null);
+    } catch (error) {
+      res
+        .status(500)
+        .send({ message: "Failed to fetch latest blog", error: error.message });
+    }
+  });
   // GET single blog by ID
   router.get("/:id", async (req, res) => {
     try {
