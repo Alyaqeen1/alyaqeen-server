@@ -13,7 +13,7 @@ module.exports = (blogsCollection) => {
     try {
       const result = await blogsCollection
         .find()
-        .sort({ date: -1, createdAt: -1 }) // Sort by date descending
+        .sort({ createdAt: -1 }) // Sort by date descending
         .limit(1) // Get only one
         .toArray();
 
