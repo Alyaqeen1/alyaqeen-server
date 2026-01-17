@@ -6,13 +6,14 @@ const sendAbsenceSecondReminderEmail = async ({
   parentName = "Parent",
   studentName = "your child",
 }) => {
-  if (process.env.EMAIL_SENDING_ENABLED !== "true") {
-    console.log(
-      "🚫 Email sending is disabled (test mode). Skipping email to:",
-      to
-    );
-    return;
-  }
+  // if (process.env.EMAIL_SENDING_ENABLED !== "true") {
+  //   console.log(
+  //     "🚫 Email sending is disabled (test mode). Skipping email to:",
+  //     to
+  //   );
+  //   return;
+  // }
+
   if (!to || !process.env.BREVO_USER || !process.env.BREVO_PASS) {
     console.error("❌ Missing email credentials or recipient address");
     return;
@@ -39,10 +40,10 @@ const sendAbsenceSecondReminderEmail = async ({
       "❌ Absence – Second Reminder (Repeated Absences – Kindly Update Us)",
     htmlContent: `
       <p>Dear <strong>${parentName}</strong>,</p>
-      <p>We understand that situations like illness or travel may prevent <strong>${studentName}</strong> from attending. However, according to our policy, it is essential that you notify us if your child will be absent for a week or more.</p>
-      <p>Without this communication, we will need to mark your child as unauthorised absent in our register, which may affect their record.</p>
-      <p>Regular attendance plays a key role in your child’s development in Qur’ān, Islamic knowledge, and character-building. Your timely update will help us maintain a clear and supportive record for your child.</p>
-      <p>May Allah bless your efforts and guide our children on the straight path.</p>
+      <p>Assalāmu ‘alaykum,</p>
+      <p>We understand that genuine reasons such as illness or travel may cause absence. We kindly request that you inform us if <strong>${studentName}</strong> will be absent for a week or longer, as per our centre policy without prior notice, we are required to record the absence as unauthorised, which may affect the student’s record.</p>
+      <p>Regular attendance plays an important role in progress, tarbiyah, and character development.</p>
+      <p>May Allah guide us all to what is best for our children.</p>
       <p>JazakumAllahu khayran.</p>
       <br />
       <p>Warm regards,<br />The Alyaqeen Team</p>

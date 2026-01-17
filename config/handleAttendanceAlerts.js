@@ -170,7 +170,7 @@ const handleAttendanceAlerts = async (
       // Send notification if needed
       if (alertType && emailFunction) {
         await emailFunction({
-          to: student.parent_email,
+          to: student?.email,
           parentName: student.family_name,
           studentName: student.name,
         });

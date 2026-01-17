@@ -6,13 +6,20 @@ const sendAbsenceFirstReminderEmail = async ({
   parentName = "Parent",
   studentName = "your child",
 }) => {
-  if (process.env.EMAIL_SENDING_ENABLED !== "true") {
-    console.log(
-      "🚫 Email sending is disabled (test mode). Skipping email to:",
-      to
-    );
-    return;
-  }
+  console.log("======================================");
+  console.log("📧 EMAIL SENDING FUNCTION CALLED");
+  console.log("To:", to);
+  console.log("Parent Name:", parentName);
+  console.log("Student Name:", studentName);
+  // if (process.env.EMAIL_SENDING_ENABLED !== "true") {
+  //   console.log(
+  //     "🚫 Email sending is disabled (test mode). Skipping email to:",
+  //     to
+  //   );
+  //   return;
+  // }
+  console.log("Sending absence first reminder email to:", to);
+
   if (!to || !process.env.BREVO_USER || !process.env.BREVO_PASS) {
     console.error("❌ Missing email credentials or recipient address");
     return;
@@ -38,10 +45,10 @@ const sendAbsenceFirstReminderEmail = async ({
     subject: "❌ Absence – First Reminder (Attendance Reminder for Your Child)",
     htmlContent: `
       <p>Dear <strong>${parentName}</strong>,</p>
-      <p>Regular presence is essential for <strong>${studentName}’s</strong> steady learning, especially in the sacred knowledge of Qur’an and Deen. Your child has missed multiple sessions this week.</p>
-      <p>We kindly urge you to ensure consistent attendance, as it is part of nurturing commitment and responsibility.</p>
-      <p>Please help ensure your child attends regularly.</p>
-      <p>JazakumAllahu khayran.</p>
+      <p>Assalāmu ‘alaykum,</p>
+      <p>Regular attendance is important for steady progress in Qur’ān and Deen, and helps build consistency and responsibility. We noticed that <strong>${studentName}</strong> has missed a few sessions this week.</p>
+      <p>We kindly request your support in ensuring regular attendance, in shā’ Allāh.</p>
+      <p>JazakumAllahu khayran for your cooperation.</p>
       <br />
       <p>Warm regards,<br />The Alyaqeen Team</p>
     `,

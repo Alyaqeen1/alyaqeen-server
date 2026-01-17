@@ -6,13 +6,13 @@ const sendLateFirstReminderEmail = async ({
   parentName = "Parent",
   studentName = "your child", // single student name string
 }) => {
-  if (process.env.EMAIL_SENDING_ENABLED !== "true") {
-    console.log(
-      "🚫 Email sending is disabled (test mode). Skipping email to:",
-      to
-    );
-    return;
-  }
+  // if (process.env.EMAIL_SENDING_ENABLED !== "true") {
+  //   console.log(
+  //     "🚫 Email sending is disabled (test mode). Skipping email to:",
+  //     to
+  //   );
+  //   return;
+  // }
   if (!to || !process.env.BREVO_USER || !process.env.BREVO_PASS) {
     console.error("❌ Missing email credentials or recipient address");
     return;
@@ -39,9 +39,10 @@ const sendLateFirstReminderEmail = async ({
       "✅ Lateness – First Reminder (Encouragement for Punctual Attendance)",
     htmlContent: `
       <p>Dear <strong>${parentName}</strong>,</p>
-      <p>Arriving on time builds discipline and respect for time — qualities cherished in both Islamic teachings and academic life. We’ve noticed repeated lateness this week for <strong>${studentName}</strong>.</p>
-      <p>Let’s help your child develop the habit of punctuality, in shā’ Allāh.</p>
-      <p>JazakumAllahu khayran for your support.</p>
+      <p>Assalāmu ‘alaykum,</p>
+      <p>Punctuality is a beautiful Islamic value that helps build discipline and barakah in learning. We noticed that <strong>${studentName}</strong> arrived late a few times this week.</p>
+      <p>We kindly request your support in helping your child arrive on time, in shā’ Allāh.</p>
+      <p>JazakumAllahu khayran for your cooperation.</p>
       <br />
       <p>Warm regards,<br />The Alyaqeen Team</p>
     `,

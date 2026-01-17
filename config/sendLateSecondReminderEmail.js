@@ -6,13 +6,13 @@ const sendLateSecondReminderEmail = async ({
   parentName = "Parent",
   studentName = "your child",
 }) => {
-  if (process.env.EMAIL_SENDING_ENABLED !== "true") {
-    console.log(
-      "🚫 Email sending is disabled (test mode). Skipping email to:",
-      to
-    );
-    return;
-  }
+  // if (process.env.EMAIL_SENDING_ENABLED !== "true") {
+  //   console.log(
+  //     "🚫 Email sending is disabled (test mode). Skipping email to:",
+  //     to
+  //   );
+  //   return;
+  // }
   if (!to || !process.env.BREVO_USER || !process.env.BREVO_PASS) {
     console.error("❌ Missing email credentials or recipient address");
     return;
@@ -39,9 +39,10 @@ const sendLateSecondReminderEmail = async ({
       "✅ Lateness – Second Reminder (Continued Lateness – Your Attention is Appreciated)",
     htmlContent: `
       <p>Dear <strong>${parentName}</strong>,</p>
-      <p>We truly value your partnership in your child’s tarbiyah (development). If <strong>${studentName}</strong> is late due to a genuine reason like traffic or late arrival from school, please inform us so we may adjust records and avoid unnecessary messages.</p>
-      <p>Frequent lateness affects learning rhythm and class progress — we seek your cooperation in nurturing punctuality.</p>
-      <p>May Allah reward your efforts abundantly.</p>
+      <p>Assalāmu ‘alaykum,</p>
+      <p>We truly appreciate your partnership in your child’s tarbiyah. If <strong>${studentName}</strong> is arriving late due to a genuine reason (such as traffic or school timings), please do inform us so we may note it accordingly.</p>
+      <pRegular lateness can affect focus and class flow, and we seek your kind cooperation in encouraging punctuality.</p>
+      <p>May Allah place barakah in your efforts.</p>
       <br />
       <p>Warm regards,<br />The Alyaqeen Team</p>
     `,
