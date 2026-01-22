@@ -1,9 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
-const { sendMonthlyReminders } = require("./config/paymentReminders");
 const sendDirectDebitEmail = require("./config/sendDirectDebitEmail");
 const sendMonthlyFeeEmail = require("./config/sendMonthlyFeeEmail");
 const sendEmailViaAPI = require("./config/sendAdmissionEmail");
@@ -34,6 +32,7 @@ const createReviewsRouter = require("./routes/reviews.routes");
 const createBlogsRouter = require("./routes/blogs.routes");
 const createAnnouncementsRouter = require("./routes/announcements.routes");
 const createWebsiteSettingsRouter = require("./routes/website_settings.routes");
+const createComplaintsRouter = require("./routes/complaint.routes");
 
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 let familiesCollection;
@@ -57,7 +56,7 @@ app.post(
       event = stripe.webhooks.constructEvent(
         req.body,
         sig,
-        process.env.STRIPE_WEBHOOK_SECRET
+        process.env.STRIPE_WEBHOOK_SECRET,
       );
     } catch (err) {
       console.log(`❌ Webhook signature verification failed.`, err.message);
@@ -74,16 +73,15 @@ app.post(
 
           if (setupIntentId && checkoutSession.metadata.familyId) {
             // Retrieve the setup intent to get payment method
-            const setupIntent = await stripe.setupIntents.retrieve(
-              setupIntentId
-            );
+            const setupIntent =
+              await stripe.setupIntents.retrieve(setupIntentId);
 
             if (setupIntent.status === "succeeded") {
               // ✅ PASS THE CHECKOUT SESSION METADATA DIRECTLY
               await processSuccessfulSetupIntent(
                 setupIntent,
                 checkoutSession.metadata.familyId,
-                checkoutSession.metadata.preferredPaymentDate // ✅ Pass the preferred date directly
+                checkoutSession.metadata.preferredPaymentDate, // ✅ Pass the preferred date directly
               );
             }
           }
@@ -144,7 +142,7 @@ app.post(
       console.error("❌ Webhook processing error:", error);
       res.status(500).json({ error: "Webhook processing failed" });
     }
-  }
+  },
 );
 async function handleSetupIntentSucceeded(setupIntent) {
   try {
@@ -181,11 +179,11 @@ async function handleSetupIntentSucceeded(setupIntent) {
               "directDebit.activeDate": new Date(),
               "directDebit.lastUpdated": new Date(),
             },
-          }
+          },
         );
 
         console.log(
-          `✅ Updated family ${family._id} to ACTIVE via setup_intent.succeeded`
+          `✅ Updated family ${family._id} to ACTIVE via setup_intent.succeeded`,
         );
 
         // Send success email if not already sent
@@ -216,7 +214,7 @@ async function handleSetupIntentSucceeded(setupIntent) {
 async function processSuccessfulSetupIntent(
   setupIntent,
   familyId,
-  preferredPaymentDateFromCheckout
+  preferredPaymentDateFromCheckout,
 ) {
   try {
     if (!familiesCollection) return;
@@ -227,7 +225,7 @@ async function processSuccessfulSetupIntent(
     if (!family) return;
 
     const paymentMethod = await stripe.paymentMethods.retrieve(
-      setupIntent.payment_method
+      setupIntent.payment_method,
     );
 
     if (paymentMethod.type === "bacs_debit") {
@@ -285,11 +283,11 @@ async function processSuccessfulSetupIntent(
                 parseInt(preferredPaymentDateFromCheckout) || 1,
             },
           },
-        }
+        },
       );
 
       console.log(
-        `✅ Database updated: status=${overallStatus}, mandate=${mandateStatus}`
+        `✅ Database updated: status=${overallStatus}, mandate=${mandateStatus}`,
       );
 
       // ✅ SEND APPROPRIATE EMAIL
@@ -350,7 +348,7 @@ async function handleMandateUpdate(mandate) {
     }
 
     console.log(
-      `✅ Found family: ${family.name}, current status: ${family.directDebit.status}`
+      `✅ Found family: ${family.name}, current status: ${family.directDebit.status}`,
     );
 
     let newStatus = family.directDebit.status;
@@ -365,7 +363,7 @@ async function handleMandateUpdate(mandate) {
         emailStatus = "success";
         shouldSendEmail = true;
         console.log(
-          `✅ Updating status from ${family.directDebit.status} to ${newStatus} - will send success email`
+          `✅ Updating status from ${family.directDebit.status} to ${newStatus} - will send success email`,
         );
       } else {
         console.log(`ℹ️ Mandate already active, no email needed`);
@@ -391,11 +389,11 @@ async function handleMandateUpdate(mandate) {
 
     const result = await familiesCollection.updateOne(
       { _id: family._id },
-      { $set: updateData }
+      { $set: updateData },
     );
 
     console.log(
-      `✅ Database update result: ${result.modifiedCount} documents modified`
+      `✅ Database update result: ${result.modifiedCount} documents modified`,
     );
 
     // ✅ VERIFY THE UPDATE
@@ -441,7 +439,7 @@ async function handleMandateUpdate(mandate) {
           console.log(
             `❌ Failed to send ${emailStatus} email: ${
               emailResult?.reason || "Unknown error"
-            }`
+            }`,
           );
         }
       } catch (emailError) {
@@ -481,7 +479,7 @@ async function handleSuccessfulDirectDebitPayment(paymentIntent) {
             remaining: 0,
             updatedAt: new Date(),
           },
-        }
+        },
       );
       console.log(`✅ Fee ${existingFee._id} marked as paid`);
 
@@ -515,12 +513,12 @@ async function handleSuccessfulDirectDebitPayment(paymentIntent) {
             existingFee.students,
             studentsCollection,
             departmentsCollection,
-            classesCollection
+            classesCollection,
           );
 
           const studentBreakdown = enrichedStudents.map((enrichedStudent) => {
             const originalStudent = existingFee.students.find(
-              (s) => String(s.studentId) === String(enrichedStudent._id)
+              (s) => String(s.studentId) === String(enrichedStudent._id),
             );
             const totalPaid = originalStudent?.subtotal || 0;
 
@@ -543,7 +541,7 @@ async function handleSuccessfulDirectDebitPayment(paymentIntent) {
             isEnrollmentConfirmed: true,
           });
           console.log(
-            `✅ Admission success email sent to ${existingFee.email}`
+            `✅ Admission success email sent to ${existingFee.email}`,
           );
         }
       } catch (emailError) {
@@ -566,7 +564,7 @@ async function handleSuccessfulDirectDebitPayment(paymentIntent) {
             "directDebit.lastSuccessfulPayment": new Date(),
             "directDebit.lastPaymentIntentId": paymentIntent.id,
           },
-        }
+        },
       );
     }
   } catch (error) {
@@ -634,7 +632,7 @@ async function handleFailedDirectDebitPayment(paymentIntent) {
             status: "failed",
             updatedAt: new Date(),
           },
-        }
+        },
       );
       console.log(`✅ Fee ${fee._id} marked as failed`);
     }
@@ -651,7 +649,7 @@ async function handlePendingCharge(charge) {
 
     // Find fee by payment intent ID
     const paymentIntent = await stripe.paymentIntents.retrieve(
-      charge.payment_intent
+      charge.payment_intent,
     );
 
     const fee = await feesCollection.findOne({
@@ -667,12 +665,12 @@ async function handlePendingCharge(charge) {
             status: "pending",
             updatedAt: new Date(),
           },
-        }
+        },
       );
       console.log(`✅ Fee ${fee._id} marked as pending`);
     } else {
       console.log(
-        `⏳ No fee found yet for payment intent: ${paymentIntent.id}`
+        `⏳ No fee found yet for payment intent: ${paymentIntent.id}`,
       );
       console.log(`📋 Payment intent metadata:`, paymentIntent.metadata);
 
@@ -681,7 +679,7 @@ async function handlePendingCharge(charge) {
       // We'll just log this and let the successful payment webhook handle the update later
 
       console.log(
-        `ℹ️ Waiting for frontend to create proper fee record for payment intent: ${paymentIntent.id}`
+        `ℹ️ Waiting for frontend to create proper fee record for payment intent: ${paymentIntent.id}`,
       );
     }
   } catch (error) {
@@ -697,7 +695,7 @@ async function handleFailedCharge(charge) {
 
     // Get the payment intent to find the fee
     const paymentIntent = await stripe.paymentIntents.retrieve(
-      charge.payment_intent
+      charge.payment_intent,
     );
 
     const fee = await feesCollection.findOne({
@@ -714,7 +712,7 @@ async function handleFailedCharge(charge) {
             status: "failed",
             updatedAt: new Date(),
           },
-        }
+        },
       );
       console.log(`✅ Fee ${fee._id} marked as failed`);
     }
@@ -750,12 +748,12 @@ async function handlePaymentCanceled(paymentIntent) {
             status: "canceled",
             updatedAt: new Date(),
           },
-        }
+        },
       );
       console.log(`✅ Fee ${fee._id} marked as canceled`);
     } else {
       console.log(
-        `ℹ️ No fee found to mark as canceled for payment intent: ${paymentIntent.id}`
+        `ℹ️ No fee found to mark as canceled for payment intent: ${paymentIntent.id}`,
       );
     }
   } catch (error) {
@@ -773,7 +771,7 @@ app.use(
       process.env.FRONTEND_URL,
     ],
     credentials: true,
-  })
+  }),
 );
 app.use(express.json());
 app.use(cookieParser());
@@ -833,6 +831,9 @@ async function run() {
     const holidaysCollection = client.db("alyaqeenDb").collection("holidays");
     const reviewsCollection = client.db("alyaqeenDb").collection("reviews");
     const blogsCollection = client.db("alyaqeenDb").collection("blogs");
+    const complaintsCollection = client
+      .db("alyaqeenDb")
+      .collection("complaints");
     const lessonsCoveredCollection = client
       .db("alyaqeenDb")
       .collection("lessons-covered");
@@ -924,8 +925,8 @@ async function run() {
         familiesCollection,
         classesCollection,
         groupsCollection,
-        countersCollection
-      )
+        countersCollection,
+      ),
     );
     app.use("/users", createUsersRouter(usersCollection));
     app.use(
@@ -933,12 +934,12 @@ async function run() {
       createFamiliesRouter(
         familiesCollection,
         studentsCollection,
-        feesCollection
-      )
+        feesCollection,
+      ),
     );
     app.use(
       "/notifications",
-      createNotificationsRouter(notificationsCollection, verifyToken)
+      createNotificationsRouter(notificationsCollection, verifyToken),
     );
     app.use(
       "/fees",
@@ -947,8 +948,8 @@ async function run() {
         studentsCollection,
         familiesCollection,
         departmentsCollection,
-        classesCollection
-      )
+        classesCollection,
+      ),
     );
     app.use(
       "/teachers",
@@ -956,8 +957,8 @@ async function run() {
         teachersCollection,
         departmentsCollection,
         classesCollection,
-        subjectsCollection
-      )
+        subjectsCollection,
+      ),
     );
     app.use("/departments", createDepartmentsRouter(departmentsCollection));
     app.use("/classes", createClassesRouter(classesCollection));
@@ -967,45 +968,46 @@ async function run() {
     app.use("/holidays", createHolidaysRouter(holidaysCollection));
     app.use("/reviews", createReviewsRouter(reviewsCollection));
     app.use("/blogs", createBlogsRouter(blogsCollection));
+    app.use("/complaints", createComplaintsRouter(complaintsCollection));
     app.use(
       "/attendances",
       createAttendancesRouter(
         attendancesCollection,
         notificationsLogCollection,
-        studentsCollection
-      )
+        studentsCollection,
+      ),
     );
     app.use(
       "/notifications-log",
-      createNotificationsLogRouter(notificationsLogCollection)
+      createNotificationsLogRouter(notificationsLogCollection),
     );
     app.use(
       "/announcements",
       createAnnouncementsRouter(
         announcementsCollection,
         familiesCollection,
-        teachersCollection
-      )
+        teachersCollection,
+      ),
     );
     app.use(
       "/lessons-covered",
       createLessonsCoveredRouter(
         lessonsCoveredCollection,
         studentsCollection,
-        teachersCollection
-      )
+        teachersCollection,
+      ),
     );
     app.use(
       "/website-settings",
-      createWebsiteSettingsRouter(websiteSettingsCollection)
+      createWebsiteSettingsRouter(websiteSettingsCollection),
     );
     app.use(
       "/merits",
       createMeritsRouter(
         meritsCollection,
         notificationsCollection,
-        studentsCollection
-      )
+        studentsCollection,
+      ),
     );
 
     // stripe payment intent
@@ -1037,16 +1039,16 @@ async function run() {
         // ✅ If family already has a Stripe customer ID, try to REUSE IT
         if (family.directDebit && family.directDebit.stripeCustomerId) {
           console.log(
-            `♻️ Attempting to reuse existing Stripe customer: ${family.directDebit.stripeCustomerId}`
+            `♻️ Attempting to reuse existing Stripe customer: ${family.directDebit.stripeCustomerId}`,
           );
 
           try {
             // ✅ TRY to retrieve the existing customer
             customer = await stripe.customers.retrieve(
-              family.directDebit.stripeCustomerId
+              family.directDebit.stripeCustomerId,
             );
             console.log(
-              `✅ Successfully reused existing customer: ${customer.id}`
+              `✅ Successfully reused existing customer: ${customer.id}`,
             );
 
             // Update customer details if needed
@@ -1060,7 +1062,7 @@ async function run() {
             if (stripeError.code === "resource_missing") {
               // ✅ CUSTOMER DOESN'T EXIST IN STRIPE - CREATE NEW ONE
               console.log(
-                `❌ Customer not found in Stripe, creating new one...`
+                `❌ Customer not found in Stripe, creating new one...`,
               );
 
               customer = await stripe.customers.create({
@@ -1083,7 +1085,7 @@ async function run() {
                     "directDebit.mandateStatus": "pending",
                     "directDebit.setupDate": new Date(),
                   },
-                }
+                },
               );
               console.log(`✅ Updated family record with new customer ID`);
             } else {
@@ -1104,7 +1106,7 @@ async function run() {
           if (existingCustomers.data.length > 0) {
             customer = existingCustomers.data[0];
             console.log(
-              `🔍 Found existing Stripe customer by email: ${customer.id}`
+              `🔍 Found existing Stripe customer by email: ${customer.id}`,
             );
 
             // Update customer details
@@ -1140,7 +1142,6 @@ async function run() {
             preferredPaymentDate: preferredPaymentDate || "1",
           },
         });
-
         res.json({
           url: session.url,
           sessionId: session.id,
@@ -1158,7 +1159,7 @@ async function run() {
     // Send a ping to confirm a successful connection
     // await client.db("admin").command({ ping: 1 });
     console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
+      "Pinged your deployment. You successfully connected to MongoDB!",
     );
   } finally {
     // Ensures that the client will close when you finish/error
@@ -1172,7 +1173,7 @@ app.get("/api/send-reminders", async (req, res) => {
   // Get current UK time
   const now = new Date();
   const ukTime = new Date(
-    now.toLocaleString("en-US", { timeZone: "Europe/London" })
+    now.toLocaleString("en-US", { timeZone: "Europe/London" }),
   );
   const currentDay = ukTime.getDate();
 
@@ -1180,7 +1181,8 @@ app.get("/api/send-reminders", async (req, res) => {
 
   // Check if today is a reminder day
   let reminderDay;
-  if (currentDay === 16) reminderDay = 16; // Changed from 10 to 16
+  if (currentDay === 16)
+    reminderDay = 16; // Changed from 10 to 16
   else if (currentDay === 29)
     reminderDay = 29; // Keep 29, remove the 20th condition
   else {
