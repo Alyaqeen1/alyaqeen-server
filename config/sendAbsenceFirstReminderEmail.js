@@ -6,11 +6,6 @@ const sendAbsenceFirstReminderEmail = async ({
   parentName = "Parent",
   studentName = "your child",
 }) => {
-  console.log("======================================");
-  console.log("📧 EMAIL SENDING FUNCTION CALLED");
-  console.log("To:", to);
-  console.log("Parent Name:", parentName);
-  console.log("Student Name:", studentName);
   // if (process.env.EMAIL_SENDING_ENABLED !== "true") {
   //   console.log(
   //     "🚫 Email sending is disabled (test mode). Skipping email to:",
@@ -18,7 +13,6 @@ const sendAbsenceFirstReminderEmail = async ({
   //   );
   //   return;
   // }
-  console.log("Sending absence first reminder email to:", to);
 
   if (!to || !process.env.BREVO_USER || !process.env.BREVO_PASS) {
     console.error("❌ Missing email credentials or recipient address");
@@ -42,7 +36,7 @@ const sendAbsenceFirstReminderEmail = async ({
         name: parentName,
       },
     ],
-    subject: "❌ Absence – First Reminder (Attendance Reminder for Your Child)",
+    subject: "❌ Absence – (Attendance Reminder for Your Child)",
     htmlContent: `
       <p>Dear <strong>${parentName}</strong>,</p>
       <p>Assalāmu ‘alaykum,</p>
@@ -60,7 +54,7 @@ const sendAbsenceFirstReminderEmail = async ({
   } catch (error) {
     console.error(
       "❌ Failed to send absence first reminder email:",
-      error.response?.body || error.message
+      error.response?.body || error.message,
     );
   }
 };

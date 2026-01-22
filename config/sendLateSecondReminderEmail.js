@@ -36,7 +36,7 @@ const sendLateSecondReminderEmail = async ({
       },
     ],
     subject:
-      "✅ Lateness – Second Reminder (Continued Lateness – Your Attention is Appreciated)",
+      "✅ Lateness – (Continued Lateness – Your Attention is Appreciated)",
     htmlContent: `
       <p>Dear <strong>${parentName}</strong>,</p>
       <p>Assalāmu ‘alaykum,</p>
@@ -54,7 +54,7 @@ const sendLateSecondReminderEmail = async ({
   } catch (error) {
     console.error(
       "❌ Failed to send lateness second reminder email:",
-      error.response?.body || error.message
+      error.response?.body || error.message,
     );
   }
 };

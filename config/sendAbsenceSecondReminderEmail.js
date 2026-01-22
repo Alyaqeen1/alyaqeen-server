@@ -36,8 +36,7 @@ const sendAbsenceSecondReminderEmail = async ({
         name: parentName,
       },
     ],
-    subject:
-      "❌ Absence – Second Reminder (Repeated Absences – Kindly Update Us)",
+    subject: "❌ Absence – (Repeated Absences – Kindly Update Us)",
     htmlContent: `
       <p>Dear <strong>${parentName}</strong>,</p>
       <p>Assalāmu ‘alaykum,</p>
@@ -56,7 +55,7 @@ const sendAbsenceSecondReminderEmail = async ({
   } catch (error) {
     console.error(
       "❌ Failed to send absence second reminder email:",
-      error.response?.body || error.message
+      error.response?.body || error.message,
     );
   }
 };

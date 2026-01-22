@@ -35,8 +35,7 @@ const sendLateFirstReminderEmail = async ({
         name: parentName,
       },
     ],
-    subject:
-      "✅ Lateness – First Reminder (Encouragement for Punctual Attendance)",
+    subject: "✅ Lateness – (Encouragement for Punctual Attendance)",
     htmlContent: `
       <p>Dear <strong>${parentName}</strong>,</p>
       <p>Assalāmu ‘alaykum,</p>
@@ -54,7 +53,7 @@ const sendLateFirstReminderEmail = async ({
   } catch (error) {
     console.error(
       "❌ Failed to send lateness first reminder email:",
-      error.response?.body || error.message
+      error.response?.body || error.message,
     );
   }
 };
