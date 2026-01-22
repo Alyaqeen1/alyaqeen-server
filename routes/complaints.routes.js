@@ -1,4 +1,5 @@
 const express = require("express");
+const { ObjectId } = require("mongodb");
 const router = express.Router();
 
 module.exports = (complaintsCollection) => {
@@ -17,5 +18,12 @@ module.exports = (complaintsCollection) => {
     res.send(result);
   });
 
+  // DELETE complaint by ID
+  router.delete("/:id", async (req, res) => {
+    const id = req.params.id;
+    const query = { _id: new ObjectId(id) };
+    const result = await complaintsCollection.deleteOne(query);
+    res.send(result);
+  });
   return router;
 };
