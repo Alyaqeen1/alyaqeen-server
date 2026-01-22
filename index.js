@@ -32,7 +32,7 @@ const createReviewsRouter = require("./routes/reviews.routes");
 const createBlogsRouter = require("./routes/blogs.routes");
 const createAnnouncementsRouter = require("./routes/announcements.routes");
 const createWebsiteSettingsRouter = require("./routes/website_settings.routes");
-const createComplaintsRouter = require("./routes/complaint.routes");
+const createComplaintsRouter = require("./routes/complaints.routes");
 
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 let familiesCollection;
