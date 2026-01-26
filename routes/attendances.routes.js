@@ -7,7 +7,9 @@ const router = express.Router();
 module.exports = (
   attendancesCollection,
   notificationsLogCollection,
-  studentsCollection
+  studentsCollection,
+  teachersCollection,
+  classesCollection,
 ) => {
   router.get("/", async (req, res) => {
     const result = await attendancesCollection.find().toArray();
@@ -47,7 +49,7 @@ module.exports = (
       await handleAttendanceAlerts(
         newAttendance,
         notificationsLogCollection,
-        studentsCollection
+        studentsCollection,
       );
 
       res.send(result);
@@ -123,12 +125,12 @@ module.exports = (
         .toArray();
 
       const existingStudentIds = existingAttendances.map(
-        (att) => att.student_id
+        (att) => att.student_id,
       );
 
       // Filter out students who already have attendance for this date
       const newStudentIds = studentIdsArray.filter(
-        (id) => !existingStudentIds.includes(id)
+        (id) => !existingStudentIds.includes(id),
       );
 
       let insertedCount = 0;
@@ -160,7 +162,7 @@ module.exports = (
             $set: {
               status: "present",
             },
-          }
+          },
         );
         updatedCount = updateResult.modifiedCount;
       }
@@ -403,7 +405,7 @@ module.exports = (
       await handleAttendanceAlerts(
         updatedAttendance,
         notificationsLogCollection,
-        studentsCollection
+        studentsCollection,
       );
 
       // Step 4: Return updated data
@@ -514,6 +516,478 @@ module.exports = (
       res.status(500).send({ message: "Internal Server Error" });
     }
   });
+  // Add this new route to your attendance routes file
 
+  // Get attendance dashboard summary for today
+  // Helper function to get UK date in YYYY-MM-DD format
+  function getUKDate() {
+    // Get current time in UTC
+    const now = new Date();
+
+    // UK is UTC+0 in winter, UTC+1 in summer (BST)
+    // Using Europe/London timezone
+    const ukDateString = now.toLocaleString("en-GB", {
+      timeZone: "Europe/London",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+
+    // Convert "DD/MM/YYYY" to "YYYY-MM-DD"
+    const [day, month, year] = ukDateString.split("/");
+    return `${year}-${month}-${day}`;
+  }
+
+  router.get("/dashboard-summary-today", async (req, res) => {
+    try {
+      // Automatically get today's UK date
+      const today = getUKDate();
+
+      // Get day of week (0=Sunday, 1=Monday, ..., 6=Saturday)
+      const dayOfWeek = new Date(today).getDay();
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6; // Sunday=0, Saturday=6
+      const sessionType = isWeekend ? "weekend" : "weekdays";
+
+      // Get all classes based on today's session type
+      const todaysClasses = await classesCollection
+        .find({
+          session: sessionType,
+        })
+        .toArray();
+
+      const todaysClassIds = todaysClasses.map((cls) => cls._id.toString());
+
+      // If no classes today, return early
+      if (todaysClassIds.length === 0) {
+        return res.send({
+          date: today,
+          sessionType: sessionType,
+          message: `No ${sessionType} classes scheduled for today.`,
+          teachers_with_attendance: [],
+          teachers_without_attendance: [],
+          classes_without_attendance: [],
+          absent_students: [],
+        });
+      }
+
+      // Get teachers who have classes assigned for today's session type
+      const teachers = await teachersCollection
+        .find({
+          status: "approved",
+          activity: "active",
+          class_ids: { $in: todaysClassIds },
+        })
+        .project({
+          _id: 1,
+          name: 1,
+          class_ids: 1,
+        })
+        .toArray();
+
+      // Get attendance for today
+      const todaysAttendance = await attendancesCollection
+        .find({
+          date: today,
+        })
+        .toArray();
+
+      // Track which classes have any student attendance
+      const classesWithAttendance = new Set();
+      const studentAttendanceMap = new Map(); // For checking absent students
+
+      todaysAttendance.forEach((record) => {
+        if (record.attendance === "student") {
+          classesWithAttendance.add(record.class_id);
+          const key = `${record.student_id}_${record.class_id}`;
+          studentAttendanceMap.set(key, record);
+        }
+      });
+
+      // Create class name map
+      const classNameMap = new Map(
+        todaysClasses.map((cls) => [cls._id.toString(), cls.class_name]),
+      );
+
+      // Find classes without ANY attendance
+      const classesWithoutAttendance = [];
+      for (const classId of todaysClassIds) {
+        if (!classesWithAttendance.has(classId)) {
+          const className = classNameMap.get(classId) || "Unknown Class";
+
+          // Find teachers for this class
+          const teachersForThisClass = teachers
+            .filter((teacher) =>
+              teacher.class_ids?.some((id) => id.toString() === classId),
+            )
+            .map((teacher) => ({
+              teacher_id: teacher._id,
+              teacher_name: teacher.name,
+            }));
+
+          classesWithoutAttendance.push({
+            class_id: classId,
+            class_name: className,
+            teachers: teachersForThisClass,
+            message: "No attendance taken for this class",
+          });
+        }
+      }
+
+      // Process teachers - who has given attendance and who hasn't
+      const teachersWithAttendance = [];
+      const teachersWithoutAttendance = [];
+
+      for (const teacher of teachers) {
+        const teacherClasses =
+          teacher.class_ids?.filter((id) =>
+            todaysClassIds.includes(id.toString()),
+          ) || [];
+
+        if (teacherClasses.length === 0) continue;
+
+        // Check which classes this teacher has taken attendance for
+        const attendedClasses = [];
+        const notAttendedClasses = [];
+
+        for (const classId of teacherClasses) {
+          const classIdStr = classId.toString();
+          const className = classNameMap.get(classIdStr) || "Unknown Class";
+
+          const classAttendanceInfo = {
+            class_id: classId,
+            class_name: className,
+            attendance_taken: classesWithAttendance.has(classIdStr),
+          };
+
+          if (classesWithAttendance.has(classIdStr)) {
+            attendedClasses.push(classAttendanceInfo);
+          } else {
+            notAttendedClasses.push(classAttendanceInfo);
+          }
+        }
+
+        const teacherData = {
+          teacher_id: teacher._id,
+          teacher_name: teacher.name,
+          attended_classes: attendedClasses,
+          not_attended_classes: notAttendedClasses,
+          has_attendance_for_all_classes: notAttendedClasses.length === 0,
+        };
+
+        // Teacher is "with attendance" if they have ANY attended classes
+        if (attendedClasses.length > 0) {
+          teachersWithAttendance.push(teacherData);
+        } else {
+          teachersWithoutAttendance.push(teacherData);
+        }
+      }
+
+      // Get absent students (only from classes where attendance was taken AND status is "absent")
+      const absentStudents = [];
+
+      // Only check classes that have attendance taken
+      for (const classId of Array.from(classesWithAttendance)) {
+        const className = classNameMap.get(classId) || "Unknown Class";
+
+        // Get all students in this class
+        const studentsInClass = await studentsCollection
+          .find({
+            activity: "active",
+            status: "enrolled",
+            "academic.enrollments": {
+              $elemMatch: {
+                class_id: classId,
+              },
+            },
+          })
+          .project({
+            _id: 1,
+            name: 1,
+          })
+          .toArray();
+
+        // Check each student's attendance
+        for (const student of studentsInClass) {
+          const attendanceKey = `${student._id.toString()}_${classId}`;
+          const attendanceRecord = studentAttendanceMap.get(attendanceKey);
+
+          // Only include if attendance record exists AND status is "absent"
+          if (attendanceRecord && attendanceRecord.status === "absent") {
+            absentStudents.push({
+              student_name: student.name,
+              class_name: className,
+              status: "absent", // Explicitly set to "absent"
+            });
+          }
+          // Remove the "no_record" case entirely
+        }
+      }
+
+      // Get present count for summary
+      const totalClassesWithAttendance = classesWithAttendance.size;
+      const totalTeachersCount =
+        teachersWithAttendance.length + teachersWithoutAttendance.length;
+
+      // Get current UK time for reference
+      const now = new Date();
+      const ukTime = now.toLocaleString("en-GB", {
+        timeZone: "Europe/London",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      });
+
+      res.send({
+        date: today,
+        uk_time: ukTime,
+        sessionType: sessionType,
+        summary: {
+          total_teachers: totalTeachersCount,
+          teachers_with_attendance: teachersWithAttendance.length,
+          teachers_without_attendance: teachersWithoutAttendance.length,
+          total_classes_today: todaysClassIds.length,
+          classes_with_attendance_taken: totalClassesWithAttendance,
+          classes_without_attendance_taken: classesWithoutAttendance.length,
+          total_absent_students: absentStudents.length,
+        },
+        teachers_with_attendance: teachersWithAttendance,
+        teachers_without_attendance: teachersWithoutAttendance,
+        classes_without_attendance: classesWithoutAttendance,
+        absent_students: absentStudents.slice(0, 50), // First 50 absent students
+        note:
+          absentStudents.length > 50
+            ? `Showing first 50 of ${absentStudents.length} absent students.`
+            : `Found ${absentStudents.length} absent students.`,
+      });
+    } catch (error) {
+      console.error("Error fetching today's dashboard summary:", error);
+      res.status(500).send({
+        message: "Error fetching today's dashboard summary",
+        error: error.message,
+      });
+    }
+  });
+
+  // Keep the original route with date parameter as well for historical data
+  // router.get("/dashboard-summary/:date", async (req, res) => {
+  //   try {
+  //     const { date } = req.params;
+  //     const today = date || new Date().toISOString().split("T")[0];
+  //     console.log("Processing simplified dashboard for date:", today);
+
+  //     // Get day of week (0=Sunday, 1=Monday, ..., 6=Saturday)
+  //     const dayOfWeek = new Date(today).getDay();
+  //     const isWeekend = dayOfWeek === 0 || dayOfWeek === 6; // Sunday=0, Saturday=6
+  //     const sessionType = isWeekend ? "weekend" : "weekdays";
+
+  //     // Get all classes based on today's session type
+  //     const todaysClasses = await classesCollection
+  //       .find({
+  //         session: sessionType,
+  //       })
+  //       .toArray();
+
+  //     const todaysClassIds = todaysClasses.map((cls) => cls._id.toString());
+
+  //     // If no classes today, return early
+  //     if (todaysClassIds.length === 0) {
+  //       return res.send({
+  //         date: today,
+  //         sessionType: sessionType,
+  //         message: `No ${sessionType} classes scheduled for today.`,
+  //         teachers_with_attendance: [],
+  //         teachers_without_attendance: [],
+  //         classes_without_attendance: [], // NEW: Show classes without attendance
+  //         absent_students: [],
+  //       });
+  //     }
+
+  //     // Get teachers who have classes assigned for today's session type
+  //     const teachers = await teachersCollection
+  //       .find({
+  //         status: "approved",
+  //         activity: "active",
+  //         class_ids: { $in: todaysClassIds },
+  //       })
+  //       .project({
+  //         _id: 1,
+  //         name: 1,
+  //         class_ids: 1,
+  //       })
+  //       .toArray();
+
+  //     // Get attendance for today
+  //     const todaysAttendance = await attendancesCollection
+  //       .find({
+  //         date: today,
+  //       })
+  //       .toArray();
+
+  //     // Track which classes have any student attendance
+  //     const classesWithAttendance = new Set();
+  //     const studentAttendanceMap = new Map(); // For checking absent students
+
+  //     todaysAttendance.forEach((record) => {
+  //       if (record.attendance === "student") {
+  //         classesWithAttendance.add(record.class_id);
+  //         const key = `${record.student_id}_${record.class_id}`;
+  //         studentAttendanceMap.set(key, record);
+  //       }
+  //     });
+
+  //     // Create class name map
+  //     const classNameMap = new Map(
+  //       todaysClasses.map((cls) => [cls._id.toString(), cls.class_name]),
+  //     );
+
+  //     // NEW: Find classes without ANY attendance
+  //     const classesWithoutAttendance = [];
+  //     for (const classId of todaysClassIds) {
+  //       if (!classesWithAttendance.has(classId)) {
+  //         const className = classNameMap.get(classId) || "Unknown Class";
+
+  //         // Find teachers for this class
+  //         const teachersForThisClass = teachers
+  //           .filter((teacher) =>
+  //             teacher.class_ids?.some((id) => id.toString() === classId),
+  //           )
+  //           .map((teacher) => ({
+  //             teacher_id: teacher._id,
+  //             teacher_name: teacher.name,
+  //           }));
+
+  //         classesWithoutAttendance.push({
+  //           class_id: classId,
+  //           class_name: className,
+  //           teachers: teachersForThisClass,
+  //           message: "No attendance taken for this class",
+  //         });
+  //       }
+  //     }
+
+  //     // Process teachers - who has given attendance and who hasn't
+  //     const teachersWithAttendance = [];
+  //     const teachersWithoutAttendance = [];
+
+  //     for (const teacher of teachers) {
+  //       const teacherClasses =
+  //         teacher.class_ids?.filter((id) =>
+  //           todaysClassIds.includes(id.toString()),
+  //         ) || [];
+
+  //       if (teacherClasses.length === 0) continue;
+
+  //       // Check which classes this teacher has taken attendance for
+  //       const attendedClasses = [];
+  //       const notAttendedClasses = [];
+
+  //       for (const classId of teacherClasses) {
+  //         const classIdStr = classId.toString();
+  //         const className = classNameMap.get(classIdStr) || "Unknown Class";
+
+  //         const classAttendanceInfo = {
+  //           class_id: classId,
+  //           class_name: className,
+  //           attendance_taken: classesWithAttendance.has(classIdStr),
+  //         };
+
+  //         if (classesWithAttendance.has(classIdStr)) {
+  //           attendedClasses.push(classAttendanceInfo);
+  //         } else {
+  //           notAttendedClasses.push(classAttendanceInfo);
+  //         }
+  //       }
+
+  //       const teacherData = {
+  //         teacher_id: teacher._id,
+  //         teacher_name: teacher.name,
+  //         attended_classes: attendedClasses,
+  //         not_attended_classes: notAttendedClasses,
+  //         has_attendance_for_all_classes: notAttendedClasses.length === 0,
+  //       };
+
+  //       // Teacher is "with attendance" if they have ANY attended classes
+  //       if (attendedClasses.length > 0) {
+  //         teachersWithAttendance.push(teacherData);
+  //       } else {
+  //         teachersWithoutAttendance.push(teacherData);
+  //       }
+  //     }
+
+  //     // Get absent students (only from classes where attendance was taken)
+  //     const absentStudents = [];
+
+  //     // Only check classes that have attendance taken
+  //     for (const classId of Array.from(classesWithAttendance)) {
+  //       const className = classNameMap.get(classId) || "Unknown Class";
+
+  //       // Get all students in this class
+  //       const studentsInClass = await studentsCollection
+  //         .find({
+  //           activity: "active",
+  //           status: "enrolled",
+  //           "academic.enrollments": {
+  //             $elemMatch: {
+  //               class_id: classId,
+  //             },
+  //           },
+  //         })
+  //         .project({
+  //           _id: 1,
+  //           name: 1,
+  //         })
+  //         .toArray();
+
+  //       // Check each student's attendance
+  //       for (const student of studentsInClass) {
+  //         const attendanceKey = `${student._id.toString()}_${classId}`;
+  //         const attendanceRecord = studentAttendanceMap.get(attendanceKey);
+
+  //         // If no record or status is absent
+  //         if (!attendanceRecord || attendanceRecord.status === "absent") {
+  //           absentStudents.push({
+  //             student_name: student.name,
+  //             class_name: className,
+  //             status: attendanceRecord?.status || "no_record",
+  //           });
+  //         }
+  //       }
+  //     }
+
+  //     // Get present count for summary
+  //     const totalClassesWithAttendance = classesWithAttendance.size;
+  //     const totalTeachersCount =
+  //       teachersWithAttendance.length + teachersWithoutAttendance.length;
+
+  //     res.send({
+  //       date: today,
+  //       sessionType: sessionType,
+  //       summary: {
+  //         total_teachers: totalTeachersCount,
+  //         teachers_with_attendance: teachersWithAttendance.length,
+  //         teachers_without_attendance: teachersWithoutAttendance.length,
+  //         total_classes_today: todaysClassIds.length,
+  //         classes_with_attendance_taken: totalClassesWithAttendance,
+  //         classes_without_attendance_taken: classesWithoutAttendance.length,
+  //         total_absent_students: absentStudents.length,
+  //       },
+  //       teachers_with_attendance: teachersWithAttendance,
+  //       teachers_without_attendance: teachersWithoutAttendance,
+  //       classes_without_attendance: classesWithoutAttendance, // NEW: Shows which classes specifically
+  //       absent_students: absentStudents.slice(0, 50), // First 50 absent students
+  //       note:
+  //         absentStudents.length > 50
+  //           ? `Showing first 50 of ${absentStudents.length} absent students.`
+  //           : `Found ${absentStudents.length} absent students.`,
+  //     });
+  //   } catch (error) {
+  //     console.error("Error fetching simplified dashboard:", error);
+  //     res.status(500).send({
+  //       message: "Error fetching dashboard",
+  //       error: error.message,
+  //     });
+  //   }
+  // });
   return router;
 };

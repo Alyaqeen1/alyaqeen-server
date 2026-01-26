@@ -975,6 +975,8 @@ async function run() {
         attendancesCollection,
         notificationsLogCollection,
         studentsCollection,
+        teachersCollection,
+        classesCollection,
       ),
     );
     app.use(
