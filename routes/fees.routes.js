@@ -10,7 +10,7 @@ const enrichStudents = async (
   feeStudents,
   studentsCollection,
   departmentsCollection,
-  classesCollection
+  classesCollection,
 ) => {
   // Get all student records
   const studentIds = feeStudents.map((s) => new ObjectId(s.studentId));
@@ -50,7 +50,7 @@ const enrichStudents = async (
   // Create enriched students - PRESERVE FEE DATA
   return allStudents.map((student) => {
     const feeInfo = feeStudents.find(
-      (s) => String(s.studentId) === String(student._id)
+      (s) => String(s.studentId) === String(student._id),
     );
 
     // Handle both old and new academic structures
@@ -64,10 +64,10 @@ const enrichStudents = async (
       academicData.enrollments = student.academic.enrollments.map(
         (enrollment) => {
           const department = departments.find(
-            (d) => String(d._id) === String(enrollment.dept_id)
+            (d) => String(d._id) === String(enrollment.dept_id),
           );
           const classInfo = classes.find(
-            (c) => String(c._id) === String(enrollment.class_id)
+            (c) => String(c._id) === String(enrollment.class_id),
           );
 
           return {
@@ -75,15 +75,15 @@ const enrichStudents = async (
             department: department?.dept_name || "-",
             class: classInfo?.class_name || "-",
           };
-        }
+        },
       );
     } else {
       // OLD STRUCTURE: Single enrollment
       const department = departments.find(
-        (d) => String(d._id) === String(student.academic?.dept_id)
+        (d) => String(d._id) === String(student.academic?.dept_id),
       );
       const classInfo = classes.find(
-        (c) => String(c._id) === String(student.academic?.class_id)
+        (c) => String(c._id) === String(student.academic?.class_id),
       );
 
       academicData.department = department?.dept_name || "-";
@@ -108,7 +108,7 @@ module.exports = (
   studentsCollection,
   familiesCollection,
   departmentsCollection,
-  classesCollection
+  classesCollection,
 ) => {
   router.get("/", async (req, res) => {
     const result = await feesCollection.find().toArray();
@@ -159,7 +159,7 @@ module.exports = (
                   (mp) =>
                     mp.month === monthStr &&
                     mp.year === yearNum &&
-                    (mp.paid || 0) > 0
+                    (mp.paid || 0) > 0,
                 );
 
                 if (!monthPayment) {
@@ -184,7 +184,7 @@ module.exports = (
             feeCopy.expectedTotal = feeCopy.students.reduce(
               (sum, student) =>
                 sum + (student.monthsPaid[0]?.discountedFee || 0),
-              0
+              0,
             );
 
             feeCopy.remaining = Math.max(
@@ -192,8 +192,8 @@ module.exports = (
               feeCopy.expectedTotal -
                 feeCopy.students.reduce(
                   (sum, student) => sum + (student.subtotal || 0),
-                  0
-                )
+                  0,
+                ),
             );
 
             return feeCopy;
@@ -207,6 +207,236 @@ module.exports = (
       res.status(500).send({ message: "Internal server error" });
     }
   });
+  // GET /api/fees/revenue-summary/:year
+  // Simple monthly revenue summary for chart
+  // router.get("/revenue-summary/:year", async (req, res) => {
+  //   try {
+  //     const { year } = req.params;
+  //     const yearNum = parseInt(year);
+
+  //     if (!year || isNaN(yearNum)) {
+  //       return res.status(400).json({
+  //         success: false,
+  //         message: "Valid year is required",
+  //       });
+  //     }
+
+  //     // Get ONLY paid fees (monthly or admission)
+  //     const fees = await feesCollection
+  //       .find({
+  //         status: "paid",
+  //         paymentType: { $in: ["monthly", "admission"] },
+  //       })
+  //       .toArray();
+
+  //     // Initialize monthly totals (12 months, all zeros)
+  //     const monthlyTotals = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+  //     // Process each paid fee
+  //     fees.forEach((fee) => {
+  //       let paymentAmount = 0;
+  //       let paymentDate = null;
+
+  //       // Try to get amount and date from payments array (new structure)
+  //       if (
+  //         fee.payments &&
+  //         Array.isArray(fee.payments) &&
+  //         fee.payments.length > 0
+  //       ) {
+  //         const payment = fee.payments[0];
+  //         paymentAmount = payment.amount || 0;
+  //         paymentDate = new Date(payment.date || fee.timestamp);
+  //       }
+  //       // Try to get from amount field (old structure)
+  //       else if (fee.amount && fee.amount > 0) {
+  //         paymentAmount = fee.amount;
+  //         paymentDate = new Date(fee.timestamp);
+  //       }
+  //       // Calculate from student subtotals as fallback
+  //       else if (fee.students && Array.isArray(fee.students)) {
+  //         paymentAmount = fee.students.reduce((sum, student) => {
+  //           return sum + (student.subtotal || 0);
+  //         }, 0);
+  //         paymentDate = new Date(fee.timestamp);
+  //       }
+
+  //       // Skip if no amount or invalid date
+  //       if (paymentAmount <= 0 || !isValid(paymentDate)) {
+  //         return;
+  //       }
+
+  //       // Check if payment is in the requested year
+  //       if (paymentDate.getFullYear() === yearNum) {
+  //         const monthIndex = paymentDate.getMonth(); // 0-11
+  //         monthlyTotals[monthIndex] += paymentAmount;
+  //       }
+  //     });
+
+  //     // Format the response
+  //     const monthNames = [
+  //       "Jan",
+  //       "Feb",
+  //       "Mar",
+  //       "Apr",
+  //       "May",
+  //       "Jun",
+  //       "Jul",
+  //       "Aug",
+  //       "Sep",
+  //       "Oct",
+  //       "Nov",
+  //       "Dec",
+  //     ];
+
+  //     const response = {
+  //       success: true,
+  //       year: yearNum,
+  //       categories: monthNames,
+  //       series: [
+  //         {
+  //           name: "Revenue",
+  //           data: monthlyTotals.map((amount) => parseFloat(amount.toFixed(2))),
+  //         },
+  //       ],
+  //       summary: {
+  //         total: parseFloat(
+  //           monthlyTotals.reduce((sum, amount) => sum + amount, 0).toFixed(2),
+  //         ),
+  //         average: parseFloat(
+  //           (
+  //             monthlyTotals.reduce((sum, amount) => sum + amount, 0) / 12
+  //           ).toFixed(2),
+  //         ),
+  //       },
+  //     };
+
+  //     res.json(response);
+  //   } catch (error) {
+  //     console.error("Error in revenue summary:", error);
+  //     res.status(500).json({
+  //       success: false,
+  //       message: "Internal server error",
+  //     });
+  //   }
+  // });
+
+  router.get("/revenue-summary/:year", async (req, res) => {
+    try {
+      const { year } = req.params;
+      const yearNum = parseInt(year);
+
+      if (!year || isNaN(yearNum)) {
+        return res.status(400).json({
+          success: false,
+          message: "Valid year is required",
+        });
+      }
+
+      // Initialize monthly totals (12 months, all zeros)
+      const monthlyTotals = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+      // Find ALL fees with payments in the requested year
+      const feesWithPayments = await feesCollection
+        .find({
+          status: "paid",
+          paymentType: { $in: ["monthly", "admission"] },
+          "payments.date": { $regex: `^${yearNum}-` },
+        })
+        .toArray();
+
+      // Process each fee's payments array
+      feesWithPayments.forEach((fee) => {
+        if (!fee.payments || !Array.isArray(fee.payments)) {
+          return; // Skip fees without payments array
+        }
+
+        // Process each payment in the payments array
+        fee.payments.forEach((payment) => {
+          const paymentAmount = payment.amount || 0;
+          const paymentDateStr = payment.date;
+
+          // Skip if no amount or date
+          if (paymentAmount <= 0 || !paymentDateStr) {
+            return;
+          }
+
+          // Parse the date string (format: "2026-01-07")
+          try {
+            // Extract year and month from date string
+            const dateParts = paymentDateStr.split("-");
+            if (dateParts.length < 2) return;
+
+            const paymentYear = parseInt(dateParts[0]);
+            const paymentMonth = parseInt(dateParts[1]);
+
+            // Only count payments from the requested year
+            if (
+              paymentYear === yearNum &&
+              paymentMonth >= 1 &&
+              paymentMonth <= 12
+            ) {
+              const monthIndex = paymentMonth - 1; // Convert to 0-11
+              monthlyTotals[monthIndex] += paymentAmount;
+            }
+          } catch (error) {
+            console.warn(
+              `Invalid payment date format: ${paymentDateStr}`,
+              error,
+            );
+          }
+        });
+      });
+
+      // Format the response
+      const monthNames = [
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
+      ];
+
+      const response = {
+        success: true,
+        year: yearNum,
+        categories: monthNames,
+        series: [
+          {
+            name: "Revenue",
+            data: monthlyTotals.map((amount) => parseFloat(amount.toFixed(2))),
+          },
+        ],
+        summary: {
+          total: parseFloat(
+            monthlyTotals.reduce((sum, amount) => sum + amount, 0).toFixed(2),
+          ),
+          average: parseFloat(
+            (
+              monthlyTotals.reduce((sum, amount) => sum + amount, 0) / 12
+            ).toFixed(2),
+          ),
+          transactionCount: feesWithPayments.length,
+        },
+      };
+
+      res.json(response);
+    } catch (error) {
+      console.error("Error in revenue summary:", error);
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+        error: error.message,
+      });
+    }
+  });
+
   router.get("/:id", async (req, res) => {
     const id = req.params.id;
     const query = { _id: new ObjectId(id) };
@@ -300,7 +530,7 @@ module.exports = (
 
               // Find or create month entry
               let monthEntry = monthlyPayments.find(
-                (m) => m.monthYear === monthYearKey
+                (m) => m.monthYear === monthYearKey,
               );
               if (!monthEntry) {
                 monthEntry = {
@@ -389,7 +619,7 @@ module.exports = (
 
               const totalPaidAmount = studentsForEmail.reduce(
                 (sum, student) => sum + student.subtotal,
-                0
+                0,
               );
 
               await sendMonthlyFeeEmail({
@@ -446,7 +676,7 @@ module.exports = (
       const paidAmount =
         feesData.payments?.reduce(
           (sum, payment) => sum + (payment.amount || 0),
-          0
+          0,
         ) || 0;
       const paymentMethod = feesData.payments?.[0]?.method || method;
       const paymentDate =
@@ -476,12 +706,12 @@ module.exports = (
               feesData.students,
               studentsCollection,
               departmentsCollection,
-              classesCollection
+              classesCollection,
             );
 
             const studentBreakdown = enrichedStudents.map((enrichedStudent) => {
               const originalStudent = feesData.students.find(
-                (s) => String(s.studentId) === String(enrichedStudent._id)
+                (s) => String(s.studentId) === String(enrichedStudent._id),
               );
 
               const totalPaid = originalStudent?.subtotal || 0;
@@ -517,12 +747,12 @@ module.exports = (
               feesData.students,
               studentsCollection,
               departmentsCollection,
-              classesCollection
+              classesCollection,
             );
 
             const studentBreakdown = enrichedStudents.map((enrichedStudent) => {
               const originalStudent = feesData.students.find(
-                (s) => String(s.studentId) === String(enrichedStudent._id)
+                (s) => String(s.studentId) === String(enrichedStudent._id),
               );
 
               const totalPaid = originalStudent?.subtotal || 0;
@@ -549,7 +779,7 @@ module.exports = (
           } catch (admissionError) {
             console.error(
               "❌ Direct Debit admission email failed:",
-              admissionError
+              admissionError,
             );
           }
         }
@@ -564,171 +794,6 @@ module.exports = (
       });
     }
   });
-
-  // router.post("/", async (req, res) => {
-  //   const feesData = req.body;
-  //   const {
-  //     familyId,
-  //     amount,
-  //     paymentType,
-  //     students = [],
-  //     method = "Unknown",
-  //   } = feesData;
-
-  //   try {
-  //     // 1. Get the family document
-  //     const family = await familiesCollection.findOne({
-  //       _id: new ObjectId(familyId),
-  //     });
-
-  //     if (!family || !Array.isArray(family.children)) {
-  //       return res
-  //         .status(404)
-  //         .send({ message: "Family not found or has no children." });
-  //     }
-
-  //     const familyName = family?.name || "Parent";
-  //     const familyEmail = family?.email;
-
-  //     if (!familyEmail) {
-  //       return res.status(400).send({ message: "Family email is required." });
-  //     }
-
-  //     // 2. Extract studentIds from students
-  //     const studentIds = students?.map((s) => new ObjectId(s.studentId));
-
-  //     // 3. Fetch full student records
-  //     const allStudents = await studentsCollection
-  //       .find({ _id: { $in: studentIds } })
-  //       .toArray();
-
-  //     if (!allStudents.length) {
-  //       return res
-  //         .status(404)
-  //         .send({ message: "No matching students found in the database." });
-  //     }
-
-  //     // 4. Optionally add timestamp
-  //     feesData.timestamp = new Date();
-
-  //     // 5. Save fee document
-  //     const result = await feesCollection.insertOne(feesData);
-
-  //     // ✅ FIXED: Calculate actual values from payments array
-  //     const paidAmount =
-  //       feesData.payments?.reduce(
-  //         (sum, payment) => sum + (payment.amount || 0),
-  //         0
-  //       ) || 0;
-  //     const paymentMethod = feesData.payments?.[0]?.method || method;
-  //     const paymentDate =
-  //       feesData.payments?.[0]?.date || new Date().toISOString().slice(0, 10);
-  //     const remainingAmount = feesData.remaining || 0;
-
-  //     // ✅ FIXED: Monthly email with correct data
-  //     // 5. Send Monthly Email with month info
-  //     if (paymentType === "monthly" || paymentType === "monthlyOnHold") {
-  //       try {
-  //         // Prepare students data for email
-  //         const studentsForEmail = feesData.students.map((s) => ({
-  //           name: s.name,
-  //           monthsPaid: (s.monthsPaid || []).map((m) => ({
-  //             month: m.month,
-  //             year: m.year,
-  //             monthlyFee: m.monthlyFee,
-  //             discountedFee: m.discountedFee,
-  //             paid: m.paid,
-  //           })),
-  //           subtotal: s.subtotal,
-  //         }));
-
-  //         await sendMonthlyFeeEmail({
-  //           to: familyEmail,
-  //           parentName: familyName,
-  //           students: studentsForEmail,
-  //           totalAmount: paidAmount,
-  //           method: paymentMethod,
-  //           paymentDate: paymentDate,
-  //           isOnHold: paymentType === "monthlyOnHold",
-  //           remainingAmount: remainingAmount,
-  //         });
-  //       } catch (emailError) {
-  //         console.error("❌ Monthly fee email failed:", emailError);
-  //       }
-  //     }
-
-  //     // 6. Send Email based on type
-  //     // 6. Send Email based on type
-  //     if (paymentType === "admissionOnHold") {
-  //       try {
-  //         await sendHoldEmail({
-  //           to: familyEmail,
-  //           parentName: familyName,
-  //           studentNames: allStudents.map((s) => s.name),
-  //           method: paymentMethod,
-  //           amount: paidAmount, // ✅ ADD THIS - pass the actual paid amount
-  //         });
-  //         console.log("✅ Hold email sent successfully");
-  //       } catch (emailError) {
-  //         console.error("❌ Hold email failed:", emailError);
-  //       }
-  //     } else if (paymentType === "admission") {
-  //       console.log("📧 Processing admission email...");
-  //       try {
-  //         const enrichedStudents = await enrichStudents(
-  //           feesData.students,
-  //           studentsCollection,
-  //           departmentsCollection,
-  //           classesCollection
-  //         );
-
-  //         // ✅ SIMPLIFIED: Only show paid amounts and enrollment confirmation
-  //         const studentBreakdown = enrichedStudents.map((enrichedStudent) => {
-  //           // Find the original fee data for this student
-  //           const originalStudent = feesData.students.find(
-  //             (s) => String(s.studentId) === String(enrichedStudent._id)
-  //           );
-
-  //           const totalPaid = originalStudent?.subtotal || 0;
-
-  //           return {
-  //             ...enrichedStudent, // Academic info
-  //             subtotal: totalPaid, // Only show what was actually paid
-  //             // Remove all expected/remaining calculations
-  //           };
-  //         });
-
-  //         await sendEmailViaAPI({
-  //           to: familyEmail,
-  //           parentName: familyName,
-  //           students: studentBreakdown,
-  //           totalAmount: paidAmount, // This shows the actual paid amount
-  //           method: paymentMethod,
-  //           paymentDate: paymentDate,
-  //           // ✅ REMOVED: remainingAmount - don't show remaining balance
-  //           // ✅ REMOVED: studentBreakdown with remaining calculations
-  //           studentBreakdown: studentBreakdown,
-  //           // Add enrollment confirmation message
-  //           isEnrollmentConfirmed: true,
-  //         });
-  //       } catch (admissionError) {
-  //         console.error("❌ Admission email process failed:", admissionError);
-  //         // Don't fail the request if email fails
-  //       }
-  //     } else {
-  //       console.log("ℹ️ No email sent for payment type:", paymentType);
-  //     }
-
-  //     res.send(result);
-  //   } catch (err) {
-  //     console.error("💥 CRITICAL ERROR in fee creation:", err);
-  //     res.status(500).send({
-  //       message: "Internal server error",
-  //       error: err.message,
-  //     });
-  //   }
-  // });
-
   router.get("/student-summary/:studentId", async (req, res) => {
     try {
       const { studentId } = req.params;
@@ -855,7 +920,7 @@ module.exports = (
             if (feeStudent.payments && Array.isArray(feeStudent.payments)) {
               firstMonthPaid = feeStudent.payments.reduce(
                 (sum, payment) => sum + (payment.amount || 0),
-                0
+                0,
               );
             } else {
               // For OLD SYSTEM: Fallback to subtotal or monthly fee
@@ -903,7 +968,7 @@ module.exports = (
       // 4. Calculate unpaid months
       const monthlyOnlyFees = allFees.filter(
         (fee) =>
-          fee.paymentType === "monthly" || fee.paymentType === "monthlyOnHold"
+          fee.paymentType === "monthly" || fee.paymentType === "monthlyOnHold",
       );
 
       const unpaidFees = getUnpaidFees({
@@ -927,7 +992,7 @@ module.exports = (
                 // Check if this month was partially paid
                 const monthKey = monthUnpaid.month;
                 const paidMonth = monthlyPayments.find(
-                  (p) => p.month === monthKey
+                  (p) => p.month === monthKey,
                 );
 
                 if (paidMonth && paidMonth.status === "partial") {
@@ -969,7 +1034,7 @@ module.exports = (
 
       // 6. Get the last paid month
       const sortedPayments = monthlyPayments.sort(
-        (a, b) => new Date(b.month) - new Date(a.month)
+        (a, b) => new Date(b.month) - new Date(a.month),
       );
       const lastPaidMonth =
         sortedPayments.length > 0 ? sortedPayments[0].month : null;
@@ -982,7 +1047,7 @@ module.exports = (
         const currentMonth = new Date(
           currentDate.getFullYear(),
           currentDate.getMonth(),
-          1
+          1,
         ); // 1st of current month
 
         let currentIterationMonth = new Date(lastPaidDate);
@@ -1177,7 +1242,7 @@ module.exports = (
       let currentMonth = new Date(
         currentDate.getFullYear(),
         currentDate.getMonth(),
-        1
+        1,
       ); // Start from 1st of current month
 
       // ✅ FIXED: Don't show months before joining as unpaid
@@ -1189,7 +1254,7 @@ module.exports = (
       payableMonth = new Date(
         payableMonth.getFullYear(),
         payableMonth.getMonth(),
-        1
+        1,
       ); // Ensure 1st of month
 
       while (payableMonth <= currentMonth) {
@@ -1312,7 +1377,7 @@ module.exports = (
 
       // Step 3: Keep only months >= Sep 2025
       allMonths = allMonths.filter(
-        (m) => m.year > 2025 || (m.year === 2025 && m.month >= 9)
+        (m) => m.year > 2025 || (m.year === 2025 && m.month >= 9),
       );
 
       // Step 4: GROUP BY MONTH (year-month combination)
@@ -1484,13 +1549,13 @@ module.exports = (
       // ✅ Separate monthly fees and admission fees
       const monthlyFees = allFees.filter(
         (fee) =>
-          fee.paymentType === "monthly" || fee.paymentType === "monthlyOnHold"
+          fee.paymentType === "monthly" || fee.paymentType === "monthlyOnHold",
       );
 
       const admissionFees = allFees.filter(
         (fee) =>
           fee.paymentType === "admission" ||
-          fee.paymentType === "admissionOnHold"
+          fee.paymentType === "admissionOnHold",
       );
 
       // ✅ Build allStudents ONLY from enrolled students
@@ -1503,7 +1568,7 @@ module.exports = (
         if (student.status === "enrolled") {
           const studentIdStr = String(student._id);
           const monthlyFee = Number(
-            student.monthly_fee ?? student.monthlyFee ?? 50
+            student.monthly_fee ?? student.monthlyFee ?? 50,
           );
 
           allStudents.set(studentIdStr, {
@@ -1530,7 +1595,7 @@ module.exports = (
                 if (!isNaN(monthNum) && year) {
                   const monthStr = `${year}-${String(monthNum).padStart(
                     2,
-                    "0"
+                    "0",
                   )}`;
                   const paidAmount = mp.paid || mp.Paid || 0;
 
@@ -1554,7 +1619,7 @@ module.exports = (
             // If admission payment exists and has joining month, mark that month as paid
             if (s.joiningMonth && s.joiningYear) {
               const monthStr = `${s.joiningYear}-${String(
-                s.joiningMonth
+                s.joiningMonth,
               ).padStart(2, "0")}`;
               paidMonthsMap.set(`${studentIdStr}_${monthStr}`, true);
             }
@@ -1600,7 +1665,7 @@ module.exports = (
 
           // compute discounted fee using familyDiscount
           const discountedFee = Number(
-            (feeAmount * (1 - familyDiscount / 100)).toFixed(2)
+            (feeAmount * (1 - familyDiscount / 100)).toFixed(2),
           );
 
           if (!grouped[monthStr]) {
@@ -1677,7 +1742,7 @@ module.exports = (
           totalUnpaidMonths: unpaidMonths.length,
           totalAmountDue: unpaidMonths.reduce(
             (sum, m) => sum + (m.totalAmount || 0),
-            0
+            0,
           ),
           studentCount: allStudents.size, // This now only includes enrolled students
           enrolledStudentCount: enrolledStudents.length,
@@ -1696,201 +1761,6 @@ module.exports = (
       });
     }
   });
-  // router.get("/unpaid-months/:familyId", async (req, res) => {
-  //   try {
-  //     const { familyId } = req.params;
-  //     const { discount = 0 } = req.query;
-
-  //     // Get all fee records for this family
-  //     const fees = await feesCollection
-  //       .find({
-  //         familyId: familyId,
-  //         paymentType: { $in: ["monthly", "monthlyOnHold"] },
-  //         status: { $in: ["paid", "pending"] },
-  //       })
-  //       .toArray();
-
-  //     if (fees.length === 0) {
-  //       return res.json({
-  //         success: true,
-  //         familyId,
-  //         unpaidMonths: [],
-  //         message: "No fee records found for this family",
-  //       });
-  //     }
-
-  //     // Extract all students and their paid months from the fees
-  //     const allStudents = new Map(); // studentId -> { student data }
-  //     const paidMonthsMap = new Map(); // studentId_month -> true
-
-  //     // After fetching fees...
-  //     const studentIds = [
-  //       ...new Set(
-  //         fees.flatMap(
-  //           (fee) => fee.students?.map((s) => s.studentId?.toString()) || []
-  //         )
-  //       ),
-  //     ].filter(Boolean);
-
-  //     // ✅ Fetch student details once to check activity
-  //     const studentDocs = await studentsCollection
-  //       .find({ _id: { $in: studentIds.map((id) => new ObjectId(id)) } })
-  //       .project({ _id: 1, name: 1, activity: 1, status: 1 })
-  //       .toArray();
-
-  //     const activeStudentIds = new Set(
-  //       studentDocs
-  //         .filter((s) => s.activity !== "inactive" && s.status !== "inactive")
-  //         .map((s) => s._id.toString())
-  //     );
-
-  //     // Then when processing each student
-  //     fees.forEach((fee) => {
-  //       fee.students?.forEach((student) => {
-  //         const studentId = student.studentId?.toString();
-
-  //         // ✅ Skip inactive students
-  //         if (!activeStudentIds.has(studentId)) return;
-
-  //         // Store student info
-  //         if (!allStudents.has(studentId)) {
-  //           allStudents.set(studentId, {
-  //             studentId: studentId,
-  //             name: student.name,
-  //             monthly_fee: student.monthlyFee || student.monthly_fee || 50,
-  //           });
-  //         }
-
-  //         // Mark paid months (no change)
-  //         if (Array.isArray(student.monthsPaid)) {
-  //           student.monthsPaid.forEach((monthPaid) => {
-  //             const monthNum = parseInt(monthPaid.month, 10);
-  //             const year = monthPaid.year;
-
-  //             if (monthNum && year) {
-  //               const monthStr = `${year}-${monthNum
-  //                 .toString()
-  //                 .padStart(2, "0")}`;
-  //               const key = `${studentId}_${monthStr}`;
-  //               paidMonthsMap.set(key, true);
-  //             }
-  //           });
-  //         }
-  //       });
-  //     });
-
-  //     const grouped = {};
-  //     const currentDate = new Date();
-  //     const currentYear = currentDate.getFullYear();
-  //     const currentMonth = currentDate.getMonth() + 1;
-
-  //     // Process each student to find unpaid months
-  //     allStudents.forEach((student, studentId) => {
-  //       const { name, monthly_fee } = student;
-  //       const fee = monthly_fee || 50;
-
-  //       const addUnpaidMonth = (monthStr, year, month) => {
-  //         const key = `${studentId}_${monthStr}`;
-
-  //         if (paidMonthsMap.has(key)) {
-  //           return;
-  //         }
-
-  //         const discountedFee = fee - (fee * discount) / 100;
-
-  //         if (!grouped[monthStr]) {
-  //           grouped[monthStr] = {
-  //             totalAmount: 0,
-  //             studentNames: new Set(),
-  //             studentsMap: {},
-  //           };
-  //         }
-
-  //         grouped[monthStr].totalAmount += discountedFee;
-  //         grouped[monthStr].studentNames.add(name);
-
-  //         if (!grouped[monthStr].studentsMap[studentId]) {
-  //           grouped[monthStr].studentsMap[studentId] = {
-  //             studentId,
-  //             name,
-  //             subtotal: 0,
-  //             monthsUnpaid: [],
-  //           };
-  //         }
-
-  //         grouped[monthStr].studentsMap[studentId].monthsUnpaid.push({
-  //           month: monthStr,
-  //           monthlyFee: fee,
-  //           discountedFee: parseFloat(discountedFee.toFixed(2)),
-  //         });
-
-  //         grouped[monthStr].studentsMap[studentId].subtotal += discountedFee;
-  //       };
-
-  //       // Generate all months from September 2025 to current month
-  //       const startDate = new Date(2025, 8, 1); // September 1, 2025
-  //       const checkDate = new Date(startDate);
-
-  //       while (
-  //         checkDate.getFullYear() < currentYear ||
-  //         (checkDate.getFullYear() === currentYear &&
-  //           checkDate.getMonth() + 1 <= currentMonth)
-  //       ) {
-  //         const year = checkDate.getFullYear();
-  //         const month = checkDate.getMonth() + 1;
-  //         const monthStr = `${year}-${month.toString().padStart(2, "0")}`;
-
-  //         addUnpaidMonth(monthStr, year, month);
-  //         checkDate.setMonth(checkDate.getMonth() + 1);
-  //       }
-  //     });
-
-  //     // Sort months chronologically and format response
-  //     const sortedMonths = Object.keys(grouped).sort((a, b) => {
-  //       const [yearA, monthA] = a.split("-").map(Number);
-  //       const [yearB, monthB] = b.split("-").map(Number);
-  //       if (yearA !== yearB) return yearA - yearB;
-  //       return monthA - monthB;
-  //     });
-
-  //     const unpaidMonths = sortedMonths.map((month) => {
-  //       const data = grouped[month];
-  //       return {
-  //         month,
-  //         totalAmount: parseFloat(data.totalAmount.toFixed(2)),
-  //         studentNames: Array.from(data.studentNames).join(", "),
-  //         students: Object.values(data.studentsMap).map((stu) => ({
-  //           ...stu,
-  //           subtotal: parseFloat(stu.subtotal.toFixed(2)),
-  //         })),
-  //       };
-  //     });
-
-  //     res.json({
-  //       success: true,
-  //       familyId,
-  //       unpaidMonths,
-  //       summary: {
-  //         totalUnpaidMonths: unpaidMonths.length,
-  //         totalAmountDue: unpaidMonths.reduce(
-  //           (sum, month) => sum + month.totalAmount,
-  //           0
-  //         ),
-  //         studentCount: allStudents.size,
-  //         feeRecordsProcessed: fees.length,
-  //       },
-  //     });
-  //   } catch (error) {
-  //     console.error("❌ Error in unpaid-months route:", error);
-  //     res.status(500).json({
-  //       success: false,
-  //       message: "Internal server error",
-  //       error: error.message,
-  //     });
-  //   }
-  // });
-
-  // fee summary
   router.get("/by-student-id/:id", async (req, res) => {
     try {
       const id = req.params.id;
@@ -1938,15 +1808,15 @@ module.exports = (
               (student) =>
                 student.studentId === id &&
                 student.monthsPaid?.some(
-                  (mp) => mp.month === month && mp.year == year
-                )
+                  (mp) => mp.month === month && mp.year == year,
+                ),
             );
           } else if (fee.paymentType === "admission") {
             return fee.students.some(
               (student) =>
                 student.studentId === id &&
                 student.joiningMonth === month &&
-                student.joiningYear == year
+                student.joiningYear == year,
             );
           }
           return false;
@@ -1958,7 +1828,7 @@ module.exports = (
         filteredFees,
         id,
         month, // Pass month from query params
-        year // Pass year from query params
+        year, // Pass year from query params
       );
 
       res.send(summary);
@@ -1972,7 +1842,7 @@ module.exports = (
     fees,
     studentId,
     selectedMonth, // This comes from the route's month parameter
-    selectedYear // This comes from the route's year parameter
+    selectedYear, // This comes from the route's year parameter
   ) {
     let totalPaid = 0;
     let totalExpected = 0;
@@ -2011,8 +1881,8 @@ module.exports = (
               paidAmount >= expectedFee
                 ? "fully_paid"
                 : paidAmount > 0
-                ? "partial"
-                : "unpaid";
+                  ? "partial"
+                  : "unpaid";
           }
 
           totalPayments++;
@@ -2053,7 +1923,7 @@ module.exports = (
         if (studentData.payments && studentData.payments.length > 0) {
           totalAdmissionPaid = studentData.payments.reduce(
             (sum, payment) => sum + payment.amount,
-            0
+            0,
           );
         }
 
@@ -2095,8 +1965,8 @@ module.exports = (
         totalPaid >= totalExpected
           ? "fully_paid"
           : totalPaid > 0
-          ? "partially_paid"
-          : "unpaid",
+            ? "partially_paid"
+            : "unpaid",
       partialPaymentAnalysis: {
         totalPayments,
         partialPayments,
@@ -2105,10 +1975,10 @@ module.exports = (
           partialPercentage === 0
             ? "no_partial_payments"
             : partialPercentage < 50
-            ? "few_partial_payments"
-            : partialPercentage < 100
-            ? "many_partial_payments"
-            : "all_partial_payments",
+              ? "few_partial_payments"
+              : partialPercentage < 100
+                ? "many_partial_payments"
+                : "all_partial_payments",
       },
       paymentHistory: paymentMonths.sort((a, b) => {
         // Sort by year and month
@@ -2165,7 +2035,7 @@ module.exports = (
       let currentMonth = new Date(
         currentDate.getFullYear(),
         currentDate.getMonth(),
-        1
+        1,
       );
 
       let startDate = new Date(startingDate);
@@ -2175,7 +2045,7 @@ module.exports = (
       payableMonth = new Date(
         payableMonth.getFullYear(),
         payableMonth.getMonth(),
-        1
+        1,
       );
 
       while (payableMonth <= currentMonth) {
@@ -2242,7 +2112,7 @@ module.exports = (
       const paidAmount =
         fee.payments?.reduce(
           (sum, payment) => sum + (payment.amount || 0),
-          0
+          0,
         ) || 0;
 
       // ✅ FIX: Get payment method and date
@@ -2297,7 +2167,7 @@ module.exports = (
             paymentType: paymentType || fee.paymentType,
             students: updatedStudents, // ✅ CRITICAL: Save the updated students data
           },
-        }
+        },
       );
 
       // 4. Send appropriate email
@@ -2308,7 +2178,7 @@ module.exports = (
             fee.students,
             studentsCollection,
             departmentsCollection,
-            classesCollection
+            classesCollection,
           );
 
           await sendEmailViaAPI({
@@ -2346,175 +2216,6 @@ module.exports = (
       res.status(500).json({ error: "Server error: " + err.message });
     }
   });
-  // Update fee (partial payment for both monthly and admission)
-  // Update fee (partial payment for both monthly and admission)
-  // router.patch("/update/:id", async (req, res) => {
-  //   const { id } = req.params;
-  //   const {
-  //     partialAmount,
-  //     partialMethod,
-  //     partialDate,
-  //     studentIds,
-  //     month,
-  //     year,
-  //   } = req.body;
-
-  //   try {
-  //     const fee = await feesCollection.findOne({ _id: new ObjectId(id) });
-  //     if (!fee) return res.status(404).send({ message: "Fee not found" });
-
-  //     // ✅ BLOCK ADMISSION PARTIAL PAYMENTS
-  //     if (
-  //       fee.paymentType === "admission" ||
-  //       fee.paymentType === "admissionOnHold"
-  //     ) {
-  //       return res.status(400).send({
-  //         message:
-  //           "Partial payments are not allowed for admission fees. Please create a new admission payment instead.",
-  //       });
-  //     }
-
-  //     // Get family for email
-  //     const family = await familiesCollection.findOne({
-  //       _id: new ObjectId(fee.familyId),
-  //     });
-
-  //     const discountPercent = family?.discount ? Number(family.discount) : 0;
-
-  //     // ✅ Add new payment record to root payments array
-  //     const newPayment = {
-  //       amount: Number(partialAmount),
-  //       method: partialMethod || "Unknown",
-  //       date: partialDate || new Date().toISOString().slice(0, 10),
-  //     };
-
-  //     // ✅ NORMALIZE MONTH/YEAR: Ensure consistent format
-  //     const normalizedMonth = String(month).padStart(2, "0");
-  //     const normalizedYear = Number(year);
-
-  //     // ✅ Update students based on payment type (ONLY MONTHLY NOW)
-  //     const students = fee.students.map((s) => {
-  //       if (studentIds.includes(String(s.studentId))) {
-  //         // Monthly fee logic only
-  //         if (!s.monthsPaid) s.monthsPaid = [];
-
-  //         let monthEntry = s.monthsPaid.find(
-  //           (m) =>
-  //             String(m.month).padStart(2, "0") === normalizedMonth &&
-  //             Number(m.year) === normalizedYear
-  //         );
-
-  //         if (monthEntry) {
-  //           monthEntry.paid =
-  //             Number(monthEntry.paid || 0) +
-  //             Number(partialAmount) / studentIds.length;
-  //         } else {
-  //           const baseFee = s.monthlyFee || s.monthly_fee || 50;
-  //           const discountedFee =
-  //             discountPercent > 0
-  //               ? Number(
-  //                   (baseFee - (baseFee * discountPercent) / 100).toFixed(2)
-  //                 )
-  //               : Number(baseFee);
-
-  //           s.monthsPaid.push({
-  //             month: normalizedMonth,
-  //             year: normalizedYear,
-  //             monthlyFee: Number(baseFee),
-  //             discountedFee: discountedFee,
-  //             paid: Number(partialAmount) / studentIds.length,
-  //           });
-  //         }
-
-  //         s.subtotal = s.monthsPaid.reduce((sum, m) => sum + (m.paid || 0), 0);
-  //       }
-  //       return s;
-  //     });
-
-  //     // ✅ Calculate remaining only for monthly fees
-  //     let totalExpected = 0;
-  //     let totalPaid = 0;
-
-  //     students.forEach((s) => {
-  //       if (studentIds.includes(String(s.studentId))) {
-  //         totalExpected +=
-  //           s.monthsPaid?.reduce(
-  //             (sum, m) => sum + (m.discountedFee || m.monthlyFee || 0),
-  //             0
-  //           ) || 0;
-  //         totalPaid += s.subtotal || 0;
-  //       }
-  //     });
-
-  //     const remaining = Math.max(0, totalExpected - totalPaid);
-  //     const newStatus =
-  //       remaining <= 0 ? "paid" : totalPaid > 0 ? "partial" : "unpaid";
-
-  //     // ✅ Update root payments array (add the new payment)
-  //     const updatedRootPayments = [...(fee.payments || []), newPayment];
-
-  //     // ✅ Update in DB
-  //     const updateData = {
-  //       students,
-  //       remaining: Number(remaining.toFixed(2)),
-  //       status: newStatus,
-  //       payments: updatedRootPayments,
-  //     };
-
-  //     const updatedFee = await feesCollection.findOneAndUpdate(
-  //       { _id: new ObjectId(id) },
-  //       { $set: updateData },
-  //       { returnDocument: "after" }
-  //     );
-
-  //     // ✅ SEND EMAIL FOR PARTIAL PAYMENT (MONTHLY ONLY)
-  //     if (family && family.email) {
-  //       try {
-  //         const paymentMethod =
-  //           partialMethod || updatedFee.payments?.[0]?.method || "Unknown";
-  //         const paymentDate =
-  //           partialDate || new Date().toISOString().slice(0, 10);
-
-  //         const studentsForEmail = updatedFee.students.map((student) => ({
-  //           name: student.name,
-  //           monthsPaid: student.monthsPaid || [],
-  //           subtotal: student.subtotal,
-  //         }));
-
-  //         await sendMonthlyFeeEmail({
-  //           to: family.email,
-  //           parentName: family.name || "Parent",
-  //           students: studentsForEmail,
-  //           totalAmount: Number(partialAmount),
-  //           method: paymentMethod,
-  //           paymentDate: paymentDate,
-  //           isOnHold: fee.paymentType === "monthlyOnHold",
-  //           remainingAmount: remaining,
-  //           isPartialPayment: true,
-  //         });
-  //       } catch (emailError) {
-  //         console.error("❌ Partial payment email failed:", emailError);
-  //       }
-  //     }
-
-  //     res.send({
-  //       message: "Partial payment added",
-  //       updatedFee,
-  //       emailSent: !!family?.email,
-  //       calculation: {
-  //         totalExpected,
-  //         totalPaid,
-  //         remaining,
-  //         status: newStatus,
-  //       },
-  //     });
-  //   } catch (err) {
-  //     console.error("Update fee error:", err);
-  //     res.status(500).send({ message: "Internal server error" });
-  //   }
-  // });
-  // PATCH /update/:id - Fixed for proportional distribution
-  // PATCH /update/:id - Fixed for proportional distribution
 
   router.patch("/update/:id", async (req, res) => {
     const { id } = req.params;
@@ -2547,7 +2248,7 @@ module.exports = (
         const monthEntry = s.monthsPaid?.find(
           (m) =>
             String(m.month).padStart(2, "0") === normalizedMonth &&
-            Number(m.year) === normalizedYear
+            Number(m.year) === normalizedYear,
         );
 
         return {
@@ -2561,7 +2262,7 @@ module.exports = (
       // ✅ STEP 2: Get the monthly fee and discounted fee for each student
       const selectedStudentsInfo = studentsWithMonthInfo
         .filter(
-          (info) => studentIds.includes(info.studentId) && info.monthEntry
+          (info) => studentIds.includes(info.studentId) && info.monthEntry,
         )
         .map((info) => {
           const monthlyFee = info.monthEntry.monthlyFee || 50;
@@ -2582,13 +2283,13 @@ module.exports = (
       // ✅ STEP 3: Calculate total remaining for selected students
       const totalRemainingBefore = selectedStudentsInfo.reduce(
         (sum, s) => sum + s.remainingDue,
-        0
+        0,
       );
 
       // ✅ STEP 4: Distribute the partial amount proportionally
       const paymentAmount = Math.min(
         Number(partialAmount),
-        totalRemainingBefore
+        totalRemainingBefore,
       );
       const distribution = [];
 
@@ -2607,7 +2308,7 @@ module.exports = (
       // ✅ STEP 5: Fix rounding errors
       const totalDistributed = distribution.reduce(
         (sum, d) => sum + d.amount,
-        0
+        0,
       );
       if (
         Math.abs(totalDistributed - paymentAmount) > 0.01 &&
@@ -2616,14 +2317,14 @@ module.exports = (
         const diff = paymentAmount - totalDistributed;
         distribution[distribution.length - 1].amount += diff;
         distribution[distribution.length - 1].amount = Number(
-          distribution[distribution.length - 1].amount.toFixed(2)
+          distribution[distribution.length - 1].amount.toFixed(2),
         );
       }
 
       // ✅ STEP 6: Update the month entry for each student
       const updatedStudents = fee.students.map((s) => {
         const studentDist = distribution.find(
-          (d) => d.studentId === String(s.studentId)
+          (d) => d.studentId === String(s.studentId),
         );
 
         if (studentDist) {
@@ -2631,7 +2332,7 @@ module.exports = (
           const monthIndex = s.monthsPaid.findIndex(
             (m) =>
               String(m.month).padStart(2, "0") === normalizedMonth &&
-              Number(m.year) === normalizedYear
+              Number(m.year) === normalizedYear,
           );
 
           if (monthIndex !== -1) {
@@ -2639,7 +2340,7 @@ module.exports = (
             s.monthsPaid[monthIndex].paid = Number(
               (
                 Number(s.monthsPaid[monthIndex].paid) + studentDist.amount
-              ).toFixed(2)
+              ).toFixed(2),
             );
 
             // Cap at discounted fee
@@ -2649,14 +2350,14 @@ module.exports = (
               50;
             s.monthsPaid[monthIndex].paid = Math.min(
               s.monthsPaid[monthIndex].paid,
-              maxAllowed
+              maxAllowed,
             );
           }
 
           // Recalculate subtotal
           s.subtotal = s.monthsPaid.reduce(
             (sum, m) => sum + (Number(m.paid) || 0),
-            0
+            0,
           );
         }
         return s;
@@ -2670,7 +2371,7 @@ module.exports = (
         const monthEntry = s.monthsPaid?.find(
           (m) =>
             String(m.month).padStart(2, "0") === normalizedMonth &&
-            Number(m.year) === normalizedYear
+            Number(m.year) === normalizedYear,
         );
 
         if (monthEntry) {
@@ -2705,7 +2406,7 @@ module.exports = (
       const updatedFee = await feesCollection.findOneAndUpdate(
         { _id: new ObjectId(id) },
         { $set: updateData },
-        { returnDocument: "after" }
+        { returnDocument: "after" },
       );
 
       // ✅ STEP 10: Send email
@@ -2749,7 +2450,6 @@ module.exports = (
   });
 
   // PATCH /partial-payment/:id
-  // PATCH /partial-payment/:id
   router.patch("/update-payment/:id", async (req, res) => {
     const { id } = req.params;
     const { payments } = req.body;
@@ -2770,7 +2470,7 @@ module.exports = (
 
       const students = fee.students.map((s) => {
         const studentPayments = payments.filter(
-          (p) => String(p.studentId) === String(s.studentId)
+          (p) => String(p.studentId) === String(s.studentId),
         );
 
         if (
@@ -2782,7 +2482,7 @@ module.exports = (
             let monthEntry = s.monthsPaid?.find(
               (m) =>
                 String(m.month) === String(p.month) &&
-                String(m.year) === String(p.year)
+                String(m.year) === String(p.year),
             );
 
             if (monthEntry) {
@@ -2793,7 +2493,7 @@ module.exports = (
               const baseFee = monthEntry.monthlyFee || s.monthlyFee || 50;
               if (discountPercent > 0) {
                 monthEntry.discountedFee = Number(
-                  (baseFee - (baseFee * discountPercent) / 100).toFixed(2)
+                  (baseFee - (baseFee * discountPercent) / 100).toFixed(2),
                 );
               } else {
                 monthEntry.discountedFee = Number(baseFee);
@@ -2806,7 +2506,7 @@ module.exports = (
               const discountedFee =
                 discountPercent > 0
                   ? Number(
-                      (baseFee - (baseFee * discountPercent) / 100).toFixed(2)
+                      (baseFee - (baseFee * discountPercent) / 100).toFixed(2),
                     )
                   : Number(baseFee);
 
@@ -2836,14 +2536,14 @@ module.exports = (
                   (
                     baseMonthlyFee -
                     (baseMonthlyFee * discountPercent) / 100
-                  ).toFixed(2)
+                  ).toFixed(2),
                 )
               : Number(baseMonthlyFee);
 
           // Calculate total payment for this student
           const totalPaid = studentPayments.reduce(
             (sum, p) => sum + Number(p.amount),
-            0
+            0,
           );
 
           // UPDATE the payments array
@@ -2876,7 +2576,7 @@ module.exports = (
           // Update subtotal (sum of all payments)
           s.subtotal = s.payments.reduce(
             (sum, payment) => sum + (payment.amount || 0),
-            0
+            0,
           );
           s.discountedFee = discountedMonthlyFee;
         }
@@ -2898,7 +2598,7 @@ module.exports = (
         // ✅ MONTHLY: Calculate normally
         const totalPaid = students.reduce(
           (sum, s) => sum + (s.subtotal || 0),
-          0
+          0,
         );
         remaining = Math.max(0, (fee.expectedTotal || 0) - totalPaid);
         newStatus =
@@ -2908,7 +2608,7 @@ module.exports = (
       // UPDATE root payments array with new total amount
       const totalPaymentAmount = payments.reduce(
         (sum, p) => sum + Number(p.amount),
-        0
+        0,
       );
       const updatedPayments = [
         {
@@ -2929,7 +2629,7 @@ module.exports = (
             payments: updatedPayments,
           },
         },
-        { returnDocument: "after" }
+        { returnDocument: "after" },
       );
 
       res.send({

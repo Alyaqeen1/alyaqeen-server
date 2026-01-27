@@ -977,6 +977,7 @@ async function run() {
         studentsCollection,
         teachersCollection,
         classesCollection,
+        feesCollection,
       ),
     );
     app.use(

@@ -10,6 +10,7 @@ module.exports = (
   studentsCollection,
   teachersCollection,
   classesCollection,
+  feesCollection,
 ) => {
   router.get("/", async (req, res) => {
     const result = await attendancesCollection.find().toArray();
@@ -769,225 +770,344 @@ module.exports = (
     }
   });
 
-  // Keep the original route with date parameter as well for historical data
-  // router.get("/dashboard-summary/:date", async (req, res) => {
-  //   try {
-  //     const { date } = req.params;
-  //     const today = date || new Date().toISOString().split("T")[0];
-  //     console.log("Processing simplified dashboard for date:", today);
+  // GET /api/attendance/dashboard-stats
+  // GET /api/attendance/dashboard-stats
+  router.get("/dashboard-stats", async (req, res) => {
+    try {
+      const today = getUKDate();
+      const currentDate = new Date(today);
+      const currentYear = currentDate.getFullYear();
+      const currentMonth = currentDate.getMonth() + 1;
 
-  //     // Get day of week (0=Sunday, 1=Monday, ..., 6=Saturday)
-  //     const dayOfWeek = new Date(today).getDay();
-  //     const isWeekend = dayOfWeek === 0 || dayOfWeek === 6; // Sunday=0, Saturday=6
-  //     const sessionType = isWeekend ? "weekend" : "weekdays";
+      // 1. TOTAL ACTIVE STUDENTS
+      const totalActiveStudents = await studentsCollection.countDocuments({
+        status: "enrolled",
+        activity: "active",
+      });
 
-  //     // Get all classes based on today's session type
-  //     const todaysClasses = await classesCollection
-  //       .find({
-  //         session: sessionType,
-  //       })
-  //       .toArray();
+      // 2. CURRENT MONTH REVENUE - PAYMENTS ARRAY ONLY
+      const monthPattern = `^${currentYear}-${String(currentMonth).padStart(2, "0")}`;
 
-  //     const todaysClassIds = todaysClasses.map((cls) => cls._id.toString());
+      const currentMonthRevenue = await feesCollection
+        .aggregate([
+          {
+            $match: {
+              status: "paid", // ONLY fully paid fees
+              paymentType: { $in: ["monthly", "admission"] },
+            },
+          },
+          {
+            $addFields: {
+              currentMonthPayments: {
+                $filter: {
+                  input: "$payments",
+                  as: "payment",
+                  cond: {
+                    $regexMatch: {
+                      input: "$$payment.date",
+                      regex: monthPattern,
+                    },
+                  },
+                },
+              },
+            },
+          },
+          {
+            $match: {
+              currentMonthPayments: { $ne: [] }, // Has payments in current month
+            },
+          },
+          {
+            $addFields: {
+              currentMonthTotal: {
+                $sum: "$currentMonthPayments.amount",
+              },
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              total: { $sum: "$currentMonthTotal" },
+            },
+          },
+        ])
+        .toArray();
 
-  //     // If no classes today, return early
-  //     if (todaysClassIds.length === 0) {
-  //       return res.send({
-  //         date: today,
-  //         sessionType: sessionType,
-  //         message: `No ${sessionType} classes scheduled for today.`,
-  //         teachers_with_attendance: [],
-  //         teachers_without_attendance: [],
-  //         classes_without_attendance: [], // NEW: Show classes without attendance
-  //         absent_students: [],
-  //       });
-  //     }
+      const revenueAmount = currentMonthRevenue[0]?.total || 0;
 
-  //     // Get teachers who have classes assigned for today's session type
-  //     const teachers = await teachersCollection
-  //       .find({
-  //         status: "approved",
-  //         activity: "active",
-  //         class_ids: { $in: todaysClassIds },
-  //       })
-  //       .project({
-  //         _id: 1,
-  //         name: 1,
-  //         class_ids: 1,
-  //       })
-  //       .toArray();
+      // 3. THIS WEEK'S ATTENDANCE RATE (Mon-Sun week)
+      const weekDates = getCurrentWeekDates(today);
 
-  //     // Get attendance for today
-  //     const todaysAttendance = await attendancesCollection
-  //       .find({
-  //         date: today,
-  //       })
-  //       .toArray();
+      // Get attendance for this week
+      const weekAttendance = await attendancesCollection
+        .aggregate([
+          {
+            $match: {
+              date: { $in: weekDates },
+              attendance: "student",
+            },
+          },
+          {
+            $group: {
+              _id: "$status",
+              count: { $sum: 1 },
+            },
+          },
+        ])
+        .toArray();
 
-  //     // Track which classes have any student attendance
-  //     const classesWithAttendance = new Set();
-  //     const studentAttendanceMap = new Map(); // For checking absent students
+      const totalPresentThisWeek =
+        weekAttendance.find((a) => a._id === "present")?.count || 0;
+      const totalAbsentThisWeek =
+        weekAttendance.find((a) => a._id === "absent")?.count || 0;
+      const totalWeekAttendance = totalPresentThisWeek + totalAbsentThisWeek;
+      const attendanceRateThisWeek =
+        totalWeekAttendance > 0
+          ? ((totalPresentThisWeek / totalWeekAttendance) * 100).toFixed(1)
+          : 0;
 
-  //     todaysAttendance.forEach((record) => {
-  //       if (record.attendance === "student") {
-  //         classesWithAttendance.add(record.class_id);
-  //         const key = `${record.student_id}_${record.class_id}`;
-  //         studentAttendanceMap.set(key, record);
-  //       }
-  //     });
+      // Get last week's attendance for comparison
+      const lastWeekDates = getLastWeekDates(today);
 
-  //     // Create class name map
-  //     const classNameMap = new Map(
-  //       todaysClasses.map((cls) => [cls._id.toString(), cls.class_name]),
-  //     );
+      const lastWeekAttendance = await attendancesCollection
+        .aggregate([
+          {
+            $match: {
+              date: { $in: lastWeekDates },
+              attendance: "student",
+            },
+          },
+          {
+            $group: {
+              _id: "$status",
+              count: { $sum: 1 },
+            },
+          },
+        ])
+        .toArray();
 
-  //     // NEW: Find classes without ANY attendance
-  //     const classesWithoutAttendance = [];
-  //     for (const classId of todaysClassIds) {
-  //       if (!classesWithAttendance.has(classId)) {
-  //         const className = classNameMap.get(classId) || "Unknown Class";
+      const totalPresentLastWeek =
+        lastWeekAttendance.find((a) => a._id === "present")?.count || 0;
+      const totalLastWeek = lastWeekAttendance.reduce(
+        (sum, item) => sum + item.count,
+        0,
+      );
+      const attendanceRateLastWeek =
+        totalLastWeek > 0
+          ? ((totalPresentLastWeek / totalLastWeek) * 100).toFixed(1)
+          : 0;
 
-  //         // Find teachers for this class
-  //         const teachersForThisClass = teachers
-  //           .filter((teacher) =>
-  //             teacher.class_ids?.some((id) => id.toString() === classId),
-  //           )
-  //           .map((teacher) => ({
-  //             teacher_id: teacher._id,
-  //             teacher_name: teacher.name,
-  //           }));
+      // Calculate week-over-week change
+      const weeklyChange =
+        attendanceRateLastWeek > 0
+          ? (
+              ((parseFloat(attendanceRateThisWeek) -
+                parseFloat(attendanceRateLastWeek)) /
+                parseFloat(attendanceRateLastWeek)) *
+              100
+            ).toFixed(1)
+          : parseFloat(attendanceRateThisWeek) > 0
+            ? 100
+            : 0;
 
-  //         classesWithoutAttendance.push({
-  //           class_id: classId,
-  //           class_name: className,
-  //           teachers: teachersForThisClass,
-  //           message: "No attendance taken for this class",
-  //         });
-  //       }
-  //     }
+      // 4. OUTSTANDING PAYMENTS
+      const outstandingPayments = await feesCollection
+        .aggregate([
+          {
+            $match: {
+              status: { $in: ["partial", "pending"] },
+              remaining: { $gt: 0 },
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              total: { $sum: "$remaining" },
+              count: { $sum: 1 },
+            },
+          },
+        ])
+        .toArray();
 
-  //     // Process teachers - who has given attendance and who hasn't
-  //     const teachersWithAttendance = [];
-  //     const teachersWithoutAttendance = [];
+      const outstandingAmount = outstandingPayments[0]?.total || 0;
+      const outstandingCount = outstandingPayments[0]?.count || 0;
 
-  //     for (const teacher of teachers) {
-  //       const teacherClasses =
-  //         teacher.class_ids?.filter((id) =>
-  //           todaysClassIds.includes(id.toString()),
-  //         ) || [];
+      // Response
+      res.send({
+        success: true,
+        date: today,
+        stats: {
+          // Card 1: Active Students
+          totalActiveStudents: {
+            value: totalActiveStudents,
+            title: "Active Students",
+            icon: "bi-people-fill",
+            color: "#3b82f6", // blue
+          },
 
-  //       if (teacherClasses.length === 0) continue;
+          // Card 2: Monthly Revenue
+          currentMonthRevenue: {
+            value: `£${revenueAmount.toLocaleString("en-GB", { minimumFractionDigits: 2 })}`,
+            title: "Monthly Revenue",
+            icon: "bi-wallet-fill",
+            color: "#8b5cf6", // purple
+          },
 
-  //       // Check which classes this teacher has taken attendance for
-  //       const attendedClasses = [];
-  //       const notAttendedClasses = [];
+          // Card 3: This Week's Attendance Rate
+          attendanceRate: {
+            value: `${attendanceRateThisWeek}%`,
+            change: parseFloat(weeklyChange),
+            title: "Weekly Attendance",
+            icon: "bi-calendar-check",
+            color: "#10b981", // green
+            details: {
+              thisWeek: parseFloat(attendanceRateThisWeek),
+              lastWeek: parseFloat(attendanceRateLastWeek),
+              presentThisWeek: totalPresentThisWeek,
+              totalThisWeek: totalWeekAttendance,
+            },
+          },
 
-  //       for (const classId of teacherClasses) {
-  //         const classIdStr = classId.toString();
-  //         const className = classNameMap.get(classIdStr) || "Unknown Class";
+          // Card 4: Outstanding Payments
+          outstandingPayments: {
+            value: `£${outstandingAmount.toLocaleString("en-GB", { minimumFractionDigits: 2 })}`,
+            count: outstandingCount,
+            title: "Outstanding Payments",
+            icon: "bi-exclamation-circle",
+            color: "#f59e0b", // amber
+          },
+        },
+        metadata: {
+          weekRange: `${weekDates[0]} to ${weekDates[weekDates.length - 1]}`,
+          currentMonth: `${currentYear}-${String(currentMonth).padStart(2, "0")}`,
+        },
+      });
+    } catch (error) {
+      console.error("Error fetching dashboard stats:", error);
+      res.status(500).send({
+        success: false,
+        message: "Error fetching dashboard stats",
+        error: error.message,
+      });
+    }
+  });
 
-  //         const classAttendanceInfo = {
-  //           class_id: classId,
-  //           class_name: className,
-  //           attendance_taken: classesWithAttendance.has(classIdStr),
-  //         };
+  // Helper function to get current week dates (Monday to Sunday)
+  function getCurrentWeekDates(today) {
+    const dates = [];
+    const currentDate = new Date(today);
 
-  //         if (classesWithAttendance.has(classIdStr)) {
-  //           attendedClasses.push(classAttendanceInfo);
-  //         } else {
-  //           notAttendedClasses.push(classAttendanceInfo);
-  //         }
-  //       }
+    // Get Monday of this week
+    const dayOfWeek = currentDate.getDay(); // 0=Sunday, 1=Monday, ..., 6=Saturday
+    const monday = new Date(currentDate);
+    monday.setDate(
+      currentDate.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1),
+    );
 
-  //       const teacherData = {
-  //         teacher_id: teacher._id,
-  //         teacher_name: teacher.name,
-  //         attended_classes: attendedClasses,
-  //         not_attended_classes: notAttendedClasses,
-  //         has_attendance_for_all_classes: notAttendedClasses.length === 0,
-  //       };
+    // Generate all 7 days of the week
+    for (let i = 0; i < 7; i++) {
+      const date = new Date(monday);
+      date.setDate(monday.getDate() + i);
+      dates.push(date.toISOString().split("T")[0]);
+    }
 
-  //       // Teacher is "with attendance" if they have ANY attended classes
-  //       if (attendedClasses.length > 0) {
-  //         teachersWithAttendance.push(teacherData);
-  //       } else {
-  //         teachersWithoutAttendance.push(teacherData);
-  //       }
-  //     }
+    return dates;
+  }
 
-  //     // Get absent students (only from classes where attendance was taken)
-  //     const absentStudents = [];
+  // Helper function to get last week dates
+  function getLastWeekDates(today) {
+    const dates = [];
+    const currentDate = new Date(today);
 
-  //     // Only check classes that have attendance taken
-  //     for (const classId of Array.from(classesWithAttendance)) {
-  //       const className = classNameMap.get(classId) || "Unknown Class";
+    // Go back 7 days to get last week's Monday
+    const lastWeekMonday = new Date(currentDate);
+    lastWeekMonday.setDate(currentDate.getDate() - 7);
 
-  //       // Get all students in this class
-  //       const studentsInClass = await studentsCollection
-  //         .find({
-  //           activity: "active",
-  //           status: "enrolled",
-  //           "academic.enrollments": {
-  //             $elemMatch: {
-  //               class_id: classId,
-  //             },
-  //           },
-  //         })
-  //         .project({
-  //           _id: 1,
-  //           name: 1,
-  //         })
-  //         .toArray();
+    // Get Monday of last week
+    const dayOfWeek = lastWeekMonday.getDay();
+    const monday = new Date(lastWeekMonday);
+    monday.setDate(
+      lastWeekMonday.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1),
+    );
 
-  //       // Check each student's attendance
-  //       for (const student of studentsInClass) {
-  //         const attendanceKey = `${student._id.toString()}_${classId}`;
-  //         const attendanceRecord = studentAttendanceMap.get(attendanceKey);
+    // Generate all 7 days of last week
+    for (let i = 0; i < 7; i++) {
+      const date = new Date(monday);
+      date.setDate(monday.getDate() + i);
+      dates.push(date.toISOString().split("T")[0]);
+    }
 
-  //         // If no record or status is absent
-  //         if (!attendanceRecord || attendanceRecord.status === "absent") {
-  //           absentStudents.push({
-  //             student_name: student.name,
-  //             class_name: className,
-  //             status: attendanceRecord?.status || "no_record",
-  //           });
-  //         }
-  //       }
-  //     }
+    return dates;
+  }
 
-  //     // Get present count for summary
-  //     const totalClassesWithAttendance = classesWithAttendance.size;
-  //     const totalTeachersCount =
-  //       teachersWithAttendance.length + teachersWithoutAttendance.length;
+  router.get("/today-basic-summary", async (req, res) => {
+    try {
+      // 📅 Get today's date (UK logic as you already use)
+      const today = getUKDate();
 
-  //     res.send({
-  //       date: today,
-  //       sessionType: sessionType,
-  //       summary: {
-  //         total_teachers: totalTeachersCount,
-  //         teachers_with_attendance: teachersWithAttendance.length,
-  //         teachers_without_attendance: teachersWithoutAttendance.length,
-  //         total_classes_today: todaysClassIds.length,
-  //         classes_with_attendance_taken: totalClassesWithAttendance,
-  //         classes_without_attendance_taken: classesWithoutAttendance.length,
-  //         total_absent_students: absentStudents.length,
-  //       },
-  //       teachers_with_attendance: teachersWithAttendance,
-  //       teachers_without_attendance: teachersWithoutAttendance,
-  //       classes_without_attendance: classesWithoutAttendance, // NEW: Shows which classes specifically
-  //       absent_students: absentStudents.slice(0, 50), // First 50 absent students
-  //       note:
-  //         absentStudents.length > 50
-  //           ? `Showing first 50 of ${absentStudents.length} absent students.`
-  //           : `Found ${absentStudents.length} absent students.`,
-  //     });
-  //   } catch (error) {
-  //     console.error("Error fetching simplified dashboard:", error);
-  //     res.status(500).send({
-  //       message: "Error fetching dashboard",
-  //       error: error.message,
-  //     });
-  //   }
-  // });
+      // 📆 Detect weekday / weekend
+      const dayOfWeek = new Date(today).getDay();
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+      const sessionType = isWeekend ? "weekend" : "weekdays";
+
+      // 1️⃣ Get ACTIVE classes for today
+      const todaysClasses = await classesCollection
+        .find({
+          session: sessionType,
+          activity: { $ne: "inactive" },
+        })
+        .project({ _id: 1 })
+        .toArray();
+
+      // Convert class IDs to STRING (CRITICAL)
+      const classIds = todaysClasses.map((cls) => cls._id.toString());
+
+      // 2️⃣ Get ACTIVE + ENROLLED students linked to these classes
+      const students = await studentsCollection
+        .find({
+          status: "enrolled",
+          activity: "active",
+          "academic.enrollments.class_id": { $in: classIds },
+        })
+        .project({
+          _id: 1,
+          "academic.enrollments.class_id": 1,
+        })
+        .toArray();
+
+      // 3️⃣ Count expected students (SAFE & CORRECT)
+      let totalExpectedStudents = 0;
+
+      for (const student of students) {
+        if (!student.academic?.enrollments) continue;
+
+        const matchedEnrollments = student.academic.enrollments.filter((en) =>
+          classIds.includes(en.class_id),
+        );
+
+        totalExpectedStudents += matchedEnrollments.length;
+      }
+
+      // 4️⃣ Response
+      res.send({
+        success: true,
+        date: today,
+        session_type: sessionType,
+        summary: {
+          total_classes_today: classIds.length,
+          total_expected_students: totalExpectedStudents,
+        },
+        message: `Today has ${classIds.length} ${sessionType} classes with ${totalExpectedStudents} expected students.`,
+      });
+    } catch (error) {
+      console.error("Today basic summary error:", error);
+      res.status(500).send({
+        success: false,
+        message: "Failed to load today summary",
+        error: error.message,
+      });
+    }
+  });
+
   return router;
 };
