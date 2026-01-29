@@ -7,7 +7,7 @@ const sendLateSecondReminderEmail = require("./sendLateSecondReminderEmail");
 const handleAttendanceAlerts = async (
   attendance,
   notificationsLogCollection,
-  studentsCollection
+  studentsCollection,
 ) => {
   if (!attendance || !attendance.student_id) {
     return;
@@ -29,12 +29,12 @@ const handleAttendanceAlerts = async (
     // CONFIGURATION - CLEARLY DEFINED THRESHOLDS
     const thresholds = {
       absent: {
-        first: groupType === "weekdays" ? 3 : 2,
-        second: groupType === "weekdays" ? 5 : 4,
+        first: groupType === "weekdays" ? 4 : 4,
+        second: groupType === "weekdays" ? 6 : 6,
       },
       late: {
-        first: groupType === "weekdays" ? 3 : 2,
-        second: groupType === "weekdays" ? 5 : 4,
+        first: groupType === "weekdays" ? 3 : 4,
+        second: groupType === "weekdays" ? 6 : 6,
       },
     };
 
@@ -85,7 +85,7 @@ const handleAttendanceAlerts = async (
             hasLateSecondAlert: false,
             lastStatus: currentStatus,
           },
-        }
+        },
       );
       // `🔄 Reset all counters for ${student.name} (present)`
     } else if (previousStatus && previousStatus !== currentStatus) {
@@ -105,14 +105,14 @@ const handleAttendanceAlerts = async (
             ...resetFlags,
             lastStatus: currentStatus,
           },
-        }
+        },
       );
       //   `🔄 Reset ${resetField} for ${student.name} (status changed from ${previousStatus} to ${currentStatus})`
     } else {
       // No status change - just update lastStatus
       await notificationsLogCollection.updateOne(
         { _id: counterDoc._id },
-        { $set: { lastStatus: currentStatus } }
+        { $set: { lastStatus: currentStatus } },
       );
     }
 
@@ -141,7 +141,7 @@ const handleAttendanceAlerts = async (
       const newCount = counterDoc[counterField] + 1;
       await notificationsLogCollection.updateOne(
         { _id: counterDoc._id },
-        { $set: { [counterField]: newCount } }
+        { $set: { [counterField]: newCount } },
       );
       `📊 ${student.name} ${statusType} count: ${newCount}`;
 
@@ -196,7 +196,7 @@ const handleAttendanceAlerts = async (
 
         await notificationsLogCollection.updateOne(
           { _id: counterDoc._id },
-          { $set: { [updateField]: true } }
+          { $set: { [updateField]: true } },
         );
         // `✅ Sent ${alertType} notification for ${student.name}`
         `   Current ${statusType} count: ${newCount}`;
