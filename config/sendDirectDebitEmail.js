@@ -1,6 +1,8 @@
 require("dotenv").config();
 const SibApiV3Sdk = require("sib-api-v3-sdk");
-
+const DISABLED_FAMILY_EMAILS = [
+  "vezzaa786@hotmail.co.uk", // Amjad family
+];
 const sendDirectDebitEmail = async ({
   to,
   name,
@@ -9,14 +11,10 @@ const sendDirectDebitEmail = async ({
   mandateId,
   failureReason = null,
 }) => {
-  console.log("📧 EMAIL FUNCTION CALLED:", {
-    to,
-    name,
-    studentName,
-    status,
-    mandateId,
-    failureReason,
-  });
+  if (DISABLED_FAMILY_EMAILS.includes(to)) {
+    console.log(`🚫 EMAIL BLOCKED: ${parentName} <${to}>`);
+    return; // Exit without sending
+  }
 
   // Check required environment variables
   if (!process.env.BREVO_PASS) {

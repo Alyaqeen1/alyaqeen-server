@@ -11,7 +11,7 @@ module.exports = (
   familiesCollection,
   classesCollection,
   groupsCollection,
-  countersCollection // Receive the collection
+  countersCollection, // Receive the collection
 ) => {
   async function getNextSequenceValue(sequenceName) {
     try {
@@ -22,7 +22,7 @@ module.exports = (
         {
           returnDocument: "after", // Use this for newer drivers
           upsert: true,
-        }
+        },
       );
 
       // Handle different response formats based on driver version
@@ -77,7 +77,7 @@ module.exports = (
         const newValue = currentCounter.sequence_value + 1;
         await countersCollection.updateOne(
           { _id: sequenceName },
-          { $set: { sequence_value: newValue } }
+          { $set: { sequence_value: newValue } },
         );
 
         return newValue;
@@ -123,13 +123,20 @@ module.exports = (
   // Get total number of teachers with gender and activity breakdown
   router.get("/count", async (req, res) => {
     try {
-      const total = await studentsCollection.countDocuments();
+      const total = await studentsCollection.countDocuments({
+        activity: "active",
+        status: "enrolled",
+      });
 
       const maleCount = await studentsCollection.countDocuments({
         gender: "Male",
+        activity: "active",
+        status: "enrolled",
       });
       const femaleCount = await studentsCollection.countDocuments({
         gender: "Female",
+        activity: "active",
+        status: "enrolled",
       });
 
       const activeCount = await studentsCollection.countDocuments({
@@ -143,6 +150,12 @@ module.exports = (
       // For session counts, we need to use aggregation since it's in an array
       const sessionCounts = await studentsCollection
         .aggregate([
+          {
+            $match: {
+              status: "enrolled",
+              activity: "active",
+            },
+          },
           {
             $unwind: "$academic.enrollments",
           },
@@ -171,12 +184,20 @@ module.exports = (
       const departmentCounts = await studentsCollection
         .aggregate([
           {
+            $match: {
+              status: "enrolled",
+              activity: "active",
+            },
+          },
+          {
             $unwind: "$academic.enrollments",
           },
           {
             $group: {
               _id: "$academic.enrollments.department",
               count: { $sum: 1 },
+              // activity: "active",
+              // status: "enrolled",
             },
           },
         ])
@@ -209,7 +230,7 @@ module.exports = (
         .aggregate(
           buildStudentAggregationPipeline({
             status: { $nin: ["enrolled", "hold", "rejected"] },
-          })
+          }),
         )
         .toArray();
       res.send(result);
@@ -539,7 +560,7 @@ module.exports = (
 
       const result = await studentsCollection.updateOne(
         { _id: new ObjectId(id) },
-        { $set: { status } }
+        { $set: { status } },
       );
       // 2. Fetch the updated student
       const student = await studentsCollection.findOne({
@@ -583,7 +604,7 @@ module.exports = (
     // 3. Remove student UID from family (but don't delete the family)
     await familiesCollection.updateOne(
       { children: studentUid },
-      { $pull: { children: studentUid } }
+      { $pull: { children: studentUid } },
     );
 
     res.send(result);

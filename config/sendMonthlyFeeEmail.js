@@ -3,7 +3,9 @@ const SibApiV3Sdk = require("sib-api-v3-sdk");
 
 const getMonthName = (num) =>
   new Date(2000, Number(num) - 1).toLocaleString("en-US", { month: "long" });
-
+const DISABLED_FAMILY_EMAILS = [
+  "vezzaa786@hotmail.co.uk", // Amjad family
+];
 const sendMonthlyFeeEmail = async ({
   to,
   parentName,
@@ -15,6 +17,10 @@ const sendMonthlyFeeEmail = async ({
   remainingAmount = 0,
   isPartialPayment = false,
 }) => {
+  if (DISABLED_FAMILY_EMAILS.includes(to)) {
+    console.log(`🚫 EMAIL BLOCKED: ${parentName} <${to}>`);
+    return; // Exit without sending
+  }
   const defaultClient = SibApiV3Sdk.ApiClient.instance;
   const apiKey = defaultClient.authentications["api-key"];
   apiKey.apiKey = process.env.BREVO_PASS;
@@ -65,15 +71,15 @@ const sendMonthlyFeeEmail = async ({
       // ✅ Calculate student totals
       const studentTotalPaid = monthsPaid.reduce(
         (sum, m) => sum + (m.paid || 0),
-        0
+        0,
       );
       const studentExpectedTotal = monthsPaid.reduce(
         (sum, m) => sum + (m.discountedFee || m.monthlyFee || 0),
-        0
+        0,
       );
       const studentRemaining = Math.max(
         0,
-        studentExpectedTotal - studentTotalPaid
+        studentExpectedTotal - studentTotalPaid,
       );
 
       const monthsHtml = monthsPaid
@@ -93,10 +99,10 @@ const sendMonthlyFeeEmail = async ({
         <p><strong>${index + 1}. ${name}</strong></p>
         <ul>${monthsHtml}</ul>
         <p><strong>Student Total:</strong> Paid: £${studentTotalPaid.toFixed(
-          2
+          2,
         )} | Expected: £${studentExpectedTotal.toFixed(
-        2
-      )} | Remaining: £${studentRemaining.toFixed(2)}</p>
+          2,
+        )} | Remaining: £${studentRemaining.toFixed(2)}</p>
         <br/>
       `;
     })
@@ -112,30 +118,30 @@ const sendMonthlyFeeEmail = async ({
   // ✅ DIFFERENT MESSAGES FOR PARTIAL VS FULL PAYMENTS - USING ALL MONTHS
   const messageIntro = isOnHold
     ? `<p>We have <strong>recorded</strong> your payment of <strong>£${totalAmount.toFixed(
-        2
+        2,
       )}</strong> via <strong>${method}</strong> on ${formattedDate}${monthsText}.</p>
        <p><em>Your payment is currently under review and will be confirmed by our administration shortly.</em></p>`
     : isPartialPayment
-    ? `<p>We have received your <strong>additional payment of £${totalAmount.toFixed(
-        2
-      )}</strong> via <strong>${method}</strong> on ${formattedDate}${monthsText}.</p>`
-    : `<p>We have received your <strong>payment of £${totalAmount.toFixed(
-        2
-      )}</strong> via <strong>${method}</strong> on ${formattedDate}${monthsText}.</p>`;
+      ? `<p>We have received your <strong>additional payment of £${totalAmount.toFixed(
+          2,
+        )}</strong> via <strong>${method}</strong> on ${formattedDate}${monthsText}.</p>`
+      : `<p>We have received your <strong>payment of £${totalAmount.toFixed(
+          2,
+        )}</strong> via <strong>${method}</strong> on ${formattedDate}${monthsText}.</p>`;
 
   // ✅ Calculate if ALL monthly fees are fully paid
   const allMonthsFullyPaid = students.every((student) => {
     const monthsPaid = student.monthsPaid || [];
     return monthsPaid.every(
       (month) =>
-        (month.paid || 0) >= (month.discountedFee || month.monthlyFee || 0)
+        (month.paid || 0) >= (month.discountedFee || month.monthlyFee || 0),
     );
   });
 
   // ✅ REMAINING AMOUNT SECTION - Check if ALL months are fully paid
   const remainingSection = !allMonthsFullyPaid
     ? `<p><strong>Total Remaining Balance:</strong> £${remainingAmount.toFixed(
-        2
+        2,
       )}</p>
        <p>Please pay the remaining amount at your earliest convenience.</p>`
     : `<p><strong>Payment Status:</strong> Fully Paid ✅</p>`;
@@ -202,12 +208,12 @@ const sendMonthlyFeeEmail = async ({
     console.log(
       `✅ Monthly fee email sent for ${
         allPaidMonths.length
-      } month(s): ${allPaidMonths.join(", ")}`
+      } month(s): ${allPaidMonths.join(", ")}`,
     );
   } catch (error) {
     console.error(
       "❌ Failed to send monthly fee email:",
-      error.response?.body || error.message
+      error.response?.body || error.message,
     );
   }
 };

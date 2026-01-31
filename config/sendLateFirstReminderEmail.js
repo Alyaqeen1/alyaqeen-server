@@ -1,6 +1,8 @@
 require("dotenv").config();
 const SibApiV3Sdk = require("sib-api-v3-sdk");
-
+const DISABLED_FAMILY_EMAILS = [
+  "vezzaa786@hotmail.co.uk", // Amjad family
+];
 const sendLateFirstReminderEmail = async ({
   to,
   parentName = "Parent",
@@ -13,6 +15,11 @@ const sendLateFirstReminderEmail = async ({
   //   );
   //   return;
   // }
+
+  if (DISABLED_FAMILY_EMAILS.includes(to)) {
+    console.log(`🚫 EMAIL BLOCKED: ${parentName} <${to}>`);
+    return; // Exit without sending
+  }
   if (!to || !process.env.BREVO_USER || !process.env.BREVO_PASS) {
     console.error("❌ Missing email credentials or recipient address");
     return;

@@ -2,7 +2,9 @@ require("dotenv").config();
 const SibApiV3Sdk = require("sib-api-v3-sdk");
 const sessionMap = require("./sessionMap");
 const { isValid } = require("date-fns");
-
+const DISABLED_FAMILY_EMAILS = [
+  "vezzaa786@hotmail.co.uk", // Amjad family
+];
 const sendEmailViaAPI = async ({
   to,
   parentName,
@@ -13,6 +15,10 @@ const sendEmailViaAPI = async ({
   studentBreakdown = [],
   isEnrollmentConfirmed = true,
 }) => {
+  if (DISABLED_FAMILY_EMAILS.includes(to)) {
+    console.log(`🚫 EMAIL BLOCKED: ${parentName} <${to}>`);
+    return; // Exit without sending
+  }
   const defaultClient = SibApiV3Sdk.ApiClient.instance;
   const apiKey = defaultClient.authentications["api-key"];
   apiKey.apiKey = process.env.BREVO_PASS;
@@ -139,7 +145,7 @@ const sendEmailViaAPI = async ({
 
   const messageIntro = `
     <p>We have successfully received your <strong>admission payment of £${totalAmount.toFixed(
-      2
+      2,
     )}</strong> ${enrollmentCountText} via <strong>${method}</strong> on <strong>${paymentDateText}</strong>.</p>
     <p>Your student(s) have been <strong>successfully enrolled</strong> at Alyaqeen!</p>
   `;
@@ -150,7 +156,7 @@ const sendEmailViaAPI = async ({
         <strong>Payment Confirmation</strong>
       </p>
       <p style="margin: 5px 0;"><strong>Total Amount Paid:</strong> £${totalAmount.toFixed(
-        2
+        2,
       )}</p>
       <p style="margin: 5px 0;"><strong>Payment Method:</strong> ${method}</p>
       <p style="margin: 5px 0;"><strong>Payment Date:</strong> ${paymentDateText}</p>
@@ -222,7 +228,7 @@ const sendEmailViaAPI = async ({
   } catch (error) {
     console.error(
       "❌ Failed to send email via Brevo API:",
-      error.response?.body || error.message
+      error.response?.body || error.message,
     );
   }
 };

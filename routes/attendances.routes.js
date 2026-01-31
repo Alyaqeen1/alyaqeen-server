@@ -991,7 +991,311 @@ module.exports = (
       });
     }
   });
+  router.get("/attendance-stats", async (req, res) => {
+    try {
+      const { year, month, startDate, endDate } = req.query;
 
+      // Determine date range based on parameters
+      let dateFilter = {};
+      let periodType = "";
+      let periodLabel = "";
+
+      if (startDate && endDate) {
+        // Custom date range
+        dateFilter = {
+          date: { $gte: startDate, $lte: endDate },
+        };
+        periodType = "custom";
+        periodLabel = `${startDate} to ${endDate}`;
+      } else if (year && month) {
+        // Specific month
+        const monthStr = String(month).padStart(2, "0");
+        dateFilter = {
+          date: { $regex: `^${year}-${monthStr}` },
+        };
+        periodType = "month";
+        periodLabel = `${year}-${monthStr}`;
+      } else if (year) {
+        // Whole year
+        dateFilter = {
+          date: { $regex: `^${year}` },
+        };
+        periodType = "year";
+        periodLabel = `${year}`;
+      } else {
+        // Default: current month
+        const today = getUKDate();
+        const [currentYear, currentMonth] = today.split("-");
+        dateFilter = {
+          date: { $regex: `^${currentYear}-${currentMonth}` },
+        };
+        periodType = "current";
+        periodLabel = `${currentYear}-${currentMonth}`;
+      }
+
+      // Get attendance for CURRENT period
+      const attendanceStats = await attendancesCollection
+        .aggregate([
+          {
+            $match: {
+              ...dateFilter,
+              attendance: "student",
+            },
+          },
+          {
+            $group: {
+              _id: "$status",
+              count: { $sum: 1 },
+            },
+          },
+        ])
+        .toArray();
+
+      const totalPresent =
+        attendanceStats.find((a) => a._id === "present")?.count || 0;
+      const totalAbsent =
+        attendanceStats.find((a) => a._id === "absent")?.count || 0;
+      const totalLate =
+        attendanceStats.find((a) => a._id === "late")?.count || 0;
+      const totalHalfDay =
+        attendanceStats.find((a) => a._id === "half_day")?.count || 0;
+
+      const totalAttendance =
+        totalPresent + totalAbsent + totalLate + totalHalfDay;
+      const attendanceRate =
+        totalAttendance > 0
+          ? ((totalPresent / totalAttendance) * 100).toFixed(1)
+          : 0;
+
+      // Calculate PREVIOUS period for comparison
+      let previousPeriodStats = { present: 0, absent: 0, total: 0, rate: 0 };
+
+      if (periodType === "month") {
+        // Get previous month
+        const currentDate = new Date(`${year}-${month}-01`);
+        currentDate.setMonth(currentDate.getMonth() - 1);
+        const prevYear = currentDate.getFullYear();
+        const prevMonth = String(currentDate.getMonth() + 1).padStart(2, "0");
+
+        const prevDateFilter = {
+          date: { $regex: `^${prevYear}-${prevMonth}` },
+        };
+
+        const prevStats = await attendancesCollection
+          .aggregate([
+            {
+              $match: {
+                ...prevDateFilter,
+                attendance: "student",
+              },
+            },
+            {
+              $group: {
+                _id: "$status",
+                count: { $sum: 1 },
+              },
+            },
+          ])
+          .toArray();
+
+        const prevPresent =
+          prevStats.find((a) => a._id === "present")?.count || 0;
+        const prevAbsent =
+          prevStats.find((a) => a._id === "absent")?.count || 0;
+        const prevLate = prevStats.find((a) => a._id === "late")?.count || 0;
+        const prevHalfDay =
+          prevStats.find((a) => a._id === "half_day")?.count || 0;
+
+        const prevTotal = prevPresent + prevAbsent + prevLate + prevHalfDay;
+        const prevRate =
+          prevTotal > 0 ? ((prevPresent / prevTotal) * 100).toFixed(1) : 0;
+
+        previousPeriodStats = {
+          present: prevPresent,
+          absent: prevAbsent,
+          total: prevTotal,
+          rate: parseFloat(prevRate),
+          period: `${prevYear}-${prevMonth}`,
+        };
+      } else if (periodType === "custom" && startDate && endDate) {
+        // For custom range, calculate equivalent previous period
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        const diffDays = Math.floor((end - start) / (1000 * 60 * 60 * 24)) + 1; // +1 to include both start and end days
+
+        // Calculate previous period of same duration
+        const prevEnd = new Date(start);
+        prevEnd.setDate(prevEnd.getDate() - 1); // Day before the start date
+
+        const prevStart = new Date(prevEnd);
+        prevStart.setDate(prevStart.getDate() - diffDays + 1); // Go back same number of days
+
+        const prevStartStr = prevStart.toISOString().split("T")[0];
+        const prevEndStr = prevEnd.toISOString().split("T")[0];
+        const prevDateFilter = {
+          date: { $gte: prevStartStr, $lte: prevEndStr },
+        };
+
+        const prevStats = await attendancesCollection
+          .aggregate([
+            {
+              $match: {
+                ...prevDateFilter,
+                attendance: "student",
+              },
+            },
+            {
+              $group: {
+                _id: "$status",
+                count: { $sum: 1 },
+              },
+            },
+          ])
+          .toArray();
+
+        const prevPresent =
+          prevStats.find((a) => a._id === "present")?.count || 0;
+        const prevAbsent =
+          prevStats.find((a) => a._id === "absent")?.count || 0;
+        const prevLate = prevStats.find((a) => a._id === "late")?.count || 0;
+        const prevHalfDay =
+          prevStats.find((a) => a._id === "half_day")?.count || 0;
+
+        const prevTotal = prevPresent + prevAbsent + prevLate + prevHalfDay;
+        const prevRate =
+          prevTotal > 0 ? ((prevPresent / prevTotal) * 100).toFixed(1) : 0;
+
+        previousPeriodStats = {
+          present: prevPresent,
+          absent: prevAbsent,
+          total: prevTotal,
+          rate: parseFloat(prevRate),
+          period: `${prevStartStr} to ${prevEndStr}`,
+        };
+      }
+
+      // Calculate change percentage
+      let changePercentage = 0;
+      if (previousPeriodStats.rate > 0) {
+        changePercentage = parseFloat(
+          (
+            ((parseFloat(attendanceRate) - previousPeriodStats.rate) /
+              previousPeriodStats.rate) *
+            100
+          ).toFixed(1),
+        );
+      } else if (parseFloat(attendanceRate) > 0) {
+        // If previous period had 0% but current has attendance
+        changePercentage = 100;
+      }
+
+      res.json({
+        success: true,
+        period: periodLabel,
+        periodType: periodType,
+        stats: {
+          present: totalPresent,
+          absent: totalAbsent,
+          late: totalLate,
+          half_day: totalHalfDay,
+          total: totalAttendance,
+          rate: parseFloat(attendanceRate),
+        },
+        comparison: {
+          previous: previousPeriodStats,
+          change: changePercentage,
+          isIncrease: changePercentage >= 0,
+        },
+      });
+    } catch (error) {
+      console.error("Error in attendance-stats route:", error);
+      res.status(500).json({
+        success: false,
+        message: "Error fetching attendance statistics",
+        error: error.message,
+      });
+    }
+  });
+
+  // router.get("/attendance-stats", async (req, res) => {
+  //   try {
+  //     const { year, month, startDate, endDate } = req.query;
+
+  //     // Determine date range based on parameters
+  //     let dateFilter = {};
+
+  //     if (startDate && endDate) {
+  //       // Custom date range
+  //       dateFilter = {
+  //         date: { $gte: startDate, $lte: endDate },
+  //       };
+  //     } else if (year && month) {
+  //       // Specific month
+  //       const monthStr = String(month).padStart(2, "0");
+  //       dateFilter = {
+  //         date: { $regex: `^${year}-${monthStr}` },
+  //       };
+  //     } else if (year) {
+  //       // Whole year
+  //       dateFilter = {
+  //         date: { $regex: `^${year}` },
+  //       };
+  //     } else {
+  //       // Default: current month
+  //       const today = getUKDate();
+  //       const [currentYear, currentMonth] = today.split("-");
+  //       dateFilter = {
+  //         date: { $regex: `^${currentYear}-${currentMonth}` },
+  //       };
+  //     }
+
+  //     // Get attendance for the period
+  //     const attendanceStats = await attendancesCollection
+  //       .aggregate([
+  //         {
+  //           $match: {
+  //             ...dateFilter,
+  //             attendance: "student",
+  //           },
+  //         },
+  //         {
+  //           $group: {
+  //             _id: "$status",
+  //             count: { $sum: 1 },
+  //           },
+  //         },
+  //       ])
+  //       .toArray();
+
+  //     const totalPresent =
+  //       attendanceStats.find((a) => a._id === "present")?.count || 0;
+  //     const totalAbsent =
+  //       attendanceStats.find((a) => a._id === "absent")?.count || 0;
+  //     const totalAttendance = totalPresent + totalAbsent;
+  //     const attendanceRate =
+  //       totalAttendance > 0
+  //         ? ((totalPresent / totalAttendance) * 100).toFixed(1)
+  //         : 0;
+
+  //     res.json({
+  //       success: true,
+  //       period:
+  //         startDate && endDate
+  //           ? `${startDate} to ${endDate}`
+  //           : year && month
+  //             ? `${year}-${String(month).padStart(2, "0")}`
+  //             : year || "Current period",
+  //       stats: {
+  //         present: totalPresent,
+  //         absent: totalAbsent,
+  //         total: totalAttendance,
+  //         rate: parseFloat(attendanceRate),
+  //       },
+  //     });
+  //   } catch (error) {
+  //     // error handling
+  //   }
+  // });
   // Helper function to get current week dates (Monday to Sunday)
   function getCurrentWeekDates(today) {
     const dates = [];

@@ -4,7 +4,9 @@ const { MongoClient, ObjectId } = require("mongodb");
 
 const MONGO_URI = `mongodb+srv://${process.env.DB_User}:${process.env.DB_Pass}@cluster0.ts2xohe.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 const DB_NAME = "alyaqeenDb";
-
+const DISABLED_FAMILY_EMAILS = [
+  "vezzaa786@hotmail.co.uk", // Amjad family
+];
 // Real payment check logic
 // Check payment status per STUDENT, not per family
 // Check payment status per STUDENT, not per family
@@ -35,7 +37,7 @@ const checkPaymentStatus = async (familyEmail, currentMonth, currentYear) => {
 
     console.log(
       `👨‍👩‍👧‍👦 Family ${familyEmail} has ${students.length} students:`,
-      students.map((s) => s.name).join(", ")
+      students.map((s) => s.name).join(", "),
     );
 
     // Get ALL fee records for this family (there might be multiple)
@@ -58,7 +60,7 @@ const checkPaymentStatus = async (familyEmail, currentMonth, currentYear) => {
         for (const feeRecord of feeRecords) {
           // Try to match by student name
           const studentFeeRecord = feeRecord.students.find(
-            (s) => s.name === student.name
+            (s) => s.name === student.name,
           );
 
           if (studentFeeRecord) {
@@ -76,7 +78,7 @@ const checkPaymentStatus = async (familyEmail, currentMonth, currentYear) => {
               const currentMonthPayment = studentFeeRecord.monthsPaid.find(
                 (monthPaid) =>
                   monthPaid.month === currentMonth &&
-                  monthPaid.year === currentYear
+                  monthPaid.year === currentYear,
               );
 
               if (currentMonthPayment) {
@@ -99,7 +101,7 @@ const checkPaymentStatus = async (familyEmail, currentMonth, currentYear) => {
               // For admission payments, check if they paid the admission fee
               const totalPaid = studentFeeRecord.payments.reduce(
                 (sum, payment) => sum + payment.amount,
-                0
+                0,
               );
               const expectedTotal =
                 studentFeeRecord.admissionFee ||
@@ -124,7 +126,7 @@ const checkPaymentStatus = async (familyEmail, currentMonth, currentYear) => {
             hasPaymentRecord
               ? `PAID (${paymentType}) ${paidAmount}/${monthlyFee}`
               : "NOT PAID"
-          }`
+          }`,
         );
 
         const hasNotPaid = !hasPaymentRecord;
@@ -140,43 +142,43 @@ const checkPaymentStatus = async (familyEmail, currentMonth, currentYear) => {
           monthlyFee: monthlyFee,
           paymentType: paymentType,
         };
-      })
+      }),
     );
 
     const allStudentsPaid = studentPaymentStatus.every(
-      (student) => student.isFullyPaid
+      (student) => student.isFullyPaid,
     );
     const unpaidStudents = studentPaymentStatus.filter(
-      (student) => student.hasNotPaid
+      (student) => student.hasNotPaid,
     );
     const partiallyPaidStudents = studentPaymentStatus.filter(
-      (student) => student.isPartiallyPaid
+      (student) => student.isPartiallyPaid,
     );
     const fullyPaidStudents = studentPaymentStatus.filter(
-      (student) => student.isFullyPaid
+      (student) => student.isFullyPaid,
     );
 
     console.log(
       `💰 ${familyEmail}: ${
         allStudentsPaid ? "ALL PAID" : "SOME UNPAID"
-      } for ${currentMonth}/${currentYear}`
+      } for ${currentMonth}/${currentYear}`,
     );
     console.log(
       `   Fully paid: ${
         fullyPaidStudents
           .map((s) => `${s.name} (${s.paymentType})`)
           .join(", ") || "None"
-      }`
+      }`,
     );
     console.log(
       `   Partially paid: ${
         partiallyPaidStudents
           .map((s) => `${s.name} (${s.paidAmount}/${s.monthlyFee})`)
           .join(", ") || "None"
-      }`
+      }`,
     );
     console.log(
-      `   Not paid: ${unpaidStudents.map((s) => s.name).join(", ") || "None"}`
+      `   Not paid: ${unpaidStudents.map((s) => s.name).join(", ") || "None"}`,
     );
 
     return {
@@ -218,6 +220,11 @@ const getFamilies = async () => {
 };
 
 const sendReminderEmail = async ({ to, name, studentName }, reminderType) => {
+  if (DISABLED_FAMILY_EMAILS.includes(to)) {
+    console.log(`🚫 EMAIL BLOCKED: ${parentName} <${to}>`);
+    return; // Exit without sending
+  }
+
   // Check if Brevo credentials are available
   if (!process.env.BREVO_PASS || !process.env.BREVO_USER) {
     console.log("❌ Brevo credentials missing. Would send to:", to);
@@ -309,7 +316,7 @@ const sendReminderEmail = async ({ to, name, studentName }, reminderType) => {
   } catch (error) {
     console.error(
       `❌ Failed to send email to ${to}:`,
-      error.response?.body || error.message
+      error.response?.body || error.message,
     );
   }
 };
@@ -326,7 +333,7 @@ const sendMonthlyReminders = async (dayOfMonth) => {
     const currentYear = currentDate.getFullYear();
 
     console.log(
-      `📅 Checking payments for month: ${currentMonth}, year: ${currentYear}`
+      `📅 Checking payments for month: ${currentMonth}, year: ${currentYear}`,
     );
     console.log(`👨‍👩‍👧‍👦 Total families to check: ${families.length}`);
 
@@ -334,13 +341,13 @@ const sendMonthlyReminders = async (dayOfMonth) => {
       const paymentStatus = await checkPaymentStatus(
         family.to,
         currentMonth,
-        currentYear
+        currentYear,
       );
 
       // Only send reminder if there are students with NO payment record
       if (paymentStatus.unpaidStudents.length > 0) {
         console.log(
-          `📧 Sending reminder to: ${family.to} (${paymentStatus.unpaidStudents.length} students with no payment)`
+          `📧 Sending reminder to: ${family.to} (${paymentStatus.unpaidStudents.length} students with no payment)`,
         );
 
         const unpaidStudentNames = paymentStatus.unpaidStudents
@@ -352,15 +359,15 @@ const sendMonthlyReminders = async (dayOfMonth) => {
             name: family.name,
             studentName: unpaidStudentNames,
           },
-          dayOfMonth
+          dayOfMonth,
         );
       } else if (paymentStatus.partiallyPaidStudents.length > 0) {
         console.log(
-          `⚠️ ${family.to} has partially paid students but no reminder sent`
+          `⚠️ ${family.to} has partially paid students but no reminder sent`,
         );
       } else {
         console.log(
-          `✅ ${family.to} has all students paid for ${currentMonth}/${currentYear}`
+          `✅ ${family.to} has all students paid for ${currentMonth}/${currentYear}`,
         );
       }
     }

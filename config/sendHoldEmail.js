@@ -1,6 +1,8 @@
 require("dotenv").config();
 const SibApiV3Sdk = require("sib-api-v3-sdk");
-
+const DISABLED_FAMILY_EMAILS = [
+  "vezzaa786@hotmail.co.uk", // Amjad family
+];
 const sendHoldEmail = async ({
   to,
   parentName = "Parent",
@@ -8,6 +10,10 @@ const sendHoldEmail = async ({
   method = "your selected method",
   amount = 0, // ADD THIS PARAMETER
 }) => {
+  if (DISABLED_FAMILY_EMAILS.includes(to)) {
+    console.log(`🚫 EMAIL BLOCKED: ${parentName} <${to}>`);
+    return; // Exit without sending
+  }
   // if (process.env.EMAIL_SENDING_ENABLED !== "true") {
   //   console.log(
   //     "🚫 Email sending is disabled (test mode). Skipping email to:",
@@ -47,7 +53,7 @@ const sendHoldEmail = async ({
     htmlContent: `
       <p>Dear <strong>${parentName}</strong>,</p>
       <p>We've noted your preference to pay the admission and first month's fee of <strong>£${amount.toFixed(
-        2
+        2,
       )}</strong> via <strong>${method}</strong>. As a result, the following student(s) have been placed on <strong>temporary enrollment</strong> at Alyaqeen:</p>
       <p><strong>${studentList}</strong></p>
       <p>You may allow your child(ren) to begin attending classes immediately. However, please note that official enrollment will only be confirmed once the admission and first month's fee is received.</p>
@@ -66,7 +72,7 @@ const sendHoldEmail = async ({
   } catch (error) {
     console.error(
       "❌ Failed to send hold email via Brevo API:",
-      error.response?.body || error.message
+      error.response?.body || error.message,
     );
   }
 };

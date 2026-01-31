@@ -1,14 +1,19 @@
 require("dotenv").config();
 const SibApiV3Sdk = require("sib-api-v3-sdk");
 const sanitizeHtml = require("sanitize-html");
-
+const DISABLED_FAMILY_EMAILS = [
+  "vezzaa786@hotmail.co.uk", // Amjad family
+];
 const sendAnnouncementEmail = async ({ to, name = "User", title, content }) => {
   // Optional: Enable/disable for testing
   // if (process.env.EMAIL_SENDING_ENABLED !== "true") {
   //   console.log("🚫 Email sending disabled. Skipping:", to);
   //   return;
   // }
-
+  if (DISABLED_FAMILY_EMAILS.includes(to)) {
+    console.log(`🚫 EMAIL BLOCKED: ${parentName} <${to}>`);
+    return; // Exit without sending
+  }
   if (!to || !process.env.BREVO_USER || !process.env.BREVO_PASS) {
     console.error("❌ Missing email credentials or recipient");
     return;
@@ -117,7 +122,7 @@ const sendAnnouncementEmail = async ({ to, name = "User", title, content }) => {
   } catch (error) {
     console.error(
       "❌ Failed to send announcement email:",
-      error.response?.body || error.message
+      error.response?.body || error.message,
     );
   }
 };

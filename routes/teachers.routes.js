@@ -227,17 +227,25 @@ module.exports = (teachersCollection) => {
   // Get total number of teachers with gender and activity breakdown
   router.get("/count", async (req, res) => {
     try {
-      const total = await teachersCollection.countDocuments();
+      const total = await teachersCollection.countDocuments({
+        activity: "active",
+        status: "approved",
+      });
 
       const maleCount = await teachersCollection.countDocuments({
         gender: "Male",
+        activity: "active",
+        status: "approved",
       });
       const femaleCount = await teachersCollection.countDocuments({
         gender: "Female",
+        activity: "active",
+        status: "approved",
       });
 
       const activeCount = await teachersCollection.countDocuments({
         activity: "active",
+        status: "approved",
       });
       const inactiveCount = await teachersCollection.countDocuments({
         activity: "inactive",
