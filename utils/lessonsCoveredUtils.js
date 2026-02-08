@@ -927,11 +927,43 @@ export const getCommonYearlyPipelineStages = (year) => ({
     },
   },
 
-  // Calculate monthly progress for all lesson types - THIS WAS MISSING!
+  // Convert month names to numbers for proper sorting
+  convertMonthToNumber: {
+    $addFields: {
+      monthNumber: {
+        $switch: {
+          branches: [
+            { case: { $eq: ["$month", "January"] }, then: 1 },
+            { case: { $eq: ["$month", "February"] }, then: 2 },
+            { case: { $eq: ["$month", "March"] }, then: 3 },
+            { case: { $eq: ["$month", "April"] }, then: 4 },
+            { case: { $eq: ["$month", "May"] }, then: 5 },
+            { case: { $eq: ["$month", "June"] }, then: 6 },
+            { case: { $eq: ["$month", "July"] }, then: 7 },
+            { case: { $eq: ["$month", "August"] }, then: 8 },
+            { case: { $eq: ["$month", "September"] }, then: 9 },
+            { case: { $eq: ["$month", "October"] }, then: 10 },
+            { case: { $eq: ["$month", "November"] }, then: 11 },
+            { case: { $eq: ["$month", "December"] }, then: 12 },
+          ],
+          default: 0,
+        },
+      },
+    },
+  },
+
+  // Sort by month number to ensure chronological order
+  sortByMonthNumber: {
+    $sort: { monthNumber: 1 },
+  },
+
+  // Calculate monthly progress for all lesson types
+  // Calculate monthly progress for all lesson types
   calculateMonthlyProgress: {
     $project: {
       student_id: 1,
       month: 1,
+      monthNumber: 1,
       class_id: 1,
       teacher_id: 1,
       document_ids: 1,
@@ -943,7 +975,7 @@ export const getCommonYearlyPipelineStages = (year) => ({
         ],
       },
 
-      // Qaidah/Quran monthly progress
+      // Qaidah/Quran monthly progress (this is working correctly)
       qaidah_quran_monthly: {
         $cond: [
           {
@@ -1153,7 +1185,7 @@ export const getCommonYearlyPipelineStages = (year) => ({
         ],
       },
 
-      // Islamic Studies monthly progress
+      // Islamic Studies monthly progress - FIXED: Proper field access
       islamic_studies_monthly: {
         $cond: [
           {
@@ -1226,6 +1258,12 @@ export const getCommonYearlyPipelineStages = (year) => ({
             },
             beginning_book: "$beginning.lessons.islamic_studies.book",
             ending_book: "$ending.lessons.islamic_studies.book",
+            beginning_page: {
+              $ifNull: ["$beginning.lessons.islamic_studies.page", "0"],
+            },
+            ending_page: {
+              $ifNull: ["$ending.lessons.islamic_studies.page", "0"],
+            },
             beginning_lesson_name:
               "$beginning.lessons.islamic_studies.lesson_name",
             ending_lesson_name: "$ending.lessons.islamic_studies.lesson_name",
@@ -1235,13 +1273,15 @@ export const getCommonYearlyPipelineStages = (year) => ({
             page_progress_numeric: 0,
             beginning_book: null,
             ending_book: null,
+            beginning_page: "0",
+            ending_page: "0",
             beginning_lesson_name: null,
             ending_lesson_name: null,
           },
         ],
       },
 
-      // Dua/Surah monthly progress
+      // Dua/Surah monthly progress - FIXED: Proper field access
       dua_surah_monthly: {
         $cond: [
           {
@@ -1353,6 +1393,12 @@ export const getCommonYearlyPipelineStages = (year) => ({
             ending_book: "$ending.lessons.dua_surah.book",
             beginning_level: "$beginning.lessons.dua_surah.level",
             ending_level: "$ending.lessons.dua_surah.level",
+            beginning_page: {
+              $ifNull: ["$beginning.lessons.dua_surah.page", "0"],
+            },
+            ending_page: {
+              $ifNull: ["$ending.lessons.dua_surah.page", "0"],
+            },
             beginning_lesson_name: "$beginning.lessons.dua_surah.lesson_name",
             ending_lesson_name: "$ending.lessons.dua_surah.lesson_name",
           },
@@ -1366,6 +1412,8 @@ export const getCommonYearlyPipelineStages = (year) => ({
             ending_book: null,
             beginning_level: null,
             ending_level: null,
+            beginning_page: "0",
+            ending_page: "0",
             beginning_lesson_name: null,
             ending_lesson_name: null,
           },
@@ -1447,6 +1495,12 @@ export const getCommonYearlyPipelineStages = (year) => ({
             ending_target: "$ending.lessons.gift_for_muslim.target",
             beginning_level: "$beginning.lessons.gift_for_muslim.level",
             ending_level: "$ending.lessons.gift_for_muslim.level",
+            beginning_page: {
+              $ifNull: ["$beginning.lessons.gift_for_muslim.page", "0"],
+            },
+            ending_page: {
+              $ifNull: ["$ending.lessons.gift_for_muslim.page", "0"],
+            },
             beginning_lesson_name:
               "$beginning.lessons.gift_for_muslim.lesson_name",
             ending_lesson_name: "$ending.lessons.gift_for_muslim.lesson_name",
@@ -1458,6 +1512,8 @@ export const getCommonYearlyPipelineStages = (year) => ({
             ending_target: null,
             beginning_level: null,
             ending_level: null,
+            beginning_page: "0",
+            ending_page: "0",
             beginning_lesson_name: null,
             ending_lesson_name: null,
           },
@@ -1468,7 +1524,7 @@ export const getCommonYearlyPipelineStages = (year) => ({
     },
   },
 
-  // Yearly aggregation
+  // Yearly aggregation - FIXED: Use $min and $max with monthNumber for correct first/last
   yearlyAggregation: {
     $group: {
       _id: {
@@ -1499,48 +1555,32 @@ export const getCommonYearlyPipelineStages = (year) => ({
         $sum: "$dua_surah_monthly.dua_number_progress",
       },
 
-      // Get the first and last values for text fields
-      first_qaidah_level: { $first: "$qaidah_quran_monthly.beginning_level" },
-      last_qaidah_level: { $last: "$qaidah_quran_monthly.ending_level" },
-      first_qaidah_lesson: {
-        $first: "$qaidah_quran_monthly.beginning_lesson_name",
+      // Get the first month data (lowest monthNumber)
+      first_month_data: {
+        $first: {
+          month: "$month",
+          monthNumber: "$monthNumber",
+          qaidah_quran: "$qaidah_quran_monthly",
+          islamic_studies: "$islamic_studies_monthly",
+          dua_surah: "$dua_surah_monthly",
+          gift_for_muslim: "$gift_for_muslim_monthly",
+          type: "$type",
+        },
       },
-      last_qaidah_lesson: { $last: "$qaidah_quran_monthly.ending_lesson_name" },
-      qaidah_selected: { $first: "$qaidah_quran_monthly.selected" },
-      first_qaidah_page: { $first: "$qaidah_quran_monthly.beginning_page" },
-      first_qaidah_line: { $first: "$qaidah_quran_monthly.beginning_line" },
-      last_qaidah_page: { $last: "$qaidah_quran_monthly.ending_page" },
-      last_qaidah_line: { $last: "$qaidah_quran_monthly.ending_line" },
-      first_islamic_book: { $first: "$islamic_studies_monthly.beginning_book" },
-      last_islamic_book: { $last: "$islamic_studies_monthly.ending_book" },
-      first_islamic_lesson: {
-        $first: "$islamic_studies_monthly.beginning_lesson_name",
+
+      // Get the last month data (highest monthNumber)
+      last_month_data: {
+        $last: {
+          month: "$month",
+          monthNumber: "$monthNumber",
+          qaidah_quran: "$qaidah_quran_monthly",
+          islamic_studies: "$islamic_studies_monthly",
+          dua_surah: "$dua_surah_monthly",
+          gift_for_muslim: "$gift_for_muslim_monthly",
+          type: "$type",
+        },
       },
-      last_islamic_lesson: {
-        $last: "$islamic_studies_monthly.ending_lesson_name",
-      },
-      first_dua_book: { $first: "$dua_surah_monthly.beginning_book" },
-      last_dua_book: { $last: "$dua_surah_monthly.ending_book" },
-      first_dua_level: { $first: "$dua_surah_monthly.beginning_level" },
-      last_dua_level: { $last: "$dua_surah_monthly.ending_level" },
-      first_dua_lesson: { $first: "$dua_surah_monthly.beginning_lesson_name" },
-      last_dua_lesson: { $last: "$dua_surah_monthly.ending_lesson_name" },
-      first_dua_target: { $first: "$dua_surah_monthly.beginning_target" },
-      last_dua_target: { $last: "$dua_surah_monthly.ending_target" },
-      first_gift_level: { $first: "$gift_for_muslim_monthly.beginning_level" },
-      last_gift_level: { $last: "$gift_for_muslim_monthly.ending_level" },
-      first_gift_lesson: {
-        $first: "$gift_for_muslim_monthly.beginning_lesson_name",
-      },
-      last_gift_lesson: {
-        $last: "$gift_for_muslim_monthly.ending_lesson_name",
-      },
-      first_gift_target: {
-        $first: "$gift_for_muslim_monthly.beginning_target",
-      },
-      last_gift_target: { $last: "$gift_for_muslim_monthly.ending_target" },
-      first_qaidah_para: { $first: "$qaidah_quran_monthly.beginning_para" },
-      last_qaidah_para: { $last: "$qaidah_quran_monthly.ending_para" },
+
       months_with_ending: { $sum: 1 },
       months_with_both: {
         $sum: {
@@ -1557,8 +1597,8 @@ export const getCommonYearlyPipelineStages = (year) => ({
     },
   },
 
-  // Create yearly progress structure - FIXED FOR STRING DISPLAY
-  // Create yearly progress structure - FIXED FOR STRING DISPLAY
+  // Create yearly progress structure - FIXED: Use first_month_data and last_month_data
+  // Create yearly progress structure - FIXED: Use first_month_data and last_month_data
   createYearlyProgress: {
     $project: {
       _id: 0,
@@ -1584,57 +1624,81 @@ export const getCommonYearlyPipelineStages = (year) => ({
               $cond: [
                 {
                   $or: [
-                    { $ne: ["$first_qaidah_level", null] },
-                    { $ne: ["$last_qaidah_level", null] },
-                    { $ne: ["$first_qaidah_page", "0"] }, // ADD THIS
-                    { $ne: ["$last_qaidah_page", "0"] }, // ADD THIS
-                    { $ne: ["$qaidah_selected", null] }, // ADD THIS
+                    {
+                      $ne: [
+                        "$first_month_data.qaidah_quran.beginning_level",
+                        null,
+                      ],
+                    },
+                    {
+                      $ne: ["$last_month_data.qaidah_quran.ending_level", null],
+                    },
+                    {
+                      $ne: [
+                        "$first_month_data.qaidah_quran.beginning_page",
+                        "0",
+                      ],
+                    },
+                    { $ne: ["$last_month_data.qaidah_quran.ending_page", "0"] },
+                    { $ne: ["$first_month_data.qaidah_quran.selected", null] },
                   ],
                 },
                 {
-                  selected: "$qaidah_selected",
+                  selected: "$first_month_data.qaidah_quran.selected",
                   // Use string format for page_progress
                   page_progress: {
                     $cond: [
                       {
                         $and: [
-                          { $ne: ["$first_qaidah_page", "0"] },
-                          { $ne: ["$last_qaidah_page", "0"] },
+                          {
+                            $ne: [
+                              "$first_month_data.qaidah_quran.beginning_page",
+                              "0",
+                            ],
+                          },
+                          {
+                            $ne: [
+                              "$last_month_data.qaidah_quran.ending_page",
+                              "0",
+                            ],
+                          },
                         ],
                       },
                       {
                         // For Quran/Hifz: Show "Juz X page Y → Juz A page B"
-                        // For Quran/Hifz: Show "Juz X page Y → Juz A page B"
                         $cond: [
                           {
-                            $in: ["$qaidah_selected", ["quran", "hifz"]],
+                            $in: [
+                              "$first_month_data.qaidah_quran.selected",
+                              ["quran", "hifz"],
+                            ],
                           },
                           {
                             $cond: [
                               {
                                 $and: [
-                                  "$first_qaidah_para", // Use para instead of level
-                                  "$last_qaidah_para",
+                                  "$first_month_data.qaidah_quran.beginning_para",
+                                  "$last_month_data.qaidah_quran.ending_para",
                                 ],
                               },
                               {
                                 $concat: [
                                   "Juz ",
-                                  "$first_qaidah_para", // Use para instead of level
+                                  "$first_month_data.qaidah_quran.beginning_para",
                                   " page ",
-                                  "$first_qaidah_page",
+                                  "$first_month_data.qaidah_quran.beginning_page",
                                   " → Juz ",
-                                  "$last_qaidah_para", // Use para instead of level
+                                  "$last_month_data.qaidah_quran.ending_para",
                                   " page ",
-                                  "$last_qaidah_page",
+                                  "$last_month_data.qaidah_quran.ending_page",
                                 ],
                               },
                               {
                                 $concat: [
                                   "page ",
-                                  "$first_qaidah_page",
+                                  "$first_month_data.qaidah_quran.beginning_page",
                                   " → page ",
-                                  "$last_qaidah_page",
+                                  "$last_month_data.qaidah_quran.ending_page",
                                 ],
                               },
                             ],
@@ -1644,27 +1708,27 @@ export const getCommonYearlyPipelineStages = (year) => ({
                             $cond: [
                               {
                                 $and: [
-                                  "$first_qaidah_level",
-                                  "$last_qaidah_level",
+                                  "$first_month_data.qaidah_quran.beginning_level",
+                                  "$last_month_data.qaidah_quran.ending_level",
                                 ],
                               },
                               {
                                 $concat: [
-                                  "$first_qaidah_level",
+                                  "$first_month_data.qaidah_quran.beginning_level",
                                   " page ",
-                                  "$first_qaidah_page",
+                                  "$first_month_data.qaidah_quran.beginning_page",
                                   " → ",
-                                  "$last_qaidah_level",
+                                  "$last_month_data.qaidah_quran.ending_level",
                                   " page ",
-                                  "$last_qaidah_page",
+                                  "$last_month_data.qaidah_quran.ending_page",
                                 ],
                               },
                               {
                                 $concat: [
                                   "page ",
-                                  "$first_qaidah_page",
+                                  "$first_month_data.qaidah_quran.beginning_page",
                                   " → page ",
-                                  "$last_qaidah_page",
+                                  "$last_month_data.qaidah_quran.ending_page",
                                 ],
                               },
                             ],
@@ -1678,20 +1742,30 @@ export const getCommonYearlyPipelineStages = (year) => ({
                     $cond: [
                       {
                         $and: [
-                          { $ne: ["$first_qaidah_page", "0"] },
-                          { $ne: ["$last_qaidah_page", "0"] },
+                          {
+                            $ne: [
+                              "$first_month_data.qaidah_quran.beginning_page",
+                              "0",
+                            ],
+                          },
+                          {
+                            $ne: [
+                              "$last_month_data.qaidah_quran.ending_page",
+                              "0",
+                            ],
+                          },
                         ],
                       },
                       {
                         $concat: [
                           "page ",
-                          "$first_qaidah_page",
+                          "$first_month_data.qaidah_quran.beginning_page",
                           " line ",
-                          "$first_qaidah_line",
+                          "$first_month_data.qaidah_quran.beginning_line",
                           " - page ",
-                          "$last_qaidah_page",
+                          "$last_month_data.qaidah_quran.ending_page",
                           " line ",
-                          "$last_qaidah_line",
+                          "$last_month_data.qaidah_quran.ending_line",
                         ],
                       },
                       "N/A",
@@ -1705,7 +1779,10 @@ export const getCommonYearlyPipelineStages = (year) => ({
                           { $ne: ["$qaidah_quran_para_yearly", null] },
                           { $ne: ["$qaidah_quran_para_yearly", 0] },
                           {
-                            $in: ["$qaidah_selected", ["quran", "hifz"]],
+                            $in: [
+                              "$first_month_data.qaidah_quran.selected",
+                              ["quran", "hifz"],
+                            ],
                           },
                         ],
                       },
@@ -1715,12 +1792,17 @@ export const getCommonYearlyPipelineStages = (year) => ({
                   },
                   level_display: {
                     $cond: [
-                      { $and: ["$first_qaidah_level", "$last_qaidah_level"] },
+                      {
+                        $and: [
+                          "$first_month_data.qaidah_quran.beginning_level",
+                          "$last_month_data.qaidah_quran.ending_level",
+                        ],
+                      },
                       {
                         $concat: [
-                          "$first_qaidah_level",
+                          "$first_month_data.qaidah_quran.beginning_level",
                           " → ",
-                          "$last_qaidah_level",
+                          "$last_month_data.qaidah_quran.ending_level",
                         ],
                       },
                       "N/A",
@@ -1728,12 +1810,17 @@ export const getCommonYearlyPipelineStages = (year) => ({
                   },
                   lesson_name_display: {
                     $cond: [
-                      { $and: ["$first_qaidah_lesson", "$last_qaidah_lesson"] },
+                      {
+                        $and: [
+                          "$first_month_data.qaidah_quran.beginning_lesson_name",
+                          "$last_month_data.qaidah_quran.ending_lesson_name",
+                        ],
+                      },
                       {
                         $concat: [
-                          "$first_qaidah_lesson",
+                          "$first_month_data.qaidah_quran.beginning_lesson_name",
                           " → ",
-                          "$last_qaidah_lesson",
+                          "$last_month_data.qaidah_quran.ending_lesson_name",
                         ],
                       },
                       "N/A",
@@ -1747,8 +1834,18 @@ export const getCommonYearlyPipelineStages = (year) => ({
               $cond: [
                 {
                   $or: [
-                    { $ne: ["$first_gift_level", null] },
-                    { $ne: ["$last_gift_level", null] },
+                    {
+                      $ne: [
+                        "$first_month_data.gift_for_muslim.beginning_level",
+                        null,
+                      ],
+                    },
+                    {
+                      $ne: [
+                        "$last_month_data.gift_for_muslim.ending_level",
+                        null,
+                      ],
+                    },
                   ],
                 },
                 {
@@ -1757,21 +1854,21 @@ export const getCommonYearlyPipelineStages = (year) => ({
                     $cond: [
                       {
                         $and: [
-                          "$first_gift_level",
-                          "$last_gift_level",
-                          "$first_gift_target",
-                          "$last_gift_target",
+                          "$first_month_data.gift_for_muslim.beginning_level",
+                          "$last_month_data.gift_for_muslim.ending_level",
+                          "$first_month_data.gift_for_muslim.beginning_target",
+                          "$last_month_data.gift_for_muslim.ending_target",
                         ],
                       },
                       {
                         $concat: [
-                          "$first_gift_level",
+                          "$first_month_data.gift_for_muslim.beginning_level",
                           " page ",
-                          "$first_gift_target",
+                          "$first_month_data.gift_for_muslim.beginning_target",
                           " → ",
-                          "$last_gift_level",
+                          "$last_month_data.gift_for_muslim.ending_level",
                           " page ",
-                          "$last_gift_target",
+                          "$last_month_data.gift_for_muslim.ending_target",
                         ],
                       },
                       "N/A",
@@ -1779,12 +1876,17 @@ export const getCommonYearlyPipelineStages = (year) => ({
                   },
                   target_display: {
                     $cond: [
-                      { $and: ["$first_gift_target", "$last_gift_target"] },
+                      {
+                        $and: [
+                          "$first_month_data.gift_for_muslim.beginning_target",
+                          "$last_month_data.gift_for_muslim.ending_target",
+                        ],
+                      },
                       {
                         $concat: [
-                          "$first_gift_target",
+                          "$first_month_data.gift_for_muslim.beginning_target",
                           " → ",
-                          "$last_gift_target",
+                          "$last_month_data.gift_for_muslim.ending_target",
                         ],
                       },
                       "N/A",
@@ -1792,12 +1894,17 @@ export const getCommonYearlyPipelineStages = (year) => ({
                   },
                   level_display: {
                     $cond: [
-                      { $and: ["$first_gift_level", "$last_gift_level"] },
+                      {
+                        $and: [
+                          "$first_month_data.gift_for_muslim.beginning_level",
+                          "$last_month_data.gift_for_muslim.ending_level",
+                        ],
+                      },
                       {
                         $concat: [
-                          "$first_gift_level",
+                          "$first_month_data.gift_for_muslim.beginning_level",
                           " → ",
-                          "$last_gift_level",
+                          "$last_month_data.gift_for_muslim.ending_level",
                         ],
                       },
                       "N/A",
@@ -1805,12 +1912,17 @@ export const getCommonYearlyPipelineStages = (year) => ({
                   },
                   lesson_name_display: {
                     $cond: [
-                      { $and: ["$first_gift_lesson", "$last_gift_lesson"] },
+                      {
+                        $and: [
+                          "$first_month_data.gift_for_muslim.beginning_lesson_name",
+                          "$last_month_data.gift_for_muslim.ending_lesson_name",
+                        ],
+                      },
                       {
                         $concat: [
-                          "$first_gift_lesson",
+                          "$first_month_data.gift_for_muslim.beginning_lesson_name",
                           " → ",
-                          "$last_gift_lesson",
+                          "$last_month_data.gift_for_muslim.ending_lesson_name",
                         ],
                       },
                       "N/A",
@@ -1823,62 +1935,87 @@ export const getCommonYearlyPipelineStages = (year) => ({
             islamic_studies_progress: null,
             dua_surah_progress: null,
           },
-          // ... rest of the non-gift_muslim section remains the same
+          // Non-gift_muslim section - FIXED: Correct field references for islamic_studies and dua_surah
           {
             qaidah_quran_progress: {
               $cond: [
                 {
                   $or: [
-                    { $ne: ["$first_qaidah_level", null] },
-                    { $ne: ["$last_qaidah_level", null] },
-                    { $ne: ["$first_qaidah_page", "0"] }, // ADD THIS
-                    { $ne: ["$last_qaidah_page", "0"] }, // ADD THIS
-                    { $ne: ["$qaidah_selected", null] }, // ADD THIS
+                    {
+                      $ne: [
+                        "$first_month_data.qaidah_quran.beginning_level",
+                        null,
+                      ],
+                    },
+                    {
+                      $ne: ["$last_month_data.qaidah_quran.ending_level", null],
+                    },
+                    {
+                      $ne: [
+                        "$first_month_data.qaidah_quran.beginning_page",
+                        "0",
+                      ],
+                    },
+                    { $ne: ["$last_month_data.qaidah_quran.ending_page", "0"] },
+                    { $ne: ["$first_month_data.qaidah_quran.selected", null] },
                   ],
                 },
                 {
-                  selected: "$qaidah_selected",
+                  selected: "$first_month_data.qaidah_quran.selected",
                   // Use string format for page_progress
                   page_progress: {
                     $cond: [
                       {
                         $and: [
-                          { $ne: ["$first_qaidah_page", "0"] },
-                          { $ne: ["$last_qaidah_page", "0"] },
+                          {
+                            $ne: [
+                              "$first_month_data.qaidah_quran.beginning_page",
+                              "0",
+                            ],
+                          },
+                          {
+                            $ne: [
+                              "$last_month_data.qaidah_quran.ending_page",
+                              "0",
+                            ],
+                          },
                         ],
                       },
                       {
                         // For Quran/Hifz: Show "Juz X page Y → Juz A page B"
                         $cond: [
                           {
-                            $in: ["$qaidah_selected", ["quran", "hifz"]],
+                            $in: [
+                              "$first_month_data.qaidah_quran.selected",
+                              ["quran", "hifz"],
+                            ],
                           },
                           {
                             $cond: [
                               {
                                 $and: [
-                                  "$first_qaidah_level",
-                                  "$last_qaidah_level",
+                                  "$first_month_data.qaidah_quran.beginning_level",
+                                  "$last_month_data.qaidah_quran.ending_level",
                                 ],
                               },
                               {
                                 $concat: [
                                   "Juz ",
-                                  "$first_qaidah_level",
+                                  "$first_month_data.qaidah_quran.beginning_level",
                                   " page ",
-                                  "$first_qaidah_page",
+                                  "$first_month_data.qaidah_quran.beginning_page",
                                   " → Juz ",
-                                  "$last_qaidah_level",
+                                  "$last_month_data.qaidah_quran.ending_level",
                                   " page ",
-                                  "$last_qaidah_page",
+                                  "$last_month_data.qaidah_quran.ending_page",
                                 ],
                               },
                               {
                                 $concat: [
                                   "page ",
-                                  "$first_qaidah_page",
+                                  "$first_month_data.qaidah_quran.beginning_page",
                                   " → page ",
-                                  "$last_qaidah_page",
+                                  "$last_month_data.qaidah_quran.ending_page",
                                 ],
                               },
                             ],
@@ -1888,27 +2025,27 @@ export const getCommonYearlyPipelineStages = (year) => ({
                             $cond: [
                               {
                                 $and: [
-                                  "$first_qaidah_level",
-                                  "$last_qaidah_level",
+                                  "$first_month_data.qaidah_quran.beginning_level",
+                                  "$last_month_data.qaidah_quran.ending_level",
                                 ],
                               },
                               {
                                 $concat: [
-                                  "$first_qaidah_level",
+                                  "$first_month_data.qaidah_quran.beginning_level",
                                   " page ",
-                                  "$first_qaidah_page",
+                                  "$first_month_data.qaidah_quran.beginning_page",
                                   " → ",
-                                  "$last_qaidah_level",
+                                  "$last_month_data.qaidah_quran.ending_level",
                                   " page ",
-                                  "$last_qaidah_page",
+                                  "$last_month_data.qaidah_quran.ending_page",
                                 ],
                               },
                               {
                                 $concat: [
                                   "page ",
-                                  "$first_qaidah_page",
+                                  "$first_month_data.qaidah_quran.beginning_page",
                                   " → page ",
-                                  "$last_qaidah_page",
+                                  "$last_month_data.qaidah_quran.ending_page",
                                 ],
                               },
                             ],
@@ -1922,20 +2059,30 @@ export const getCommonYearlyPipelineStages = (year) => ({
                     $cond: [
                       {
                         $and: [
-                          { $ne: ["$first_qaidah_page", "0"] },
-                          { $ne: ["$last_qaidah_page", "0"] },
+                          {
+                            $ne: [
+                              "$first_month_data.qaidah_quran.beginning_page",
+                              "0",
+                            ],
+                          },
+                          {
+                            $ne: [
+                              "$last_month_data.qaidah_quran.ending_page",
+                              "0",
+                            ],
+                          },
                         ],
                       },
                       {
                         $concat: [
                           "page ",
-                          "$first_qaidah_page",
+                          "$first_month_data.qaidah_quran.beginning_page",
                           " line ",
-                          "$first_qaidah_line",
+                          "$first_month_data.qaidah_quran.beginning_line",
                           " - page ",
-                          "$last_qaidah_page",
+                          "$last_month_data.qaidah_quran.ending_page",
                           " line ",
-                          "$last_qaidah_line",
+                          "$last_month_data.qaidah_quran.ending_line",
                         ],
                       },
                       "N/A",
@@ -1949,7 +2096,10 @@ export const getCommonYearlyPipelineStages = (year) => ({
                           { $ne: ["$qaidah_quran_para_yearly", null] },
                           { $ne: ["$qaidah_quran_para_yearly", 0] },
                           {
-                            $in: ["$qaidah_selected", ["quran", "hifz"]],
+                            $in: [
+                              "$first_month_data.qaidah_quran.selected",
+                              ["quran", "hifz"],
+                            ],
                           },
                         ],
                       },
@@ -1959,12 +2109,17 @@ export const getCommonYearlyPipelineStages = (year) => ({
                   },
                   level_display: {
                     $cond: [
-                      { $and: ["$first_qaidah_level", "$last_qaidah_level"] },
+                      {
+                        $and: [
+                          "$first_month_data.qaidah_quran.beginning_level",
+                          "$last_month_data.qaidah_quran.ending_level",
+                        ],
+                      },
                       {
                         $concat: [
-                          "$first_qaidah_level",
+                          "$first_month_data.qaidah_quran.beginning_level",
                           " → ",
-                          "$last_qaidah_level",
+                          "$last_month_data.qaidah_quran.ending_level",
                         ],
                       },
                       "N/A",
@@ -1972,12 +2127,17 @@ export const getCommonYearlyPipelineStages = (year) => ({
                   },
                   lesson_name_display: {
                     $cond: [
-                      { $and: ["$first_qaidah_lesson", "$last_qaidah_lesson"] },
+                      {
+                        $and: [
+                          "$first_month_data.qaidah_quran.beginning_lesson_name",
+                          "$last_month_data.qaidah_quran.ending_lesson_name",
+                        ],
+                      },
                       {
                         $concat: [
-                          "$first_qaidah_lesson",
+                          "$first_month_data.qaidah_quran.beginning_lesson_name",
                           " → ",
-                          "$last_qaidah_lesson",
+                          "$last_month_data.qaidah_quran.ending_lesson_name",
                         ],
                       },
                       "N/A",
@@ -1991,31 +2151,41 @@ export const getCommonYearlyPipelineStages = (year) => ({
               $cond: [
                 {
                   $or: [
-                    { $ne: ["$first_islamic_book", null] },
-                    { $ne: ["$last_islamic_book", null] },
+                    {
+                      $ne: [
+                        "$first_month_data.islamic_studies.beginning_book",
+                        null,
+                      ],
+                    },
+                    {
+                      $ne: [
+                        "$last_month_data.islamic_studies.ending_book",
+                        null,
+                      ],
+                    },
                   ],
                 },
                 {
-                  // Use string format for page_progress
+                  // Use string format for page_progress - FIXED: Use islamic_studies fields
                   page_progress: {
                     $cond: [
                       {
                         $and: [
-                          "$first_islamic_book",
-                          "$last_islamic_book",
-                          "$first_qaidah_page",
-                          "$last_qaidah_page",
+                          "$first_month_data.islamic_studies.beginning_book",
+                          "$last_month_data.islamic_studies.ending_book",
+                          "$first_month_data.islamic_studies.beginning_page", // FIXED: Use islamic_studies page
+                          "$last_month_data.islamic_studies.ending_page", // FIXED: Use islamic_studies page
                         ],
                       },
                       {
                         $concat: [
-                          "$first_islamic_book",
+                          "$first_month_data.islamic_studies.beginning_book",
                           " page ",
-                          "$first_qaidah_page",
+                          "$first_month_data.islamic_studies.beginning_page", // FIXED
                           " → ",
-                          "$last_islamic_book",
+                          "$last_month_data.islamic_studies.ending_book",
                           " page ",
-                          "$last_qaidah_page",
+                          "$last_month_data.islamic_studies.ending_page", // FIXED
                         ],
                       },
                       "N/A",
@@ -2023,12 +2193,17 @@ export const getCommonYearlyPipelineStages = (year) => ({
                   },
                   book_display: {
                     $cond: [
-                      { $and: ["$first_islamic_book", "$last_islamic_book"] },
+                      {
+                        $and: [
+                          "$first_month_data.islamic_studies.beginning_book",
+                          "$last_month_data.islamic_studies.ending_book",
+                        ],
+                      },
                       {
                         $concat: [
-                          "$first_islamic_book",
+                          "$first_month_data.islamic_studies.beginning_book",
                           " → ",
-                          "$last_islamic_book",
+                          "$last_month_data.islamic_studies.ending_book",
                         ],
                       },
                       "N/A",
@@ -2037,13 +2212,16 @@ export const getCommonYearlyPipelineStages = (year) => ({
                   lesson_name_display: {
                     $cond: [
                       {
-                        $and: ["$first_islamic_lesson", "$last_islamic_lesson"],
+                        $and: [
+                          "$first_month_data.islamic_studies.beginning_lesson_name",
+                          "$last_month_data.islamic_studies.ending_lesson_name",
+                        ],
                       },
                       {
                         $concat: [
-                          "$first_islamic_lesson",
+                          "$first_month_data.islamic_studies.beginning_lesson_name",
                           " → ",
-                          "$last_islamic_lesson",
+                          "$last_month_data.islamic_studies.ending_lesson_name",
                         ],
                       },
                       "N/A",
@@ -2057,31 +2235,33 @@ export const getCommonYearlyPipelineStages = (year) => ({
               $cond: [
                 {
                   $or: [
-                    { $ne: ["$first_dua_book", null] },
-                    { $ne: ["$last_dua_book", null] },
+                    {
+                      $ne: ["$first_month_data.dua_surah.beginning_book", null],
+                    },
+                    { $ne: ["$last_month_data.dua_surah.ending_book", null] },
                   ],
                 },
                 {
-                  // Use string format for page_progress
+                  // Use string format for page_progress - FIXED: Use correct field names
                   page_progress: {
                     $cond: [
                       {
                         $and: [
-                          "$first_dua_level",
-                          "$last_dua_level",
-                          "$first_dua_target",
-                          "$last_dua_target",
+                          "$first_month_data.dua_surah.beginning_level",
+                          "$last_month_data.dua_surah.ending_level",
+                          "$first_month_data.dua_surah.beginning_page", // FIXED: Use page instead of target
+                          "$last_month_data.dua_surah.ending_page", // FIXED: Use page instead of target
                         ],
                       },
                       {
                         $concat: [
-                          "$first_dua_level",
+                          "$first_month_data.dua_surah.beginning_level",
                           " page ",
-                          "$first_dua_target",
+                          "$first_month_data.dua_surah.beginning_page", // FIXED
                           " → ",
-                          "$last_dua_level",
+                          "$last_month_data.dua_surah.ending_level",
                           " page ",
-                          "$last_dua_target",
+                          "$last_month_data.dua_surah.ending_page", // FIXED
                         ],
                       },
                       "N/A",
@@ -2089,12 +2269,17 @@ export const getCommonYearlyPipelineStages = (year) => ({
                   },
                   target_display: {
                     $cond: [
-                      { $and: ["$first_dua_target", "$last_dua_target"] },
+                      {
+                        $and: [
+                          "$first_month_data.dua_surah.beginning_target",
+                          "$last_month_data.dua_surah.ending_target",
+                        ],
+                      },
                       {
                         $concat: [
-                          "$first_dua_target",
+                          "$first_month_data.dua_surah.beginning_target",
                           " → ",
-                          "$last_dua_target",
+                          "$last_month_data.dua_surah.ending_target",
                         ],
                       },
                       "N/A",
@@ -2103,28 +2288,53 @@ export const getCommonYearlyPipelineStages = (year) => ({
                   dua_number_progress: "$dua_surah_numbers_yearly",
                   book_display: {
                     $cond: [
-                      { $and: ["$first_dua_book", "$last_dua_book"] },
-                      { $concat: ["$first_dua_book", " → ", "$last_dua_book"] },
+                      {
+                        $and: [
+                          "$first_month_data.dua_surah.beginning_book",
+                          "$last_month_data.dua_surah.ending_book",
+                        ],
+                      },
+                      {
+                        $concat: [
+                          "$first_month_data.dua_surah.beginning_book",
+                          " → ",
+                          "$last_month_data.dua_surah.ending_book",
+                        ],
+                      },
                       "N/A",
                     ],
                   },
                   level_display: {
                     $cond: [
-                      { $and: ["$first_dua_level", "$last_dua_level"] },
                       {
-                        $concat: ["$first_dua_level", " → ", "$last_dua_level"],
+                        $and: [
+                          "$first_month_data.dua_surah.beginning_level",
+                          "$last_month_data.dua_surah.ending_level",
+                        ],
+                      },
+                      {
+                        $concat: [
+                          "$first_month_data.dua_surah.beginning_level",
+                          " → ",
+                          "$last_month_data.dua_surah.ending_level",
+                        ],
                       },
                       "N/A",
                     ],
                   },
                   lesson_name_display: {
                     $cond: [
-                      { $and: ["$first_dua_lesson", "$last_dua_lesson"] },
+                      {
+                        $and: [
+                          "$first_month_data.dua_surah.beginning_lesson_name",
+                          "$last_month_data.dua_surah.ending_lesson_name",
+                        ],
+                      },
                       {
                         $concat: [
-                          "$first_dua_lesson",
+                          "$first_month_data.dua_surah.beginning_lesson_name",
                           " → ",
-                          "$last_dua_lesson",
+                          "$last_month_data.dua_surah.ending_lesson_name",
                         ],
                       },
                       "N/A",
@@ -2171,6 +2381,8 @@ const buildGenericYearlyPipeline = (matchStage, year, isStudent = false) => {
     yearlyStages.initialGrouping,
     yearlyStages.separateMonthlyEntries,
     yearlyStages.filterCompleteMonthlyPairs,
+    yearlyStages.convertMonthToNumber, // ADDED: Convert month names to numbers
+    yearlyStages.sortByMonthNumber, // ADDED: Sort by month number
     yearlyStages.calculateMonthlyProgress,
     yearlyStages.yearlyAggregation,
     yearlyStages.filterMonthsWithBoth,
@@ -2186,7 +2398,7 @@ const buildGenericYearlyPipeline = (matchStage, year, isStudent = false) => {
       commonPipelineStages.unwindClass,
       commonPipelineStages.lookupTeacher,
       commonPipelineStages.unwindTeacher,
-      yearlyStages.finalYearlyProjection
+      yearlyStages.finalYearlyProjection,
     );
   } else {
     pipeline.push(
@@ -2213,7 +2425,7 @@ const buildGenericYearlyPipeline = (matchStage, year, isStudent = false) => {
           ...yearlyStages.finalYearlyProjection.$project,
           isPublished: { $literal: true },
         },
-      }
+      },
     );
   }
 
@@ -2248,7 +2460,7 @@ export const buildYearlySummaryPipeline = (year) => {
       year: year,
       $or: [{ yearly_publish: { $exists: false } }, { yearly_publish: false }],
     },
-    year
+    year,
   );
 };
 
@@ -2281,7 +2493,7 @@ export const buildTeacherYearlySummaryPipeline = (teacher_id, year) => {
       year: year,
       $or: [{ yearly_publish: { $exists: false } }, { yearly_publish: false }],
     },
-    year
+    year,
   );
 };
 
@@ -2315,6 +2527,6 @@ export const buildStudentYearlySummaryPipeline = (studentIdsArray, year) => {
       yearly_publish: true,
     },
     year,
-    true // isStudent flag
+    true, // isStudent flag
   );
 };
