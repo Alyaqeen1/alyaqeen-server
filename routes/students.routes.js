@@ -22,6 +22,7 @@ module.exports = (
   countersCollection, // Receive the collection
   attendancesCollection,
   lessonsCoveredCollection,
+  meritsCollection,
 ) => {
   async function getNextSequenceValue(sequenceName) {
     try {
@@ -541,8 +542,6 @@ module.exports = (
     res.send(result);
   });
   // 🔹 POST: Generate PDF and update student document with reportPdf field
-  // Add this route to your students route file (after your existing routes)
-
   router.post("/generate-student-report/:id", async (req, res) => {
     try {
       const { id } = req.params;
@@ -626,7 +625,51 @@ module.exports = (
               late: 0,
             };
 
-      // 3. Calculate years range (from joining year to current year)
+      // 3. Fetch merit data (SIMPLIFIED VERSION)
+      const meritRecords = await meritsCollection
+        .find({
+          student_id: student_id,
+        })
+        .sort({ date: -1 })
+        .limit(10)
+        .toArray();
+
+      // Calculate merit summary
+      const totalMeritPoints = meritRecords.reduce(
+        (sum, record) => sum + (record.merit_points || 0),
+        0,
+      );
+      const totalAwards = meritRecords.length;
+      const averagePoints =
+        totalAwards > 0 ? totalMeritPoints / totalAwards : 0;
+
+      // Calculate behavior breakdown
+      const behaviorBreakdown = {};
+      meritRecords.forEach((record) => {
+        const behavior = record.behavior || "Other";
+        if (!behaviorBreakdown[behavior]) {
+          behaviorBreakdown[behavior] = {
+            count: 0,
+            totalPoints: 0,
+            averagePoints: 0,
+          };
+        }
+        behaviorBreakdown[behavior].count++;
+        behaviorBreakdown[behavior].totalPoints += record.merit_points || 0;
+        behaviorBreakdown[behavior].averagePoints =
+          behaviorBreakdown[behavior].totalPoints /
+          behaviorBreakdown[behavior].count;
+      });
+
+      const meritSummary = {
+        totalMeritPoints,
+        totalAwards,
+        averagePoints,
+        recentMerits: meritRecords.slice(0, 6), // Get first 6 (most recent)
+        behaviorBreakdown,
+      };
+
+      // 4. Calculate years range (from joining year to current year)
       const currentYear = new Date().getFullYear();
       let startingYear = currentYear;
 
@@ -635,7 +678,7 @@ module.exports = (
         startingYear = startDate.getFullYear();
       }
 
-      // 4. Fetch lessons covered data for EACH YEAR using buildYearlySummaryPipeline
+      // 5. Fetch lessons covered data for EACH YEAR using buildYearlySummaryPipeline
       const allYearsLessonsData = [];
 
       for (let year = startingYear; year <= currentYear; year++) {
@@ -678,21 +721,22 @@ module.exports = (
         }
       }
 
-      // 5. Generate PDF with comprehensive data
+      // 6. Generate PDF with comprehensive data INCLUDING MERIT DATA
       const pdfResult = await generateStudentReport(studentData, {
         attendance: attendanceData,
         lessons: allYearsLessonsData,
+        merits: meritSummary, // Add merit data here
         startingYear: startingYear,
         currentYear: currentYear,
       });
 
-      // 6. Upload to Cloudinary
+      // 7. Upload to Cloudinary
       const cloudinaryUrl = await uploadToCloudinary(
         pdfResult.pdfBuffer,
         pdfResult.fileName,
       );
 
-      // 7. Update student document
+      // 8. Update student document
       await studentsCollection.updateOne(
         { _id: new ObjectId(id) },
         {
@@ -702,7 +746,7 @@ module.exports = (
         },
       );
 
-      // 8. Return response
+      // 9. Return response
       res.status(200).json({
         success: true,
         message: `Comprehensive yearly report generated successfully (${startingYear}-${currentYear})`,
@@ -720,6 +764,8 @@ module.exports = (
           yearsWithLessonsData: allYearsLessonsData.filter((d) => d.progress)
             .length,
           totalYearsCovered: allYearsLessonsData.length,
+          totalMeritPoints: meritSummary.totalMeritPoints,
+          totalMeritAwards: meritSummary.totalAwards,
         },
       });
     } catch (error) {
@@ -732,6 +778,196 @@ module.exports = (
       });
     }
   });
+  // router.post("/generate-student-report/:id", async (req, res) => {
+  //   try {
+  //     const { id } = req.params;
+
+  //     if (!ObjectId.isValid(id)) {
+  //       return res.status(400).json({
+  //         success: false,
+  //         error: "Invalid student ID format",
+  //       });
+  //     }
+
+  //     // 1️⃣ Fetch student using shared aggregation pipeline
+  //     const students = await studentsCollection
+  //       .aggregate(buildStudentAggregationPipeline({ _id: new ObjectId(id) }))
+  //       .toArray();
+
+  //     if (!students.length) {
+  //       return res.status(404).json({
+  //         success: false,
+  //         error: "Student not found",
+  //       });
+  //     }
+
+  //     const studentData = students[0];
+
+  //     const student_id = studentData._id.toString();
+
+  //     // 2. Fetch attendance data
+  //     const attendanceSummary = await attendancesCollection
+  //       .aggregate([
+  //         {
+  //           $match: {
+  //             student_id: student_id,
+  //             attendance: "student",
+  //           },
+  //         },
+  //         {
+  //           $group: {
+  //             _id: "$status",
+  //             count: { $sum: 1 },
+  //           },
+  //         },
+  //         {
+  //           $group: {
+  //             _id: null,
+  //             total: { $sum: "$count" },
+  //             statusCounts: {
+  //               $push: {
+  //                 k: "$_id",
+  //                 v: "$count",
+  //               },
+  //             },
+  //           },
+  //         },
+  //         {
+  //           $project: {
+  //             _id: 0,
+  //             total: 1,
+  //             statusCounts: {
+  //               $arrayToObject: "$statusCounts",
+  //             },
+  //           },
+  //         },
+  //         {
+  //           $project: {
+  //             total: 1,
+  //             present: { $ifNull: ["$statusCounts.present", 0] },
+  //             absent: { $ifNull: ["$statusCounts.absent", 0] },
+  //             late: { $ifNull: ["$statusCounts.late", 0] },
+  //           },
+  //         },
+  //       ])
+  //       .toArray();
+
+  //     const attendanceData =
+  //       attendanceSummary.length > 0
+  //         ? attendanceSummary[0]
+  //         : {
+  //             total: 0,
+  //             present: 0,
+  //             absent: 0,
+  //             late: 0,
+  //           };
+
+  //     // 3. Calculate years range (from joining year to current year)
+  //     const currentYear = new Date().getFullYear();
+  //     let startingYear = currentYear;
+
+  //     if (studentData.startingDate) {
+  //       const startDate = new Date(studentData.startingDate);
+  //       startingYear = startDate.getFullYear();
+  //     }
+
+  //     // 4. Fetch lessons covered data for EACH YEAR using buildYearlySummaryPipeline
+  //     const allYearsLessonsData = [];
+
+  //     for (let year = startingYear; year <= currentYear; year++) {
+  //       // Get yearly data using buildYearlySummaryPipeline
+  //       const yearlyPipeline = buildYearlySummaryPipeline(year.toString());
+
+  //       // Get ALL students data for this year
+  //       const allYearlyData = await lessonsCoveredCollection
+  //         .aggregate(yearlyPipeline)
+  //         .toArray();
+
+  //       // Filter to get ONLY this student's data
+  //       const studentYearlyData = allYearlyData.filter((item) => {
+  //         // Check if this is our student (student_id might be in different format)
+  //         if (item.student_id && item.student_id.toString() === student_id) {
+  //           return true;
+  //         }
+  //         // Also check student_name if student_id doesn't match
+  //         if (item.student_name === studentData.name) {
+  //           return true;
+  //         }
+  //         return false;
+  //       });
+
+  //       if (studentYearlyData.length > 0) {
+  //         // Take the first matching record (should only be one per student per year)
+  //         const yearData = {
+  //           ...studentYearlyData[0],
+  //           year: year.toString(),
+  //         };
+  //         allYearsLessonsData.push(yearData);
+  //       } else {
+  //         // Add empty year data if no records found
+  //         allYearsLessonsData.push({
+  //           year: year.toString(),
+  //           progress: null,
+  //           months_with_ending: 0,
+  //           months_with_both: 0,
+  //         });
+  //       }
+  //     }
+
+  //     // 5. Generate PDF with comprehensive data
+  //     const pdfResult = await generateStudentReport(studentData, {
+  //       attendance: attendanceData,
+  //       lessons: allYearsLessonsData,
+  //       startingYear: startingYear,
+  //       currentYear: currentYear,
+  //     });
+
+  //     // 6. Upload to Cloudinary
+  //     const cloudinaryUrl = await uploadToCloudinary(
+  //       pdfResult.pdfBuffer,
+  //       pdfResult.fileName,
+  //     );
+
+  //     // 7. Update student document
+  //     await studentsCollection.updateOne(
+  //       { _id: new ObjectId(id) },
+  //       {
+  //         $set: {
+  //           reportPdf: cloudinaryUrl,
+  //         },
+  //       },
+  //     );
+
+  //     // 8. Return response
+  //     res.status(200).json({
+  //       success: true,
+  //       message: `Comprehensive yearly report generated successfully (${startingYear}-${currentYear})`,
+  //       reportUrl: cloudinaryUrl,
+  //       reportId: pdfResult.reportId,
+  //       studentId: id,
+  //       studentName: studentData.name,
+  //       yearsCovered: {
+  //         from: startingYear,
+  //         to: currentYear,
+  //         totalYears: currentYear - startingYear + 1,
+  //       },
+  //       dataSummary: {
+  //         attendanceRecords: attendanceData.total,
+  //         yearsWithLessonsData: allYearsLessonsData.filter((d) => d.progress)
+  //           .length,
+  //         totalYearsCovered: allYearsLessonsData.length,
+  //       },
+  //     });
+  //   } catch (error) {
+  //     console.error("Comprehensive report generation error:", error);
+  //     res.status(500).json({
+  //       success: false,
+  //       error: "Failed to generate comprehensive report",
+  //       details:
+  //         process.env.NODE_ENV === "development" ? error.message : undefined,
+  //     });
+  //   }
+  // });
   router.patch("/update-activity/:id", async (req, res) => {
     const studentId = req.params.id;
     if (!ObjectId.isValid(studentId)) {

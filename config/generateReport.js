@@ -6,10 +6,9 @@ const FormData = require("form-data");
 const CLOUDINARY_CLOUD_NAME = "dqfazzau6";
 const CLOUDINARY_UPLOAD_PRESET = "Alyaqeen";
 
-// Function to generate Student Progress Report (Page 1 & 2 only)
 // Function to generate Student Comprehensive Report with Lessons Covered
 async function generateStudentReport(studentData, data = {}) {
-  // Start with the base report (Pages 1 & 2)
+  // Start with the base report
   const pdf = new jsPDF("p", "mm", "a4");
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
@@ -26,72 +25,169 @@ async function generateStudentReport(studentData, data = {}) {
     year: "numeric",
   });
 
+  // Helper to clean all text
+  const cleanText = (text) => {
+    if (!text || text === "N/A" || text === "null") return "N/A";
+
+    return String(text)
+      .replace(/[\x00-\x1F\x7F]/g, "")
+      .replace(/→|!’|!/g, " => ")
+      .replace(/\s+/g, " ")
+      .trim();
+  };
+
+  // Format date for display
+  const formatShortDate = (dateString) => {
+    if (!dateString) return "N/A";
+    try {
+      const date = new Date(dateString);
+      return date.toLocaleDateString("en-GB", {
+        day: "2-digit",
+        month: "short",
+      });
+    } catch (error) {
+      return dateString;
+    }
+  };
+
   // Add new page function
   const addNewPage = () => {
     pdf.addPage();
     pageNumber++;
-    currentY = 10;
+    currentY = 20;
 
     // Page header for subsequent pages
     pdf.setFillColor(41, 128, 185);
-    pdf.rect(0, 0, pageWidth, 10, "F");
+    pdf.rect(0, 0, pageWidth, 15, "F");
 
-    pdf.setFontSize(9);
+    pdf.setFontSize(10);
     pdf.setTextColor(255, 255, 255);
-    pdf.text(`Page ${pageNumber} - Alyaqeen Academy Student Report`, 105, 7, {
+    pdf.text(`Alyaqeen Academy - Student Progress Report`, 105, 9, {
       align: "center",
     });
+
+    pdf.setFontSize(8);
+    pdf.text(`Page ${pageNumber}`, 105, 13, { align: "center" });
+
     pdf.setTextColor(100);
     currentY += 3;
   };
 
-  // Function to draw a box with content
-  const drawBox = (title, contentLines, boxColor = [41, 128, 185]) => {
-    if (currentY > pageHeight - 40) {
+  // Function to draw a compact info box
+  const drawCompactBox = (title, contentLines, boxColor = [41, 128, 185]) => {
+    if (currentY > pageHeight - 30) {
       addNewPage();
     }
 
-    // Box header
-    pdf.setFillColor(...boxColor);
-    pdf.rect(15, currentY, pageWidth - 30, 7, "F");
+    // Calculate content height
+    const lineHeight = 4.5;
+    const padding = 4;
+    const titleHeight = 6;
+    const contentHeight = contentLines.length * lineHeight + padding * 2;
 
-    pdf.setFontSize(11);
+    // Box with color header
+    pdf.setFillColor(boxColor[0], boxColor[1], boxColor[2]);
+    pdf.rect(15, currentY, pageWidth - 30, titleHeight, "F");
+
+    // Title
+    pdf.setFontSize(10);
     pdf.setTextColor(255, 255, 255);
-    pdf.text(title, 20, currentY + 5);
+    pdf.text(cleanText(title), 20, currentY + 4);
 
-    currentY += 8;
+    // Content background
+    pdf.setFillColor(250, 250, 250);
+    pdf.rect(15, currentY + titleHeight, pageWidth - 30, contentHeight, "F");
 
-    // Box content background
-    const contentHeight = contentLines.length * 6 + 8;
-    pdf.setFillColor(245, 245, 245);
-    pdf.rect(15, currentY, pageWidth - 30, contentHeight, "F");
-
-    // Box border
-    pdf.setDrawColor(...boxColor);
-    pdf.setLineWidth(0.5);
-    pdf.rect(15, currentY - 8, pageWidth - 30, contentHeight + 8);
+    // Border
+    pdf.setDrawColor(boxColor[0], boxColor[1], boxColor[2]);
+    pdf.setLineWidth(0.3);
+    pdf.rect(15, currentY, pageWidth - 30, titleHeight + contentHeight);
 
     // Content
-    pdf.setFontSize(10);
-    pdf.setTextColor(50, 50, 50);
+    pdf.setFontSize(9);
+    pdf.setTextColor(60, 60, 60);
 
-    let contentY = currentY + 6;
+    let contentY = currentY + titleHeight + padding;
     contentLines.forEach((line) => {
       if (typeof line === "string") {
-        pdf.text(line, 20, contentY);
-        contentY += 6;
+        pdf.setFont(undefined, "bold");
+        pdf.text(cleanText(line), 20, contentY);
+        contentY += lineHeight;
       } else if (Array.isArray(line)) {
         pdf.setFont(undefined, "bold");
-        pdf.text(line[0], 20, contentY);
-        pdf.setFont(undefined, "normal");
-        const value =
-          line[1] !== undefined && line[1] !== null ? String(line[1]) : "N/A";
-        pdf.text(`: ${value}`, 60, contentY);
-        contentY += 6;
+        const label = line[0];
+        const value = line[1];
+
+        // Draw label
+        pdf.text(cleanText(label), 20, contentY);
+
+        // Draw value with text wrapping
+        const cleanedValue = cleanText(value);
+        const maxWidth = 80;
+        const wrappedText = pdf.splitTextToSize(cleanedValue, maxWidth);
+
+        if (wrappedText.length === 1) {
+          pdf.setFont(undefined, "normal");
+          pdf.text(`: ${cleanedValue}`, 55, contentY);
+          contentY += lineHeight;
+        } else {
+          pdf.setFont(undefined, "normal");
+          pdf.text(":", 55, contentY);
+          wrappedText.forEach((textLine, idx) => {
+            pdf.text(textLine, 58, contentY + idx * lineHeight);
+          });
+          contentY += wrappedText.length * lineHeight;
+        }
       }
     });
 
-    currentY += contentHeight + 5;
+    currentY += titleHeight + contentHeight + 8;
+  };
+
+  // Function to draw a merit progress bar
+  const drawMeritProgressBar = (title, value, maxValue = 100, color) => {
+    if (currentY > pageHeight - 20) {
+      addNewPage();
+    }
+
+    const barWidth = pageWidth - 60;
+    const barHeight = 8;
+    const progressWidth = (value / maxValue) * barWidth;
+
+    // Title
+    pdf.setFontSize(9);
+    pdf.setTextColor(60, 60, 60);
+    pdf.text(title, 30, currentY + 6);
+
+    // Background bar
+    pdf.setFillColor(240, 240, 240);
+    pdf.rect(30, currentY + 8, barWidth, barHeight, "F");
+
+    // Progress bar
+    pdf.setFillColor(...color);
+    pdf.rect(30, currentY + 8, progressWidth, barHeight, "F");
+
+    // Border
+    pdf.setDrawColor(220, 220, 220);
+    pdf.setLineWidth(0.3);
+    pdf.rect(30, currentY + 8, barWidth, barHeight);
+
+    // Value text
+    pdf.setFontSize(8);
+    pdf.setTextColor(255, 255, 255);
+    const valueText = `${value} pts`;
+    const textWidth = pdf.getTextWidth(valueText);
+
+    // Center text on bar if it fits
+    if (progressWidth > textWidth + 4) {
+      pdf.text(valueText, 30 + (progressWidth - textWidth) / 2, currentY + 14);
+    } else {
+      // Put text to the right of the bar
+      pdf.setTextColor(color[0], color[1], color[2]);
+      pdf.text(valueText, 30 + barWidth + 5, currentY + 14);
+    }
+
+    currentY += 25;
   };
 
   // Helper function to format dates
@@ -113,13 +209,13 @@ async function generateStudentReport(studentData, data = {}) {
   const formatSessionTime = (time) => {
     switch (time) {
       case "S1":
-        return "Weekdays Early";
+        return "Weekdays Early (S1)";
       case "S2":
-        return "Weekdays Late";
+        return "Weekdays Late (S2)";
       case "WM":
-        return "Weekend Morning";
+        return "Weekend Morning (WM)";
       case "WA":
-        return "Weekend Afternoon";
+        return "Weekend Afternoon (WA)";
       default:
         return time || "Not assigned";
     }
@@ -127,51 +223,66 @@ async function generateStudentReport(studentData, data = {}) {
 
   // ========== PAGE 1: STUDENT PROFILE ==========
 
-  // Main Report Header
+  // Report Header
   pdf.setFillColor(41, 128, 185);
-  pdf.rect(0, 0, pageWidth, 35, "F");
+  pdf.rect(0, 0, pageWidth, 40, "F");
 
-  pdf.setFontSize(22);
+  // Academy Title
+  pdf.setFontSize(24);
   pdf.setTextColor(255, 255, 255);
-  pdf.text("ALYAQEEN ACADEMY", 105, 18, { align: "center" });
+  pdf.text("ALYAQEEN", 105, 18, { align: "center" });
 
-  pdf.setFontSize(14);
-  pdf.text("Student Progress Report", 105, 26, { align: "center" });
+  pdf.setFontSize(16);
+  pdf.text("ACADEMY", 105, 26, { align: "center" });
 
-  pdf.setFontSize(9);
-  pdf.text(`Report ID: ${reportId}`, 20, 40);
-  pdf.text(`Report Date: ${reportDate}`, pageWidth - 20, 40, {
+  pdf.setFontSize(12);
+  pdf.text("Student Progress Report", 105, 34, { align: "center" });
+
+  // Report metadata
+  pdf.setFontSize(8);
+  pdf.setTextColor(200, 200, 200);
+  pdf.text(`Report ID: ${reportId}`, 20, 45);
+  pdf.text(`Generated: ${reportDate}`, pageWidth - 20, 45, {
     align: "right",
   });
 
-  currentY = 48;
+  // Add a divider
+  pdf.setDrawColor(200, 200, 200);
+  pdf.setLineWidth(0.2);
+  pdf.line(15, 48, pageWidth - 15, 48);
+
+  currentY = 55;
 
   // 1. STUDENT BASIC INFORMATION
   const studentInfo = [
-    [`Full Name`, studentData?.name || "N/A"],
+    [`Name`, studentData?.name || "N/A"],
     [`Student ID`, studentData?.student_id || "N/A"],
     [`Date of Birth`, formatDate(studentData?.dob)],
     [`Gender`, studentData?.gender || "N/A"],
     [`Starting Date`, formatDate(studentData?.startingDate)],
     [`School Year`, studentData?.school_year || "N/A"],
   ];
-  drawBox("STUDENT INFORMATION", studentInfo, [41, 128, 185]);
+  drawCompactBox("STUDENT INFORMATION", studentInfo, [41, 128, 185]);
 
   // 2. CONTACT INFORMATION
   const contactInfo = [
     [`Emergency Contact`, studentData?.emergency_number || "N/A"],
     [`Email`, studentData?.email || "N/A"],
   ];
-  drawBox("CONTACT INFORMATION", contactInfo, [39, 174, 96]);
+  drawCompactBox("CONTACT INFORMATION", contactInfo, [39, 174, 96]);
 
   // 3. PARENT/GUARDIAN INFORMATION
   const parentInfo = [
-    [`Father Name`, studentData?.father?.name || "N/A"],
-    [`Father Contact`, studentData?.father?.number || "N/A"],
-    [`Mother Name`, studentData?.mother?.name || "N/A"],
-    [`Mother Contact`, studentData?.mother?.number || "N/A"],
+    [
+      `Father`,
+      `${studentData?.father?.name || "N/A"} - ${studentData?.father?.number || "N/A"}`,
+    ],
+    [
+      `Mother`,
+      `${studentData?.mother?.name || "N/A"} - ${studentData?.mother?.number || "N/A"}`,
+    ],
   ];
-  drawBox("PARENT/GUARDIAN INFORMATION", parentInfo, [142, 68, 173]);
+  drawCompactBox("PARENT/GUARDIAN INFORMATION", parentInfo, [142, 68, 173]);
 
   // 4. CURRENT ENROLLMENT
   const enrollments = studentData?.academic?.enrollments || [];
@@ -179,21 +290,32 @@ async function generateStudentReport(studentData, data = {}) {
 
   if (enrollments.length > 0) {
     enrollments.forEach((enrollment, index) => {
-      enrollmentInfo.push(`--- Enrollment ${index + 1} ---`);
-      enrollmentInfo.push([`Department`, enrollment.dept_name || "N/A"]);
-      enrollmentInfo.push([`Class`, enrollment.class_name || "N/A"]);
+      enrollmentInfo.push(`Enrollment ${index + 1}`);
+      enrollmentInfo.push([
+        `Department`,
+        enrollment.department || enrollment.dept_name || "N/A",
+      ]);
+      enrollmentInfo.push([
+        `Class`,
+        enrollment.class || enrollment.class_name || "N/A",
+      ]);
       enrollmentInfo.push([`Session`, enrollment.session || "N/A"]);
       enrollmentInfo.push([`Time`, formatSessionTime(enrollment.session_time)]);
     });
   } else {
-    enrollmentInfo.push("No active enrollments found");
+    enrollmentInfo.push("No active enrollments");
   }
-  drawBox("CURRENT ENROLLMENT", enrollmentInfo, [230, 126, 34]);
+  drawCompactBox("CURRENT ENROLLMENT", enrollmentInfo, [230, 126, 34]);
 
-  // ========== PAGE 2: ATTENDANCE REPORT ==========
+  // ========== PAGE 2: ATTENDANCE & MERIT REPORT ==========
   addNewPage();
 
-  // 5. ATTENDANCE SUMMARY
+  // ATTENDANCE SECTION
+  pdf.setFontSize(14);
+  pdf.setTextColor(41, 128, 185);
+  pdf.text("ATTENDANCE SUMMARY", 20, currentY);
+  currentY += 10;
+
   const attendanceSummary = data?.attendance || {
     total: 0,
     present: 0,
@@ -215,304 +337,365 @@ async function generateStudentReport(studentData, data = {}) {
     [`Late Arrivals`, attendanceSummary.late.toString()],
     [`Attendance Rate`, `${attendanceRate}%`],
   ];
-  drawBox("ATTENDANCE SUMMARY", attendanceInfoArray, [41, 128, 185]);
+  drawCompactBox("ATTENDANCE STATISTICS", attendanceInfoArray, [41, 128, 185]);
 
-  // Add attendance visualization
-  if (currentY > pageHeight - 70) {
+  // Attendance visualization
+  if (currentY > pageHeight - 50) {
     addNewPage();
   }
 
-  // Attendance bar chart
-  currentY += 3;
-  pdf.setFontSize(10);
-  pdf.setTextColor(50, 50, 50);
-  pdf.text("Attendance Distribution:", 20, currentY);
+  currentY += 5;
+  pdf.setFontSize(9);
+  pdf.setTextColor(80, 80, 80);
+  pdf.text("Attendance Breakdown:", 20, currentY);
   currentY += 8;
 
   if (attendanceSummary.total > 0) {
-    const maxBarWidth = 120;
+    const maxBarWidth = 100;
+    const barHeight = 5;
+    const barY = currentY;
 
     // Present bar
     const presentWidth =
       (attendanceSummary.present / attendanceSummary.total) * maxBarWidth;
     pdf.setFillColor(46, 204, 113);
-    pdf.rect(20, currentY, presentWidth, 7, "F");
-    pdf.setFontSize(8);
-    pdf.setTextColor(0, 0, 0);
-    pdf.text("Present", 22, currentY + 5);
-    pdf.setTextColor(50, 50, 50);
-    pdf.text(
-      `${attendanceSummary.present} (${((attendanceSummary.present / attendanceSummary.total) * 100).toFixed(1)}%)`,
-      150,
-      currentY + 5,
-    );
-    currentY += 10;
+    pdf.rect(20, barY, presentWidth, barHeight, "F");
 
     // Absent bar
     const absentWidth =
       (attendanceSummary.absent / attendanceSummary.total) * maxBarWidth;
     pdf.setFillColor(231, 76, 60);
-    pdf.rect(20, currentY, absentWidth, 7, "F");
-    pdf.setTextColor(0, 0, 0);
-    pdf.text("Absent", 22, currentY + 5);
-    pdf.setTextColor(50, 50, 50);
-    pdf.text(
-      `${attendanceSummary.absent} (${((attendanceSummary.absent / attendanceSummary.total) * 100).toFixed(1)}%)`,
-      150,
-      currentY + 5,
-    );
-    currentY += 10;
+    pdf.rect(20 + presentWidth, barY, absentWidth, barHeight, "F");
 
-    // Late bar
-    if (attendanceSummary.late > 0) {
-      const lateWidth =
-        (attendanceSummary.late / attendanceSummary.total) * maxBarWidth;
-      pdf.setFillColor(241, 196, 15);
-      pdf.rect(20, currentY, lateWidth, 7, "F");
-      pdf.setTextColor(0, 0, 0);
-      pdf.text("Late", 22, currentY + 5);
-      pdf.setTextColor(50, 50, 50);
-      pdf.text(
-        `${attendanceSummary.late} (${((attendanceSummary.late / attendanceSummary.total) * 100).toFixed(1)}%)`,
-        150,
-        currentY + 5,
-      );
-      currentY += 15;
-    } else {
-      currentY += 8;
-    }
+    // Legend
+    currentY += 10;
+    pdf.setFontSize(7);
+
+    // Present
+    pdf.setFillColor(46, 204, 113);
+    pdf.rect(20, currentY, 4, 4, "F");
+    pdf.setTextColor(60, 60, 60);
+    pdf.text(`Present (${attendanceSummary.present})`, 27, currentY + 3);
+
+    // Absent
+    pdf.setFillColor(231, 76, 60);
+    pdf.rect(70, currentY, 4, 4, "F");
+    pdf.text(`Absent (${attendanceSummary.absent})`, 77, currentY + 3);
+
+    currentY += 15;
   } else {
     pdf.setFontSize(9);
-    pdf.setTextColor(120, 120, 120);
+    pdf.setTextColor(150, 150, 150);
     pdf.text("No attendance records available", 20, currentY);
     currentY += 12;
   }
 
-  // ========== PAGE 3+: LESSONS COVERED SUMMARY ==========
+  // ========== MERIT SECTION ==========
+  // Check if we need a new page for merit section
+  if (currentY > pageHeight - 100) {
+    addNewPage();
+  }
+
+  // Merit section header
+  pdf.setFontSize(14);
+  pdf.setTextColor(155, 89, 182); // Purple color for merit section
+  pdf.text("MERIT & BEHAVIOR AWARDS", 20, currentY);
+  currentY += 10;
+
+  // Get merit data
+  const meritSummary = data?.merits || {
+    totalMeritPoints: 0,
+    totalAwards: 0,
+    averagePoints: 0,
+    recentMerits: [],
+    behaviorBreakdown: {},
+  };
+
+  // Merit Statistics Box
+  const meritStats = [
+    [`Total Merit Points`, meritSummary.totalMeritPoints.toString()],
+    [`Number of Awards`, meritSummary.totalAwards.toString()],
+    [`Average Points per Award`, meritSummary.averagePoints.toFixed(1)],
+  ];
+
+  if (meritSummary.totalAwards > 0) {
+    meritStats.push([
+      `Milestone`,
+      `${meritSummary.totalMeritPoints >= 50 ? "🎯 50+ Points Achieved" : `${50 - meritSummary.totalMeritPoints} pts to next milestone`}`,
+    ]);
+  }
+
+  drawCompactBox("MERIT OVERVIEW", meritStats, [155, 89, 182]);
+
+  // Merit Progress Bar (if there are points)
+  if (meritSummary.totalMeritPoints > 0) {
+    if (currentY > pageHeight - 30) {
+      addNewPage();
+    }
+
+    // Draw progress bar for merit points
+    drawMeritProgressBar(
+      "Merit Points Progress",
+      meritSummary.totalMeritPoints,
+      100,
+      [155, 89, 182],
+    );
+  }
+
+  // Behavior Breakdown
+  if (Object.keys(meritSummary.behaviorBreakdown || {}).length > 0) {
+    if (currentY > pageHeight - 60) {
+      addNewPage();
+    }
+
+    // Sort behaviors by total points (highest first)
+    const sortedBehaviors = Object.entries(meritSummary.behaviorBreakdown)
+      .sort(([, a], [, b]) => b.totalPoints - a.totalPoints)
+      .slice(0, 5); // Top 5 behaviors
+
+    const behaviorInfo = [];
+    behaviorInfo.push("--- Top Behaviors ---");
+
+    sortedBehaviors.forEach(([behavior, data]) => {
+      behaviorInfo.push([
+        cleanText(behavior),
+        `${data.totalPoints} pts (${data.count} awards)`,
+      ]);
+    });
+
+    drawCompactBox("TOP BEHAVIORS", behaviorInfo, [52, 152, 219]);
+  }
+
+  // Recent Merit Awards
+  if (meritSummary.recentMerits && meritSummary.recentMerits.length > 0) {
+    if (currentY > pageHeight - 80) {
+      addNewPage();
+    }
+
+    currentY += 5;
+    pdf.setFontSize(10);
+    pdf.setTextColor(46, 204, 113); // Green color
+    pdf.text("Recent Merit Awards:", 20, currentY);
+    currentY += 8;
+
+    // Create a small table for recent merits
+    pdf.setFontSize(8);
+    pdf.setTextColor(80, 80, 80);
+
+    // Table header
+    pdf.setFillColor(245, 245, 245);
+    pdf.rect(20, currentY, pageWidth - 40, 6, "F");
+
+    pdf.setFont(undefined, "bold");
+    pdf.text("Date", 22, currentY + 4);
+    pdf.text("Behavior", 45, currentY + 4);
+    pdf.text("Points", pageWidth - 30, currentY + 4, { align: "right" });
+
+    currentY += 8;
+
+    // Table rows
+    pdf.setFont(undefined, "normal");
+    meritSummary.recentMerits.slice(0, 6).forEach((merit, index) => {
+      if (currentY > pageHeight - 15) {
+        addNewPage();
+        currentY = 20;
+      }
+
+      // Alternate row colors
+      if (index % 2 === 0) {
+        pdf.setFillColor(252, 252, 252);
+      } else {
+        pdf.setFillColor(250, 250, 250);
+      }
+      pdf.rect(20, currentY, pageWidth - 40, 6, "F");
+
+      // Date
+      pdf.text(formatShortDate(merit.date), 22, currentY + 4);
+
+      // Behavior (truncated if too long)
+      const behavior = cleanText(merit.behavior);
+      const behaviorText =
+        behavior.length > 30 ? behavior.substring(0, 27) + "..." : behavior;
+      pdf.text(behaviorText, 45, currentY + 4);
+
+      // Points with color based on value
+      const points = merit.merit_points || 0;
+      if (points >= 4) {
+        pdf.setTextColor(46, 204, 113); // Green for high points
+      } else if (points >= 2) {
+        pdf.setTextColor(52, 152, 219); // Blue for medium points
+      } else {
+        pdf.setTextColor(155, 89, 182); // Purple for low points
+      }
+
+      pdf.text(`+${points}`, pageWidth - 30, currentY + 4, { align: "right" });
+      pdf.setTextColor(80, 80, 80); // Reset color
+
+      currentY += 8;
+    });
+
+    currentY += 5;
+  }
+
+  // ========== PAGE 3+: ACADEMIC PROGRESS ==========
   const startingYear = data.startingYear || new Date().getFullYear();
   const currentYearValue = data.currentYear || new Date().getFullYear();
   const allYearsData = data.lessons || [];
 
   if (allYearsData.length > 0) {
+    // Start new page for academic progress
+    addNewPage();
+
+    // Academic Progress Header
+    pdf.setFontSize(16);
+    pdf.setTextColor(41, 128, 185);
+    pdf.text("ACADEMIC PROGRESS", 105, currentY, { align: "center" });
+
+    pdf.setFontSize(10);
+    pdf.setTextColor(100, 100, 100);
+    pdf.text(
+      `Academic Years: ${startingYear} - ${currentYearValue}`,
+      105,
+      currentY + 7,
+      { align: "center" },
+    );
+
+    currentY += 20;
+
     allYearsData.forEach((yearData, yearIndex) => {
-      if (yearIndex > 0 || currentY > pageHeight - 50) {
+      // Check if we need a new page for this year
+      if (currentY > pageHeight - 100) {
         addNewPage();
-        currentY = 15;
+        currentY = 20;
       }
 
       // Year Header
-      pdf.setFontSize(16);
+      pdf.setFillColor(245, 245, 245);
+      pdf.rect(15, currentY, pageWidth - 30, 12, "F");
+
+      pdf.setDrawColor(200, 200, 200);
+      pdf.setLineWidth(0.3);
+      pdf.rect(15, currentY, pageWidth - 30, 12);
+
+      pdf.setFontSize(12);
       pdf.setTextColor(41, 128, 185);
-      pdf.text(`Academic Year: ${yearData.year}`, 20, currentY);
+      pdf.text(`📚 Academic Year ${yearData.year}`, 22, currentY + 8);
 
-      pdf.setFontSize(10);
-      pdf.setTextColor(80, 80, 80);
-      pdf.text(`Period: ${startingYear} - ${currentYearValue}`, 140, currentY);
-
-      currentY += 8;
-
-      // Student info for this year
-      pdf.text(`Student: ${studentData.name}`, 20, currentY);
-      pdf.text(
-        `ID: ${studentData.student_id || studentData._id}`,
-        140,
-        currentY,
-      );
-      currentY += 10;
+      currentY += 18;
 
       const progress = yearData.progress || {};
 
-      // Function to draw a subject card WITHOUT setAlpha
-      // Function to draw a subject card FIXED
-      const drawSubjectCard = (title, subjectProgress, color, icon) => {
+      // Subject cards function (your existing code, but cleaned up)
+      // Update the drawSubjectCard function in your generateStudentReport function:
+
+      // Subject cards function with ALL fields
+      const drawSubjectCard = (title, subjectProgress, color, icon = "•") => {
         if (!subjectProgress || subjectProgress.page_progress === "N/A") {
           return;
         }
 
         if (currentY > pageHeight - 50) {
           addNewPage();
-          currentY = 15;
+          currentY = 20;
         }
 
-        // Card dimensions
-        const cardWidth = pageWidth - 40;
-        const cardHeight = 45;
+        // Calculate dynamic card height based on content
+        let fieldCount = 0;
+        const fieldsToDisplay = [];
 
-        // Card background - simple light fill
-        const lightColor = [240, 240, 240];
-        pdf.setFillColor(lightColor[0], lightColor[1], lightColor[2]);
-        pdf.rect(20, currentY, cardWidth, cardHeight, "F");
-
-        // Card border
-        pdf.setDrawColor(color[0], color[1], color[2]);
-        pdf.setLineWidth(0.5);
-        pdf.rect(20, currentY, cardWidth, cardHeight);
-
-        // Title with icon (icon as text)
-        pdf.setFontSize(11);
-        pdf.setTextColor(color[0], color[1], color[2]);
-        // Use a text representation of icon instead of emoji
-        let iconText = "";
-        switch (icon) {
-          case "📖":
-            iconText = "Q";
-            break;
-          case "📚":
-            iconText = "I";
-            break;
-          case "🕌":
-            iconText = "D";
-            break;
-          case "🎁":
-            iconText = "G";
-            break;
-          default:
-            iconText = "•";
-        }
-        pdf.text(`${iconText} ${title}`, 25, currentY + 10);
-
-        // Progress details
-        pdf.setFontSize(9);
-        pdf.setTextColor(60, 60, 60);
-
-        let detailY = currentY + 20;
-        const startX = 25;
-
-        // Clean progress data function
-        const cleanText = (text) => {
-          if (!text || text === "N/A") return "N/A";
-          return String(text)
-            .replace(/[^\x00-\x7F]/g, "") // Remove non-ASCII characters
-            .replace(/!/g, " → ") // Replace ! with arrow
-            .replace(/-/g, " - ") // Format dashes
-            .trim();
-        };
-
-        // Type
+        // Check which fields are available
         if (subjectProgress.selected && subjectProgress.selected !== "N/A") {
-          pdf.setFont(undefined, "bold");
-          pdf.text("Type:", startX, detailY);
-          pdf.setFont(undefined, "normal");
-          pdf.text(cleanText(subjectProgress.selected), startX + 20, detailY);
-          detailY += 5;
+          fieldCount++;
+          fieldsToDisplay.push({
+            label: "Type:",
+            value: subjectProgress.selected,
+          });
         }
 
-        // Pages Done (with arrow)
         if (
           subjectProgress.page_progress &&
           subjectProgress.page_progress !== "N/A"
         ) {
-          pdf.setFont(undefined, "bold");
-          pdf.text("Pages Done:", startX, detailY);
-          pdf.setFont(undefined, "normal");
-          pdf.text(
-            cleanText(subjectProgress.page_progress),
-            startX + 35,
-            detailY,
-          );
-          detailY += 5;
+          fieldCount++;
+          fieldsToDisplay.push({
+            label: "Pages:",
+            value: subjectProgress.page_progress,
+            left: true,
+          });
         }
 
-        // Lines Progress (with dash)
         if (
           subjectProgress.line_progress &&
           subjectProgress.line_progress !== "N/A"
         ) {
-          pdf.setFont(undefined, "bold");
-          pdf.text("Lines:", startX, detailY);
-          pdf.setFont(undefined, "normal");
-          pdf.text(
-            cleanText(subjectProgress.line_progress),
-            startX + 25,
-            detailY,
-          );
-          detailY += 5;
+          fieldCount++;
+          fieldsToDisplay.push({
+            label: "Lines:",
+            value: subjectProgress.line_progress,
+            left: true,
+          });
         }
 
-        // Right column details
-        detailY = currentY + 20;
-        const rightStartX = 120;
-
-        // Level (with arrow)
         if (
           subjectProgress.level_display &&
           subjectProgress.level_display !== "N/A"
         ) {
-          pdf.setFont(undefined, "bold");
-          pdf.text("Level:", rightStartX, detailY);
-          pdf.setFont(undefined, "normal");
-          pdf.text(
-            cleanText(subjectProgress.level_display),
-            rightStartX + 25,
-            detailY,
-          );
-          detailY += 5;
+          fieldCount++;
+          fieldsToDisplay.push({
+            label: "Level:",
+            value: subjectProgress.level_display,
+            left: false,
+          });
         }
 
-        // Book (with arrow)
         if (
           subjectProgress.book_display &&
           subjectProgress.book_display !== "N/A"
         ) {
-          pdf.setFont(undefined, "bold");
-          pdf.text("Book:", rightStartX, detailY);
-          pdf.setFont(undefined, "normal");
-          pdf.text(
-            cleanText(subjectProgress.book_display),
-            rightStartX + 25,
-            detailY,
-          );
-          detailY += 5;
+          fieldCount++;
+          fieldsToDisplay.push({
+            label: "Book:",
+            value: subjectProgress.book_display,
+            left: false,
+          });
         }
 
-        // Lesson (with arrow)
         if (
           subjectProgress.lesson_name_display &&
           subjectProgress.lesson_name_display !== "N/A"
         ) {
-          pdf.setFont(undefined, "bold");
-          pdf.text("Lesson:", rightStartX, detailY);
-          pdf.setFont(undefined, "normal");
-          pdf.text(
-            cleanText(subjectProgress.lesson_name_display),
-            rightStartX + 30,
-            detailY,
-          );
-          detailY += 5;
+          fieldCount++;
+          fieldsToDisplay.push({
+            label: "Lesson:",
+            value: subjectProgress.lesson_name_display,
+            left: false,
+          });
         }
 
-        // Special fields for Dua/Surah
+        // Special fields for Duas & Surahs
         if (title === "Duas & Surahs" || title === "Dua / Surah") {
-          // Targets (with arrow)
           if (
             subjectProgress.target_display &&
             subjectProgress.target_display !== "N/A"
           ) {
-            pdf.setFont(undefined, "bold");
-            pdf.text("Targets:", startX, detailY);
-            pdf.setFont(undefined, "normal");
-            pdf.text(
-              cleanText(subjectProgress.target_display),
-              startX + 30,
-              detailY,
-            );
-            detailY += 5;
+            fieldCount++;
+            fieldsToDisplay.push({
+              label: "Targets:",
+              value: subjectProgress.target_display,
+              left: true,
+            });
           }
 
-          // Duas Done
           if (
             subjectProgress.dua_number_progress &&
             subjectProgress.dua_number_progress !== "N/A"
           ) {
-            pdf.setFont(undefined, "bold");
-            pdf.text("Duas Done:", startX, detailY);
-            pdf.setFont(undefined, "normal");
-            pdf.text(
-              cleanText(subjectProgress.dua_number_progress),
-              startX + 40,
-              detailY,
-            );
-            detailY += 5;
+            fieldCount++;
+            fieldsToDisplay.push({
+              label: "Duas Done:",
+              value: subjectProgress.dua_number_progress,
+              left: true,
+            });
           }
         }
 
@@ -522,69 +705,154 @@ async function generateStudentReport(studentData, data = {}) {
           subjectProgress.para_progress &&
           subjectProgress.para_progress !== "N/A"
         ) {
-          pdf.setFont(undefined, "bold");
-          pdf.text("Paras Done:", startX, detailY);
-          pdf.setFont(undefined, "normal");
-          pdf.text(
-            cleanText(subjectProgress.para_progress),
-            startX + 40,
-            detailY,
-          );
-          detailY += 5;
+          fieldCount++;
+          fieldsToDisplay.push({
+            label: "Paras Done:",
+            value: subjectProgress.para_progress,
+            left: true,
+          });
         }
 
-        // Move Y position for next card
-        currentY += cardHeight + 10;
+        // Calculate card height - each field takes about 5mm
+        const baseHeight = 20; // Title and spacing
+        const fieldHeight = 5;
+        const cardHeight = baseHeight + fieldCount * fieldHeight;
+
+        const cardWidth = pageWidth - 40;
+
+        // Card background
+        pdf.setFillColor(252, 252, 252);
+        pdf.rect(20, currentY, cardWidth, cardHeight, "F");
+
+        // Left color accent
+        pdf.setFillColor(...color);
+        pdf.rect(20, currentY, 4, cardHeight, "F");
+
+        // Card border
+        pdf.setDrawColor(220, 220, 220);
+        pdf.setLineWidth(0.3);
+        pdf.rect(20, currentY, cardWidth, cardHeight);
+
+        // Title with icon
+        pdf.setFontSize(10);
+        pdf.setTextColor(...color);
+        pdf.text(`${icon} ${cleanText(title)}`, 30, currentY + 8);
+
+        // Progress details in two columns
+        const leftColumnX = 30;
+        const rightColumnX = 110;
+        let leftY = currentY + 15;
+        let rightY = currentY + 15;
+
+        // Draw all fields
+        fieldsToDisplay.forEach((field) => {
+          if (field.left) {
+            // Left column
+            pdf.setFontSize(8);
+            pdf.setTextColor(60, 60, 60);
+            pdf.setFont(undefined, "bold");
+            pdf.text(field.label, leftColumnX, leftY);
+            pdf.setFont(undefined, "normal");
+
+            const cleanedValue = cleanText(field.value);
+            const maxWidth = 70;
+            const wrappedText = pdf.splitTextToSize(cleanedValue, maxWidth);
+
+            if (wrappedText.length === 1) {
+              pdf.text(cleanedValue, leftColumnX + 25, leftY);
+            } else {
+              // Handle multi-line values
+              wrappedText.forEach((line, idx) => {
+                pdf.text(line, leftColumnX + 25, leftY + idx * 4);
+              });
+              leftY += (wrappedText.length - 1) * 4;
+            }
+
+            leftY += 5;
+          } else {
+            // Right column
+            pdf.setFontSize(8);
+            pdf.setTextColor(60, 60, 60);
+            pdf.setFont(undefined, "bold");
+            pdf.text(field.label, rightColumnX, rightY);
+            pdf.setFont(undefined, "normal");
+
+            const cleanedValue = cleanText(field.value);
+            const maxWidth = 60;
+            const wrappedText = pdf.splitTextToSize(cleanedValue, maxWidth);
+
+            if (wrappedText.length === 1) {
+              pdf.text(cleanedValue, rightColumnX + 25, rightY);
+            } else {
+              // Handle multi-line values
+              wrappedText.forEach((line, idx) => {
+                pdf.text(line, rightColumnX + 25, rightY + idx * 4);
+              });
+              rightY += (wrappedText.length - 1) * 4;
+            }
+
+            rightY += 5;
+          }
+        });
+
+        // Adjust card height if right column has more content
+        const maxHeight = Math.max(leftY, rightY);
+        const actualCardHeight = Math.max(cardHeight, maxHeight - currentY + 5);
+
+        // Redraw border with correct height
+        pdf.setDrawColor(220, 220, 220);
+        pdf.setLineWidth(0.3);
+        pdf.rect(20, currentY, cardWidth, actualCardHeight);
+
+        // Redraw left color accent with correct height
+        pdf.setFillColor(...color);
+        pdf.rect(20, currentY, 4, actualCardHeight, "F");
+
+        currentY += actualCardHeight + 8;
       };
 
-      // Draw each subject card
+      // Draw subject cards for this year
       drawSubjectCard(
         "Quran Qaidah",
         progress.qaidah_quran_progress,
         [41, 128, 185],
-        "📖",
+        "[Q]",
       );
       drawSubjectCard(
         "Islamic Studies",
         progress.islamic_studies_progress,
         [39, 174, 96],
-        "📚",
+        "[IS]",
       );
       drawSubjectCard(
         "Duas & Surahs",
         progress.dua_surah_progress,
         [142, 68, 173],
-        "🕌",
+        "[DS]",
       );
       drawSubjectCard(
         "Gift for Muslim",
         progress.gift_for_muslim_progress,
         [230, 126, 34],
-        "🎁",
+        "[GM]",
       );
 
+      // Add spacing between years
       currentY += 10;
     });
   } else {
     // No lessons data available
     if (currentY > pageHeight - 50) {
       addNewPage();
-      currentY = 15;
+      currentY = 40;
     }
 
-    pdf.setFontSize(14);
-    pdf.setTextColor(41, 128, 185);
-    pdf.text("ACADEMIC PROGRESS SUMMARY", 105, currentY, { align: "center" });
-    currentY += 15;
-
-    pdf.setFontSize(11);
-    pdf.setTextColor(120, 120, 120);
-    pdf.text(
-      "No academic progress data available for this period.",
-      20,
-      currentY,
-    );
-    currentY += 12;
+    pdf.setFontSize(12);
+    pdf.setTextColor(150, 150, 150);
+    pdf.text("No academic progress data available", 105, currentY, {
+      align: "center",
+    });
+    currentY += 20;
   }
 
   // ========== FINAL FOOTER ==========
@@ -594,31 +862,44 @@ async function generateStudentReport(studentData, data = {}) {
   for (let i = 1; i <= totalPages; i++) {
     pdf.setPage(i);
 
-    // Add page number footer
+    // Add footer divider
+    pdf.setDrawColor(220, 220, 220);
+    pdf.setLineWidth(0.3);
+    pdf.line(15, pageHeight - 15, pageWidth - 15, pageHeight - 15);
+
+    // Add page number
     pdf.setFontSize(8);
     pdf.setTextColor(150, 150, 150);
-    pdf.text(`Page ${i} of ${totalPages}`, 105, pageHeight - 6, {
+    pdf.text(`Page ${i} of ${totalPages}`, 105, pageHeight - 10, {
       align: "center",
     });
   }
 
-  // Add contact footer on last page
+  // Add final footer with contact info on last page
   pdf.setPage(totalPages);
-  const contactFooter = [
+
+  // Footer background
+  pdf.setFillColor(41, 128, 185);
+  pdf.rect(0, pageHeight - 25, pageWidth, 25, "F");
+
+  // Contact info
+  pdf.setFontSize(7);
+  pdf.setTextColor(255, 255, 255);
+
+  const contactLines = [
     "Alyaqeen Academy | 116-118 Church Road, Yardley Birmingham B25 8UX",
     "Phone: 07869636849 | Email: contact@alyaqeen.co.uk | Website: www.alyaqeen.co.uk",
+    "Report generated on electronic system. For official copy, contact administration.",
   ];
 
-  contactFooter.forEach((line, index) => {
-    pdf.setFontSize(7);
-    pdf.setTextColor(120, 120, 120);
-    pdf.text(line, 105, pageHeight - 16 + index * 3.5, { align: "center" });
+  contactLines.forEach((line, index) => {
+    pdf.text(line, 105, pageHeight - 20 + index * 3.5, { align: "center" });
   });
 
   return {
     pdfBuffer: Buffer.from(pdf.output("arraybuffer")),
     reportId,
-    fileName: `student_comprehensive_report_${studentData.student_id || studentData._id}_${timestamp}.pdf`,
+    fileName: `student_report_${studentData.student_id || studentData._id}_${timestamp}.pdf`,
     reportDate,
   };
 }
