@@ -267,7 +267,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
 
     const result = await familiesCollection.updateOne(
       { email },
-      { $addToSet: { children: studentUid } } // prevents duplicates
+      { $addToSet: { children: studentUid } }, // prevents duplicates
     );
 
     res.send(result);
@@ -544,7 +544,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
     try {
       const result = await familiesCollection.updateOne(
         { email },
-        { $set: { feeChoice } }
+        { $set: { feeChoice } },
       );
       res.send(result);
     } catch (err) {
@@ -585,10 +585,10 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
 
       const currentChildren = familyDoc.children || [];
       const newlyAddedChildren = children.filter(
-        (child) => !currentChildren.includes(child)
+        (child) => !currentChildren.includes(child),
       );
       const removedChildren = currentChildren.filter(
-        (child) => !children.includes(child)
+        (child) => !children.includes(child),
       );
 
       // ✅ FIXED: Check if newly added children belong to OTHER families
@@ -621,7 +621,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
               (student) =>
                 `${student.name} is currently in ${
                   student.currentFamily || "another"
-                } family`
+                } family`,
             ),
           });
         }
@@ -641,7 +641,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
       if (removedChildren.length > 0) {
         const removeResult = await studentsCollection.updateMany(
           { uid: { $in: removedChildren } },
-          { $set: { email: "", family_name: "", parentUid: "" } }
+          { $set: { email: "", family_name: "", parentUid: "" } },
         );
       }
 
@@ -655,7 +655,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
               family_name: name,
               parentUid: familyDoc.uid,
             },
-          }
+          },
         );
       }
 
@@ -802,6 +802,8 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
                     startingDate: 1,
                     monthly_fee: 1,
                     activity: 1,
+                    mother: 1,
+                    father: 1,
                   },
                 },
               ],
@@ -1053,7 +1055,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
 
       for (const family of families) {
         const familyFees = allFamilyFees.filter(
-          (fee) => fee.familyId === family._id.toString()
+          (fee) => fee.familyId === family._id.toString(),
         );
 
         const unpaidStudents = [];
@@ -1099,7 +1101,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
                 subtotal: s.subtotal || 0,
                 paymentDate: fee.date || fee.timestamp?.$date || fee.timestamp,
                 paymentMethod: fee.method,
-              }))
+              })),
           );
 
           let feeStatus = "unpaid";
@@ -1122,7 +1124,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
               const admissionFeeRecord = studentFeeRecords.find(
                 (fee) =>
                   fee.paymentType === "admission" ||
-                  fee.paymentType === "admissionOnHold"
+                  fee.paymentType === "admissionOnHold",
               );
 
               if (admissionFeeRecord) {
@@ -1132,7 +1134,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
                     (p) =>
                       p.amount ===
                       admissionFeeRecord.subtotal -
-                        admissionFeeRecord.admissionFee
+                        admissionFeeRecord.admissionFee,
                   ) || admissionFeeRecord.payments?.[1]; // Second payment is monthly portion
 
                 const monthlyPortionPaid =
@@ -1164,7 +1166,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
               const monthlyFeeRecords = studentFeeRecords.filter(
                 (fee) =>
                   fee.paymentType === "monthly" ||
-                  fee.paymentType === "monthlyOnHold"
+                  fee.paymentType === "monthlyOnHold",
               );
 
               // Find payment for the specific month
@@ -1172,7 +1174,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
                 const monthPayment = record.monthsPaid.find(
                   (mp) =>
                     parseInt(mp.month, 10) === monthNum &&
-                    parseInt(mp.year, 10) === yearNum
+                    parseInt(mp.year, 10) === yearNum,
                 );
 
                 if (monthPayment) {
@@ -1231,7 +1233,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
             unpaidStudents,
             totalUnpaidAmount: unpaidStudents.reduce(
               (sum, s) => sum + s.remainingAmount,
-              0
+              0,
             ),
             month: targetMonthKey,
           });
@@ -1264,7 +1266,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
         if (family.directDebit.stripeMandateId) {
           // First check if mandate exists
           const mandate = await stripe.mandates.retrieve(
-            family.directDebit.stripeMandateId
+            family.directDebit.stripeMandateId,
           );
 
           // Only revoke if it's active
@@ -1273,18 +1275,18 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
               status: "revoked",
             });
             console.log(
-              `✅ Revoked Stripe mandate: ${family.directDebit.stripeMandateId}`
+              `✅ Revoked Stripe mandate: ${family.directDebit.stripeMandateId}`,
             );
           } else {
             console.log(
-              `ℹ️ Mandate already ${mandate.status}, no need to revoke`
+              `ℹ️ Mandate already ${mandate.status}, no need to revoke`,
             );
           }
         }
       } catch (stripeError) {
         console.log(
           "⚠️ Could not revoke Stripe mandate (might already be inactive or not exist):",
-          stripeError.message
+          stripeError.message,
         );
       }
 
@@ -1296,7 +1298,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
             "directDebit.mandateStatus": "cancelled",
             "directDebit.cancelledAt": new Date(),
           },
-        }
+        },
       );
 
       res.json({
@@ -1322,7 +1324,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
         .toArray();
 
       console.log(
-        `📋 Found ${pendingFees.length} total pending payments to check`
+        `📋 Found ${pendingFees.length} total pending payments to check`,
       );
 
       const results = [];
@@ -1335,9 +1337,8 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
 
         try {
           // 3. Check payment status with Stripe
-          const paymentIntent = await stripe.paymentIntents.retrieve(
-            paymentIntentId
-          );
+          const paymentIntent =
+            await stripe.paymentIntents.retrieve(paymentIntentId);
 
           // 4. If payment succeeded, update our database
           if (paymentIntent.status === "succeeded" && fee.status !== "paid") {
@@ -1350,7 +1351,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
                   remaining: 0,
                   updatedAt: new Date(),
                 },
-              }
+              },
             );
 
             // Update family's last successful payment
@@ -1362,7 +1363,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
                     "directDebit.lastSuccessfulPayment": new Date(),
                     "directDebit.lastPaymentIntentId": paymentIntentId,
                   },
-                }
+                },
               );
             }
 
@@ -1403,7 +1404,7 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
                   status: "failed",
                   updatedAt: new Date(),
                 },
-              }
+              },
             );
 
             results.push({

@@ -447,10 +447,16 @@ module.exports = (
         status: { $in: ["enrolled", "hold"] },
       };
 
+      // Add search criteria if search term exists
       if (search && search.trim() !== "") {
-        matchCriteria.name = { $regex: search, $options: "i" };
+        matchCriteria.$or = [
+          { name: { $regex: search, $options: "i" } },
+          { "father.name": { $regex: search, $options: "i" } },
+          { "mother.name": { $regex: search, $options: "i" } },
+          { "father.occupation": { $regex: search, $options: "i" } },
+          { "mother.occupation": { $regex: search, $options: "i" } },
+        ];
       }
-
       const students = await studentsCollection
         .aggregate([
           ...buildStudentAggregationPipeline(matchCriteria),
