@@ -11,7 +11,26 @@ const {
   buildStudentYearlySummaryPipeline,
   buildYearlySummaryPipeline,
 } = require("../utils/lessonsCoveredUtils");
-
+// Helper function to format month display
+function formatDisplayMonth(monthKey) {
+  const [year, month] = monthKey.split("-");
+  const monthNames = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+  ];
+  const monthName = monthNames[parseInt(month) - 1] || month;
+  return `${monthName} ${year}`;
+}
 // Accept the studentsCollection via parameter
 module.exports = (
   studentsCollection,
@@ -23,6 +42,7 @@ module.exports = (
   attendancesCollection,
   lessonsCoveredCollection,
   meritsCollection,
+  feesCollection,
 ) => {
   async function getNextSequenceValue(sequenceName) {
     try {
@@ -675,19 +695,287 @@ module.exports = (
         behaviorBreakdown,
       };
 
-      // 4. Calculate years range (from joining year to current year)
-      const currentYear = new Date().getFullYear();
-      let startingYear = currentYear;
+      // 4. Fetch fee data for the student (OUTSTANDING BALANCE) - WITH PARTIAL MONTHS LIST
+      let feeSummary = {
+        totalPaid: 0,
+        outstandingAmount: 0,
+        lastPaymentDate: null,
+        paymentStatus: "No payment records",
+        unpaidMonths: [], // Months with no payment
+        partiallyPaidMonths: [], // Months with partial payment
+        fullyPaidMonths: [], // Months fully paid
+        monthlyFee: studentData.monthly_fee || 50,
+        paidMonthsCount: 0,
+        partiallyPaidMonthsCount: 0,
+        unpaidMonthsCount: 0,
+      };
+
+      // Get family UID from student's parentUid
+      const familyUid = studentData.parentUid;
+
+      if (familyUid) {
+        // First find the family by UID to get the familyId
+        const family = await familiesCollection.findOne({ uid: familyUid });
+
+        if (family) {
+          const familyId = family._id.toString();
+          const familyDiscount = family.discount || 0;
+          const monthlyFee = studentData.monthly_fee || 50;
+          const discountedMonthlyFee =
+            familyDiscount > 0
+              ? monthlyFee - (monthlyFee * familyDiscount) / 100
+              : monthlyFee;
+
+          // Get ALL fee records for this family
+          const familyFees = await feesCollection
+            .find({
+              familyId: familyId,
+              paymentType: {
+                $in: [
+                  "monthly",
+                  "monthlyOnHold",
+                  "admission",
+                  "admissionOnHold",
+                ],
+              },
+            })
+            .toArray();
+
+          // Track payment details for THIS SPECIFIC STUDENT
+          const paymentDetails = new Map(); // monthStr -> { paid, due, status }
+          let lastPaymentDate = null;
+          let totalPaidAmount = 0;
+
+          // Get joining month from student's startingDate
+          let joiningMonth = null;
+          let joiningYear = null;
+
+          if (studentData.startingDate) {
+            const startDate = new Date(studentData.startingDate);
+            joiningMonth = startDate.getMonth() + 1;
+            joiningYear = startDate.getFullYear();
+          }
+
+          // Process ADMISSION fees first (joining month is always paid)
+          for (const fee of familyFees) {
+            if (
+              fee.paymentType === "admission" ||
+              fee.paymentType === "admissionOnHold"
+            ) {
+              const studentFee = fee.students?.find(
+                (s) => s.studentId === student_id,
+              );
+
+              if (
+                studentFee &&
+                studentFee.joiningMonth &&
+                studentFee.joiningYear
+              ) {
+                const joinMonth = Number(studentFee.joiningMonth);
+                const joinYear = Number(studentFee.joiningYear);
+                const monthStr = `${joinYear}-${String(joinMonth).padStart(2, "0")}`;
+
+                // Calculate first month payment
+                const admissionFee = studentFee.admissionFee || 20;
+                const subtotal = studentFee.subtotal || 0;
+                const firstMonthPaid = Math.max(0, subtotal - admissionFee);
+                const dueAmount = studentFee.discountedFee || monthlyFee;
+
+                const status =
+                  firstMonthPaid >= dueAmount
+                    ? "paid"
+                    : firstMonthPaid > 0
+                      ? "partial"
+                      : "unpaid";
+
+                paymentDetails.set(monthStr, {
+                  month: monthStr,
+                  displayMonth: formatDisplayMonth(monthStr),
+                  dueAmount: dueAmount,
+                  paidAmount: firstMonthPaid,
+                  remainingAmount: Math.max(0, dueAmount - firstMonthPaid),
+                  status: status,
+                  paymentDate: fee.payments?.[0]?.date || null,
+                  paymentMethod: fee.payments?.[0]?.method || null,
+                });
+
+                totalPaidAmount += firstMonthPaid;
+
+                // Track last payment date
+                if (fee.payments && fee.payments.length > 0) {
+                  lastPaymentDate = fee.payments[0].date;
+                }
+              }
+            }
+          }
+
+          // Process MONTHLY fees
+          for (const fee of familyFees) {
+            if (
+              fee.paymentType === "monthly" ||
+              fee.paymentType === "monthlyOnHold"
+            ) {
+              // Only consider paid or pending fees
+              if (fee.status !== "paid" && fee.status !== "pending") continue;
+
+              const studentFee = fee.students?.find(
+                (s) => s.studentId === student_id,
+              );
+
+              if (studentFee && Array.isArray(studentFee.monthsPaid)) {
+                for (const mp of studentFee.monthsPaid) {
+                  const monthNum = Number(mp.month);
+                  const year = mp.year;
+                  if (!isNaN(monthNum) && year) {
+                    const monthStr = `${year}-${String(monthNum).padStart(2, "0")}`;
+                    const paidAmount = mp.paid || 0;
+                    const dueAmount =
+                      mp.discountedFee || mp.monthlyFee || monthlyFee;
+
+                    if (paidAmount > 0) {
+                      const status =
+                        paidAmount >= dueAmount ? "paid" : "partial";
+
+                      paymentDetails.set(monthStr, {
+                        month: monthStr,
+                        displayMonth: formatDisplayMonth(monthStr),
+                        dueAmount: dueAmount,
+                        paidAmount: paidAmount,
+                        remainingAmount: Math.max(0, dueAmount - paidAmount),
+                        status: status,
+                        paymentDate: fee.payments?.[0]?.date || null,
+                        paymentMethod: fee.payments?.[0]?.method || null,
+                      });
+
+                      totalPaidAmount += paidAmount;
+                    }
+
+                    // Track last payment date
+                    if (fee.payments && fee.payments.length > 0) {
+                      lastPaymentDate = fee.payments[0].date;
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          // Calculate months from September 2025 to current month
+          const now = new Date();
+          const currentYear = now.getFullYear();
+          const currentMonth = now.getMonth() + 1;
+
+          // Start from September 2025
+          let startDate = new Date(2025, 8, 1); // September 2025
+
+          // If student joined after September 2025, start from joining month
+          if (joiningYear && joiningMonth) {
+            const studentJoinDate = new Date(joiningYear, joiningMonth - 1, 1);
+            if (studentJoinDate > startDate) {
+              startDate = studentJoinDate;
+            }
+          }
+
+          const fullyPaidMonths = [];
+          const partiallyPaidMonths = [];
+          const unpaidMonths = [];
+          let totalOutstanding = 0;
+
+          let checkDate = new Date(startDate);
+          while (
+            checkDate.getFullYear() < currentYear ||
+            (checkDate.getFullYear() === currentYear &&
+              checkDate.getMonth() + 1 <= currentMonth)
+          ) {
+            const y = checkDate.getFullYear();
+            const m = checkDate.getMonth() + 1;
+            const monthStr = `${y}-${String(m).padStart(2, "0")}`;
+
+            // Check if we have payment for this month
+            if (paymentDetails.has(monthStr)) {
+              const payment = paymentDetails.get(monthStr);
+
+              if (payment.status === "paid") {
+                fullyPaidMonths.push(payment);
+              } else if (payment.status === "partial") {
+                partiallyPaidMonths.push(payment);
+                totalOutstanding += payment.remainingAmount;
+              }
+            } else {
+              // No payment record - check if this is joining month (should be paid by admission)
+              const isJoiningMonth = joiningYear === y && joiningMonth === m;
+
+              if (!isJoiningMonth) {
+                unpaidMonths.push({
+                  month: monthStr,
+                  displayMonth: formatDisplayMonth(monthStr),
+                  dueAmount: discountedMonthlyFee,
+                  paidAmount: 0,
+                  remainingAmount: discountedMonthlyFee,
+                  status: "unpaid",
+                });
+                totalOutstanding += discountedMonthlyFee;
+              }
+            }
+
+            checkDate.setMonth(checkDate.getMonth() + 1);
+          }
+
+          // Determine payment status
+          let paymentStatus = "No payment records";
+
+          if (
+            fullyPaidMonths.length > 0 ||
+            partiallyPaidMonths.length > 0 ||
+            unpaidMonths.length > 0
+          ) {
+            if (unpaidMonths.length === 0 && partiallyPaidMonths.length === 0) {
+              paymentStatus = "Fully Paid";
+            } else if (
+              unpaidMonths.length === 0 &&
+              partiallyPaidMonths.length > 0
+            ) {
+              paymentStatus = "Partially Paid";
+            } else if (unpaidMonths.length > 0) {
+              paymentStatus = "Unpaid";
+            }
+          }
+
+          feeSummary = {
+            totalPaid: totalPaidAmount,
+            outstandingAmount: totalOutstanding,
+            lastPaymentDate: lastPaymentDate,
+            paymentStatus: paymentStatus,
+            unpaidMonths: unpaidMonths, // List of unpaid months
+            partiallyPaidMonths: partiallyPaidMonths, // List of partially paid months
+            fullyPaidMonths: fullyPaidMonths, // List of fully paid months
+            monthlyFee: monthlyFee,
+            discountedMonthlyFee: discountedMonthlyFee,
+            familyDiscount: familyDiscount,
+            paidMonthsCount: fullyPaidMonths.length,
+            partiallyPaidMonthsCount: partiallyPaidMonths.length,
+            unpaidMonthsCount: unpaidMonths.length,
+            joiningMonth:
+              joiningMonth && joiningYear
+                ? `${joiningYear}-${String(joiningMonth).padStart(2, "0")}`
+                : null,
+          };
+        }
+      }
+
+      // 5. Calculate years range (from joining year to current year)
+      const currentYearNum = new Date().getFullYear();
+      let startingYear = currentYearNum;
 
       if (studentData.startingDate) {
         const startDate = new Date(studentData.startingDate);
         startingYear = startDate.getFullYear();
       }
 
-      // 5. Fetch lessons covered data for EACH YEAR using buildYearlySummaryPipeline
+      // 6. Fetch lessons covered data for EACH YEAR using buildYearlySummaryPipeline
       const allYearsLessonsData = [];
 
-      for (let year = startingYear; year <= currentYear; year++) {
+      for (let year = startingYear; year <= currentYearNum; year++) {
         // Get yearly data using buildYearlySummaryPipeline
         const yearlyPipeline = buildYearlySummaryPipeline(year.toString());
 
@@ -727,22 +1015,23 @@ module.exports = (
         }
       }
 
-      // 6. Generate PDF with comprehensive data INCLUDING MERIT DATA
+      // 7. Generate PDF with comprehensive data INCLUDING MERIT AND FEE DATA
       const pdfResult = await generateStudentReport(studentData, {
         attendance: attendanceData,
         lessons: allYearsLessonsData,
-        merits: meritSummary, // Add merit data here
+        merits: meritSummary,
+        fees: feeSummary, // Add fee data here
         startingYear: startingYear,
-        currentYear: currentYear,
+        currentYear: currentYearNum,
       });
 
-      // 7. Upload to Cloudinary
+      // 8. Upload to Cloudinary
       const cloudinaryUrl = await uploadToCloudinary(
         pdfResult.pdfBuffer,
         pdfResult.fileName,
       );
 
-      // 8. Update student document
+      // 9. Update student document
       await studentsCollection.updateOne(
         { _id: new ObjectId(id) },
         {
@@ -752,18 +1041,18 @@ module.exports = (
         },
       );
 
-      // 9. Return response
+      // 10. Return response
       res.status(200).json({
         success: true,
-        message: `Comprehensive yearly report generated successfully (${startingYear}-${currentYear})`,
+        message: `Comprehensive yearly report generated successfully (${startingYear}-${currentYearNum})`,
         reportUrl: cloudinaryUrl,
         reportId: pdfResult.reportId,
         studentId: id,
         studentName: studentData.name,
         yearsCovered: {
           from: startingYear,
-          to: currentYear,
-          totalYears: currentYear - startingYear + 1,
+          to: currentYearNum,
+          totalYears: currentYearNum - startingYear + 1,
         },
         dataSummary: {
           attendanceRecords: attendanceData.total,
@@ -772,6 +1061,8 @@ module.exports = (
           totalYearsCovered: allYearsLessonsData.length,
           totalMeritPoints: meritSummary.totalMeritPoints,
           totalMeritAwards: meritSummary.totalAwards,
+          outstandingAmount: feeSummary.outstandingAmount, // Added to response
+          paymentStatus: feeSummary.paymentStatus, // Added to response
         },
       });
     } catch (error) {
@@ -808,7 +1099,6 @@ module.exports = (
   //     }
 
   //     const studentData = students[0];
-
   //     const student_id = studentData._id.toString();
 
   //     // 2. Fetch attendance data
@@ -868,7 +1158,51 @@ module.exports = (
   //             late: 0,
   //           };
 
-  //     // 3. Calculate years range (from joining year to current year)
+  //     // 3. Fetch merit data (SIMPLIFIED VERSION)
+  //     const meritRecords = await meritsCollection
+  //       .find({
+  //         student_id: student_id,
+  //       })
+  //       .sort({ date: -1 })
+  //       .limit(10)
+  //       .toArray();
+
+  //     // Calculate merit summary
+  //     const totalMeritPoints = meritRecords.reduce(
+  //       (sum, record) => sum + (record.merit_points || 0),
+  //       0,
+  //     );
+  //     const totalAwards = meritRecords.length;
+  //     const averagePoints =
+  //       totalAwards > 0 ? totalMeritPoints / totalAwards : 0;
+
+  //     // Calculate behavior breakdown
+  //     const behaviorBreakdown = {};
+  //     meritRecords.forEach((record) => {
+  //       const behavior = record.behavior || "Other";
+  //       if (!behaviorBreakdown[behavior]) {
+  //         behaviorBreakdown[behavior] = {
+  //           count: 0,
+  //           totalPoints: 0,
+  //           averagePoints: 0,
+  //         };
+  //       }
+  //       behaviorBreakdown[behavior].count++;
+  //       behaviorBreakdown[behavior].totalPoints += record.merit_points || 0;
+  //       behaviorBreakdown[behavior].averagePoints =
+  //         behaviorBreakdown[behavior].totalPoints /
+  //         behaviorBreakdown[behavior].count;
+  //     });
+
+  //     const meritSummary = {
+  //       totalMeritPoints,
+  //       totalAwards,
+  //       averagePoints,
+  //       recentMerits: meritRecords.slice(0, 6), // Get first 6 (most recent)
+  //       behaviorBreakdown,
+  //     };
+
+  //     // 4. Calculate years range (from joining year to current year)
   //     const currentYear = new Date().getFullYear();
   //     let startingYear = currentYear;
 
@@ -877,7 +1211,7 @@ module.exports = (
   //       startingYear = startDate.getFullYear();
   //     }
 
-  //     // 4. Fetch lessons covered data for EACH YEAR using buildYearlySummaryPipeline
+  //     // 5. Fetch lessons covered data for EACH YEAR using buildYearlySummaryPipeline
   //     const allYearsLessonsData = [];
 
   //     for (let year = startingYear; year <= currentYear; year++) {
@@ -920,21 +1254,22 @@ module.exports = (
   //       }
   //     }
 
-  //     // 5. Generate PDF with comprehensive data
+  //     // 6. Generate PDF with comprehensive data INCLUDING MERIT DATA
   //     const pdfResult = await generateStudentReport(studentData, {
   //       attendance: attendanceData,
   //       lessons: allYearsLessonsData,
+  //       merits: meritSummary, // Add merit data here
   //       startingYear: startingYear,
   //       currentYear: currentYear,
   //     });
 
-  //     // 6. Upload to Cloudinary
+  //     // 7. Upload to Cloudinary
   //     const cloudinaryUrl = await uploadToCloudinary(
   //       pdfResult.pdfBuffer,
   //       pdfResult.fileName,
   //     );
 
-  //     // 7. Update student document
+  //     // 8. Update student document
   //     await studentsCollection.updateOne(
   //       { _id: new ObjectId(id) },
   //       {
@@ -944,7 +1279,7 @@ module.exports = (
   //       },
   //     );
 
-  //     // 8. Return response
+  //     // 9. Return response
   //     res.status(200).json({
   //       success: true,
   //       message: `Comprehensive yearly report generated successfully (${startingYear}-${currentYear})`,
@@ -962,6 +1297,8 @@ module.exports = (
   //         yearsWithLessonsData: allYearsLessonsData.filter((d) => d.progress)
   //           .length,
   //         totalYearsCovered: allYearsLessonsData.length,
+  //         totalMeritPoints: meritSummary.totalMeritPoints,
+  //         totalMeritAwards: meritSummary.totalAwards,
   //       },
   //     });
   //   } catch (error) {

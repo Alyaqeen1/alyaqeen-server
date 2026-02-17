@@ -140,25 +140,40 @@ async function generateStudentReport(studentData, data = {}) {
   };
 
   // ===== HEADER =====
-  doc.rect(0, 0, doc.page.width, 120).fill("#2c3e50");
+  doc.rect(0, 0, doc.page.width, 140).fill("#2c3e50"); // Increased height to 140
 
   doc
     .fillColor("white")
     .font("Helvetica-Bold")
     .fontSize(22)
-    .text("ALYAQEEN ACADEMY", 0, 50, { align: "center" });
+    .text("ALYAQEEN ACADEMY", 0, 40, { align: "center" });
 
   doc
     .fontSize(14)
     .font("Helvetica")
-    .text("Student Progress Report", { align: "center" });
+    .text("Student Progress Report", 0, 65, { align: "center" });
+
+  // Add contact information in header
+  doc
+    .fontSize(8)
+    .font("Helvetica")
+    .fillColor("#ecf0f1") // Light gray/white color
+    .text("116-118 Church Road, Yardley Birmingham B25 8UX", 0, 90, {
+      align: "center",
+    })
+    .text(
+      "Phone: 07869636849 | Email: contact@alyaqeen.co.uk | Website: www.alyaqeen.co.uk",
+      0,
+      105,
+      { align: "center" },
+    );
 
   doc
     .fontSize(8)
-    .text(`Report ID: ${reportId}`, 50, 110)
-    .text(`Generated: ${reportDate}`, doc.page.width - 200, 110);
+    .fillColor("#bdc3c7") // Lighter gray for date
+    .text(`Generated: ${reportDate}`, doc.page.width - 200, 125);
 
-  currentY = 140;
+  currentY = 160; // Increased starting Y to account for taller header
 
   // ===== STUDENT INFO =====
   drawCard(
@@ -298,43 +313,297 @@ async function generateStudentReport(studentData, data = {}) {
   // ===== ACADEMIC PROGRESS =====
   const allYearsData = data.lessons || [];
 
-  allYearsData.forEach((yearData) => {
-    checkPageBreak(100);
-
-    doc
-      .font("Helvetica-Bold")
-      .fontSize(14)
-      .fillColor("#2c3e50")
-      .text(`Academic Year ${yearData.year}`, 50, currentY);
-
-    currentY += 20;
-
+  // Filter out years with no progress data
+  const yearsWithData = allYearsData.filter((yearData) => {
     const progress = yearData.progress || {};
 
-    const subjectKeys = [
-      ["Quran Qaidah", progress.qaidah_quran_progress],
-      ["Islamic Studies", progress.islamic_studies_progress],
-      ["Duas & Surahs", progress.dua_surah_progress],
-      ["Gift for Muslim", progress.gift_for_muslim_progress],
-    ];
+    // Check if any subject has actual progress data
+    const hasQuran =
+      progress.qaidah_quran_progress &&
+      progress.qaidah_quran_progress.page_progress !== "N/A" &&
+      progress.qaidah_quran_progress.page_progress !== null;
 
-    subjectKeys.forEach(([title, subject]) => {
-      if (!subject || subject.page_progress === "N/A") return;
+    const hasIslamic =
+      progress.islamic_studies_progress &&
+      progress.islamic_studies_progress.page_progress !== "N/A" &&
+      progress.islamic_studies_progress.page_progress !== null;
 
-      const fields = [];
+    const hasDuas =
+      progress.dua_surah_progress &&
+      progress.dua_surah_progress.page_progress !== "N/A" &&
+      progress.dua_surah_progress.page_progress !== null;
 
-      Object.entries(subject).forEach(([key, value]) => {
-        if (value && value !== "N/A") {
-          fields.push([key.replace(/_/g, " "), value]);
+    const hasGift =
+      progress.gift_for_muslim_progress &&
+      progress.gift_for_muslim_progress.page_progress !== "N/A" &&
+      progress.gift_for_muslim_progress.page_progress !== null;
+
+    return hasQuran || hasIslamic || hasDuas || hasGift;
+  });
+
+  if (yearsWithData.length > 0) {
+    yearsWithData.forEach((yearData) => {
+      checkPageBreak(100);
+
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(14)
+        .fillColor("#2c3e50")
+        .text(`Academic Year ${yearData.year}`, 50, currentY);
+
+      currentY += 20;
+
+      const progress = yearData.progress || {};
+
+      const subjectKeys = [
+        ["Quran Qaidah", progress.qaidah_quran_progress],
+        ["Islamic Studies", progress.islamic_studies_progress],
+        ["Duas & Surahs", progress.dua_surah_progress],
+        ["Gift for Muslim", progress.gift_for_muslim_progress],
+      ];
+
+      let hasAnySubject = false;
+
+      subjectKeys.forEach(([title, subject]) => {
+        if (
+          !subject ||
+          subject.page_progress === "N/A" ||
+          subject.page_progress === null
+        )
+          return;
+
+        const fields = [];
+
+        Object.entries(subject).forEach(([key, value]) => {
+          if (value && value !== "N/A" && value !== null) {
+            // Format the key to be more readable
+            const formattedKey = key
+              .replace(/_/g, " ")
+              .replace(/display$/, "")
+              .replace(/progress$/, "")
+              .trim();
+
+            if (formattedKey && value) {
+              fields.push([formattedKey, value]);
+            }
+          }
+        });
+
+        if (fields.length > 0) {
+          drawCard(title, fields, "#34495e");
+          hasAnySubject = true;
         }
       });
 
-      drawCard(title, fields, "#34495e");
+      // If no subjects with data in this year, don't show the year at all
+      if (!hasAnySubject) {
+        // Remove the year header we added
+        currentY -= 20;
+      }
+
+      currentY += 10;
     });
+  } else {
+    // Optional: Show a message if no academic progress data
+    checkPageBreak(100);
+    doc
+      .font("Helvetica")
+      .fontSize(12)
+      .fillColor("#7f8c8d")
+      .text("No academic progress records available", 50, currentY);
+    currentY += 30;
+  }
+  // ===== FEE SUMMARY (OUTSTANDING BALANCE) =====
+  const fees = data?.fees || {
+    totalPaid: 0,
+    outstandingAmount: 0,
+    lastPaymentDate: null,
+    paymentStatus: "No payment records",
+    unpaidMonths: [],
+    partiallyPaidMonths: [],
+    fullyPaidMonths: [],
+    monthlyFee: 50,
+    discountedMonthlyFee: 50,
+    paidMonthsCount: 0,
+    partiallyPaidMonthsCount: 0,
+    unpaidMonthsCount: 0,
+  };
 
-    currentY += 10;
-  });
+  // Only show fee section if there are any fees to display
+  if (
+    fees.paidMonthsCount > 0 ||
+    fees.partiallyPaidMonthsCount > 0 ||
+    fees.unpaidMonthsCount > 0
+  ) {
+    checkPageBreak(120);
 
+    // Determine color based on status
+    let feeStatusColor = "#95a5a6"; // Default gray
+    if (fees.paymentStatus === "Fully Paid")
+      feeStatusColor = "#27ae60"; // Green
+    else if (fees.paymentStatus === "Partially Paid")
+      feeStatusColor = "#f39c12"; // Orange
+    else if (fees.paymentStatus === "Unpaid") feeStatusColor = "#e67e22"; // Dark orange
+
+    // Build fee summary fields
+    const feeFields = [
+      ["Monthly Fee", `£${fees.monthlyFee}`],
+      fees.discountedMonthlyFee !== fees.monthlyFee
+        ? ["After Discount", `£${fees.discountedMonthlyFee.toFixed(2)}`]
+        : null,
+      ["Total Paid", `£${fees.totalPaid.toFixed(2)}`],
+      ["Outstanding Balance", `£${fees.outstandingAmount.toFixed(2)}`],
+      ["Status", fees.paymentStatus],
+    ];
+
+    // Add counts if they exist
+    if (fees.fullyPaidMonths?.length > 0) {
+      feeFields.push(["Fully Paid Months", fees.fullyPaidMonths.length]);
+    }
+    if (fees.partiallyPaidMonths?.length > 0) {
+      feeFields.push([
+        "Partially Paid Months",
+        fees.partiallyPaidMonths.length,
+      ]);
+    }
+    if (fees.unpaidMonths?.length > 0) {
+      feeFields.push(["Unpaid Months", fees.unpaidMonths.length]);
+    }
+    if (fees.lastPaymentDate) {
+      feeFields.push(["Last Payment", formatShortDate(fees.lastPaymentDate)]);
+    }
+
+    drawCard("Fee Summary", feeFields.filter(Boolean), feeStatusColor);
+
+    // Show partially paid months if any
+    if (fees.partiallyPaidMonths && fees.partiallyPaidMonths.length > 0) {
+      checkPageBreak(100);
+
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(12)
+        .fillColor("#f39c12")
+        .text("Partially Paid Months", 50, currentY);
+
+      currentY += 20;
+
+      // Table header
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(8)
+        .fillColor("#666")
+        .text("Month", 55, currentY)
+        .text("Paid", 120, currentY)
+        .text("Due", pageWidth - 70, currentY, { align: "right" });
+
+      currentY += 15; // Space after header
+
+      fees.partiallyPaidMonths.slice(0, 6).forEach((month, index) => {
+        // Background for alternating rows
+        if (index % 2 === 0) {
+          doc
+            .fillColor("#fef9e7")
+            .rect(50, currentY - 3, pageWidth, 18)
+            .fill();
+        }
+
+        doc
+          .fillColor("#333")
+          .font("Helvetica")
+          .fontSize(9)
+          .text(month.displayMonth || month.month, 55, currentY)
+          .text(`£${month.paidAmount?.toFixed(2) || 0}`, 120, currentY)
+          .text(
+            `£${month.remainingAmount?.toFixed(2) || month.dueAmount?.toFixed(2) || 0}`,
+            pageWidth - 70,
+            currentY,
+            { align: "right" },
+          );
+
+        currentY += 18;
+      });
+
+      currentY += 15;
+    }
+
+    // Show unpaid months if any
+    if (fees.unpaidMonths && fees.unpaidMonths.length > 0) {
+      checkPageBreak(100);
+
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(12)
+        .fillColor("#e67e22")
+        .text("Unpaid Months", 50, currentY);
+
+      currentY += 20;
+
+      // Table header
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(8)
+        .fillColor("#666")
+        .text("Month", 55, currentY)
+        .text("Amount Due", pageWidth - 70, currentY, { align: "right" });
+
+      currentY += 15; // Space after header
+
+      fees.unpaidMonths.slice(0, 6).forEach((month, index) => {
+        // Background for alternating rows
+        if (index % 2 === 0) {
+          doc
+            .fillColor("#fdedec")
+            .rect(50, currentY - 3, pageWidth, 18)
+            .fill();
+        }
+
+        doc
+          .fillColor("#333")
+          .font("Helvetica")
+          .fontSize(9)
+          .text(month.displayMonth || month.month, 55, currentY)
+          .text(
+            `£${month.dueAmount?.toFixed(2) || month.amount?.toFixed(2) || 0}`,
+            pageWidth - 70,
+            currentY,
+            { align: "right" },
+          );
+
+        currentY += 18;
+      });
+
+      currentY += 15;
+    }
+
+    // Show fully paid months summary
+    // if (fees.fullyPaidMonths && fees.fullyPaidMonths.length > 0) {
+    //   checkPageBreak(80);
+
+    //   doc
+    //     .font("Helvetica")
+    //     .fontSize(10)
+    //     .fillColor("#27ae60")
+    //     .text(
+    //       `✓ ${fees.fullyPaidMonths.length} Month${fees.fullyPaidMonths.length > 1 ? "s" : ""} Fully Paid`,
+    //       50,
+    //       currentY,
+    //     );
+
+    //   currentY += 20;
+    // }
+  } else {
+    // Show a simple "No fee records" message
+    checkPageBreak(80);
+
+    drawCard(
+      "Fee Summary",
+      [
+        ["Monthly Fee", `£${fees.monthlyFee}`],
+        ["Status", "No payment records found"],
+      ],
+      "#95a5a6",
+    );
+  }
   // ===== FOOTER PAGES =====
   doc.on("end", () => {
     const range = doc.bufferedPageRange();
