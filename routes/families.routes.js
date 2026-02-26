@@ -3,7 +3,25 @@ const { ObjectId } = require("mongodb");
 const studentEnrichmentStages = require("../config/studentEnrichmentStages");
 const router = express.Router();
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
-module.exports = (familiesCollection, studentsCollection, feesCollection) => {
+// Add this with your other requires at the top
+// const admin = require("firebase-admin");
+// const TEMP_PASSWORD = "Alyaqeen2025@";
+
+// // Initialize Firebase Admin if not already initialized
+// if (!admin.apps.length) {
+//   const SERVICE_ACCOUNT = require("../alyaqeen-62c18-firebase-adminsdk-fbsvc-1b71e1f5e6.json");
+//   admin.initializeApp({
+//     credential: admin.credential.cert(SERVICE_ACCOUNT),
+//   });
+// }
+
+module.exports = (
+  familiesCollection,
+  studentsCollection,
+  feesCollection,
+  usersCollection,
+  admin,
+) => {
   router.get("/", async (req, res) => {
     try {
       const result = await familiesCollection
@@ -161,81 +179,6 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
       res.status(500).json({ error: error.message });
     }
   });
-  // ✅ Get specific family Direct Debit details
-  // router.get("/admin/direct-debit-family/:id", async (req, res) => {
-  //   try {
-  //     const { id } = req.params;
-
-  //     if (!ObjectId.isValid(id)) {
-  //       return res.status(400).json({ error: "Invalid family ID" });
-  //     }
-
-  //     const family = await familiesCollection
-  //       .aggregate([
-  //         {
-  //           $match: { _id: new ObjectId(id) },
-  //         },
-  //         {
-  //           $lookup: {
-  //             from: studentsCollection.collectionName,
-  //             localField: "children",
-  //             foreignField: "uid",
-  //             as: "childrenDocs",
-  //           },
-  //         },
-  //         {
-  //           $lookup: {
-  //             from: feesCollection.collectionName,
-  //             let: { familyId: { $toString: "$_id" } },
-  //             pipeline: [
-  //               {
-  //                 $match: {
-  //                   $expr: { $eq: ["$familyId", "$$familyId"] },
-  //                   status: "paid",
-  //                 },
-  //               },
-  //               { $sort: { paymentDate: -1 } },
-  //               { $limit: 5 }, // Last 5 payments
-  //             ],
-  //             as: "recentPayments",
-  //           },
-  //         },
-  //         {
-  //           $project: {
-  //             _id: 1,
-  //             name: 1,
-  //             email: 1,
-  //             phone: 1,
-  //             fatherName: 1,
-  //             discount: 1,
-  //             feeChoice: 1,
-  //             createdAt: 1,
-  //             updatedAt: 1,
-  //             "childrenDocs._id": 1,
-  //             "childrenDocs.name": 1,
-  //             "childrenDocs.status": 1,
-  //             "childrenDocs.activity": 1,
-  //             "childrenDocs.monthly_fee": 1,
-  //             directDebit: 1,
-  //             recentPayments: 1,
-  //           },
-  //         },
-  //       ])
-  //       .toArray();
-
-  //     if (family.length === 0) {
-  //       return res.status(404).json({ error: "Family not found" });
-  //     }
-
-  //     res.json({
-  //       success: true,
-  //       family: family[0],
-  //     });
-  //   } catch (error) {
-  //     console.error("Admin Direct Debit family details error:", error);
-  //     res.status(500).json({ error: error.message });
-  //   }
-  // });
 
   router.get("/:id", async (req, res) => {
     const id = req.params.id;
@@ -674,96 +617,6 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
       });
     }
   });
-
-  // router.get("/with-children/enrolled-fee-summary", async (req, res) => {
-  //   try {
-  //     const result = await familiesCollection
-  //       .aggregate([
-  //         // 1. Convert _id (ObjectId) to string for matching
-  //         {
-  //           $addFields: {
-  //             familyIdString: { $toString: "$_id" }, // Convert ObjectId to string
-  //           },
-  //         },
-  //         // 2. Lookup student documents for the children array
-  //         {
-  //           $lookup: {
-  //             from: studentsCollection.collectionName,
-  //             let: { childUids: "$children" },
-  //             pipeline: [
-  //               {
-  //                 $match: {
-  //                   $expr: {
-  //                     $and: [
-  //                       { $in: ["$uid", "$$childUids"] },
-  //                       { $in: ["$status", ["enrolled", "hold", "approved"]] },
-  //                       // { $eq: ["$activity", "active"] },
-  //                     ],
-  //                   },
-  //                 },
-  //               },
-  //               ...studentEnrichmentStages(),
-  //             ],
-  //             as: "childrenDocs",
-  //           },
-  //         },
-  //         // 3. Lookup fees using the string version of familyId
-  //         {
-  //           $lookup: {
-  //             from: feesCollection.collectionName,
-  //             localField: "familyIdString", // Use the converted string
-  //             foreignField: "familyId", // This is a string in feesCollection
-  //             as: "feePayments",
-  //           },
-  //         },
-  //         // 4. Calculate total paid and pending amounts
-  //         {
-  //           $addFields: {
-  //             totalPaidAmount: {
-  //               $sum: {
-  //                 $map: {
-  //                   input: {
-  //                     $filter: {
-  //                       input: "$feePayments",
-  //                       as: "fee",
-  //                       cond: { $eq: ["$$fee.status", "paid"] },
-  //                     },
-  //                   },
-  //                   as: "paidFee",
-  //                   in: "$$paidFee.amount",
-  //                 },
-  //               },
-  //             },
-  //             totalPendingAmount: {
-  //               $sum: {
-  //                 $map: {
-  //                   input: {
-  //                     $filter: {
-  //                       input: "$feePayments",
-  //                       as: "fee",
-  //                       cond: { $ne: ["$$fee.status", "paid"] },
-  //                     },
-  //                   },
-  //                   as: "pendingFee",
-  //                   in: "$$pendingFee.amount",
-  //                 },
-  //               },
-  //             },
-  //           },
-  //         },
-  //         {
-  //           $sort: { name: 1 },
-  //         },
-  //         // 5. (Optional) Remove the temporary field
-  //         { $unset: "familyIdString" },
-  //       ])
-  //       .toArray();
-
-  //     res.send(result);
-  //   } catch (err) {
-  //     res.status(500).send({ error: "Server error" });
-  //   }
-  // });
 
   router.get("/with-children/enrolled-fee-summary", async (req, res) => {
     try {
@@ -1549,5 +1402,188 @@ module.exports = (familiesCollection, studentsCollection, feesCollection) => {
       });
     }
   });
+
+  // Add this route after your existing routes
+  router.post("/admin/migrate-family/:familyId", async (req, res) => {
+    const { familyId } = req.params;
+    const { email, password } = req.body; // Both email and password from frontend
+
+    if (!familyId) {
+      return res.status(400).json({
+        error: "Missing required field: familyId is required",
+      });
+    }
+
+    if (!email) {
+      return res.status(400).json({
+        error: "Email is required",
+      });
+    }
+
+    if (!password) {
+      return res.status(400).json({
+        error: "Password is required",
+      });
+    }
+
+    try {
+      // --- Step 1: Get the existing family from MongoDB ---
+      const family = await familiesCollection.findOne({
+        _id: new ObjectId(familyId),
+      });
+
+      if (!family) {
+        return res.status(404).json({ error: "Family not found" });
+      }
+
+      const familyName = family.name;
+      const normalizedEmail = email.toLowerCase().trim();
+      const studentUids = family.children || []; // Get all student UIDs from family document
+
+      console.log(`\n👨‍👩‍👧 Processing family: ${familyName} (${normalizedEmail})`);
+      console.log(`📚 Found ${studentUids.length} students in family`);
+      console.log(`🔑 Current family uid: ${family.uid}`);
+
+      // --- Step 2: Handle Firebase user ---
+      let firebaseUid;
+      let firebaseAction = "unknown";
+
+      try {
+        // Check if user exists
+        const existingUser = await admin.auth().getUserByEmail(normalizedEmail);
+        firebaseUid = existingUser.uid;
+
+        // User exists - update their email and password
+        const updateFields = {};
+
+        // Update email if changed
+        if (normalizedEmail !== family.email) {
+          updateFields.email = normalizedEmail;
+        }
+
+        // Always update password (since frontend provided it)
+        updateFields.password = password;
+
+        if (Object.keys(updateFields).length > 0) {
+          await admin.auth().updateUser(firebaseUid, updateFields);
+          console.log(`📧 Updated Firebase user:`, updateFields);
+        }
+
+        firebaseAction = "updated";
+        console.log(`⚠️ Firebase user updated, UID: ${firebaseUid}`);
+      } catch (error) {
+        // User doesn't exist - create new one with email and password from frontend
+        const newUser = await admin.auth().createUser({
+          email: normalizedEmail,
+          password: password,
+          displayName: familyName,
+        });
+        firebaseUid = newUser.uid;
+        firebaseAction = "created";
+        console.log(`🎉 Created new Firebase user, UID: ${firebaseUid}`);
+      }
+
+      // --- Step 3: Update all students in this family ---
+      const childrenUids = [];
+      if (studentUids.length > 0) {
+        const students = await studentsCollection
+          .find({ uid: { $in: studentUids } })
+          .toArray();
+
+        console.log(`✅ Found ${students.length} students to update`);
+
+        for (const student of students) {
+          // Check if student's parentUid is different
+          if (student.parentUid !== firebaseUid) {
+            console.log(
+              `   ↳ Fixing parentUid for ${student.name}: ${student.parentUid} -> ${firebaseUid}`,
+            );
+          }
+
+          await studentsCollection.updateOne(
+            { uid: student.uid },
+            {
+              $set: {
+                parentUid: firebaseUid, // This should match family.uid
+                family_name: familyName,
+                email: normalizedEmail,
+                updatedAt: new Date(),
+              },
+            },
+          );
+          childrenUids.push(student.uid);
+          console.log(`   ↳ ✅ Updated student ${student.name}`);
+        }
+      }
+
+      // --- Step 4: Update family record ---
+      const updateData = {
+        uid: firebaseUid, // This is the CORRECT Firebase UID
+        name: familyName,
+        email: normalizedEmail,
+        children: childrenUids,
+        updatedAt: new Date(),
+      };
+
+      // Store password only if newly created
+      if (firebaseAction === "created") {
+        updateData.tempPassword = password;
+        updateData.credentialsSent = false;
+      }
+
+      // Only set familyId if it doesn't exist
+      if (!family.familyId) {
+        updateData.familyId = `${familyName.replace(/\s+/g, "-")}-${
+          normalizedEmail.split("@")[0]
+        }`.toLowerCase();
+      }
+
+      const familyResult = await familiesCollection.updateOne(
+        { _id: new ObjectId(familyId) },
+        { $set: updateData },
+      );
+      console.log(`✅ Family record updated with uid: ${firebaseUid}`);
+
+      // --- Step 5: Update or create user record ---
+      const userResult = await usersCollection.updateOne(
+        { email: normalizedEmail },
+        {
+          $set: {
+            uid: firebaseUid,
+            email: normalizedEmail,
+            name: familyName,
+            role: "parent",
+            updatedAt: new Date(),
+          },
+          $setOnInsert: { createdAt: new Date() },
+        },
+        { upsert: true },
+      );
+      console.log(`✅ User record upserted`);
+
+      // --- Return success response ---
+      res.status(200).json({
+        success: true,
+        message: "Family migration completed successfully",
+        data: {
+          familyId,
+          firebaseUid,
+          firebaseAction,
+          familyName,
+          email: normalizedEmail,
+          studentCount: childrenUids.length,
+          passwordUpdated: true,
+          studentsFixed: childrenUids.length, // Confirm students updated
+        },
+      });
+    } catch (error) {
+      console.error("❌ Migration error:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message,
+      });
+    }
+  });
+
   return router;
 };

@@ -939,6 +939,8 @@ async function run() {
         familiesCollection,
         studentsCollection,
         feesCollection,
+        usersCollection,
+        admin,
       ),
     );
     app.use(
