@@ -281,7 +281,7 @@ const sendReminderEmail = async ({ to, name, studentName }, reminderType) => {
         <p>Alyaqeen Academy</p>
       `,
     },
-    29: {
+    28: {
       subject: "⚠️ Important: Monthly Fee Payment Still Unpaid",
       content: `
         <p>Dear <strong>${name}</strong>,</p>
