@@ -14,6 +14,7 @@ const cookieParser = require("cookie-parser");
 
 const createStudentsRouter = require("./routes/students.routes");
 const createUsersRouter = require("./routes/users.routes");
+const createSearchesRouter = require("./routes/searches.routes");
 const createFamiliesRouter = require("./routes/families.routes");
 const createNotificationsRouter = require("./routes/notifications.routes");
 const createFeesRouter = require("./routes/fees.routes");
@@ -816,6 +817,9 @@ async function run() {
   try {
     // collections
     const usersCollection = client.db("alyaqeenDb").collection("users");
+    const searchesCollection = client
+      .db("alyaqeenDb")
+      .collection("searchIndex");
     studentsCollection = client.db("alyaqeenDb").collection("students");
     familiesCollection = client.db("alyaqeenDb").collection("families");
     feesCollection = client.db("alyaqeenDb").collection("fees");
@@ -933,6 +937,7 @@ async function run() {
       ),
     );
     app.use("/users", createUsersRouter(usersCollection));
+    app.use("/searches", createSearchesRouter(searchesCollection));
     app.use(
       "/families",
       createFamiliesRouter(
