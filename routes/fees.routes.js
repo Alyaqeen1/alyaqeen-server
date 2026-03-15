@@ -775,7 +775,6 @@ module.exports = (
               isEnrollmentConfirmed: false, // Set to false since it's pending
               isDirectDebit: true, // Add this flag
             });
-            console.log("✅ Direct Debit admission email sent successfully");
           } catch (admissionError) {
             console.error(
               "❌ Direct Debit admission email failed:",

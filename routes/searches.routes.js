@@ -70,8 +70,6 @@ module.exports = (searchesCollection) => {
         return res.status(400).json({ error: "Valid role is required" });
       }
 
-      console.log(`🔍 Dashboard search for role "${role}": "${query}"`);
-
       // Build the query based on role
       let roleFilter = {};
 
@@ -134,9 +132,6 @@ module.exports = (searchesCollection) => {
         })
         .toArray();
 
-      console.log(
-        `✅ Found ${results.length} dashboard results for role "${role}"`,
-      );
       res.json(results);
     } catch (error) {
       console.error("Dashboard search error:", error);

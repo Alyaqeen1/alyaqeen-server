@@ -1127,9 +1127,6 @@ module.exports = (
             await stripe.mandates.update(family.directDebit.stripeMandateId, {
               status: "revoked",
             });
-            console.log(
-              `✅ Revoked Stripe mandate: ${family.directDebit.stripeMandateId}`,
-            );
           } else {
             console.log(
               `ℹ️ Mandate already ${mandate.status}, no need to revoke`,
@@ -1166,8 +1163,6 @@ module.exports = (
   // ✅ Refresh ALL pending payments for ALL families
   router.post("/refresh-all-pending-payments", async (req, res) => {
     try {
-      console.log("🔄 Starting bulk refresh of ALL pending payments...");
-
       // 1. Find ALL pending fees with payment intent IDs
       const pendingFees = await feesCollection
         .find({
@@ -1175,10 +1170,6 @@ module.exports = (
           "payments.stripePaymentIntentId": { $exists: true, $ne: null },
         })
         .toArray();
-
-      console.log(
-        `📋 Found ${pendingFees.length} total pending payments to check`,
-      );
 
       const results = [];
       let updatedCount = 0;
@@ -1221,7 +1212,6 @@ module.exports = (
             }
 
             updatedCount++;
-            console.log(`✅ Updated fee ${fee._id} from pending to paid`);
 
             results.push({
               feeId: fee._id,
@@ -1311,8 +1301,6 @@ module.exports = (
         noChange: results.filter((r) => r.action === "no_change").length,
       };
 
-      console.log(`🎉 Bulk refresh completed:`, summary);
-
       res.json({
         success: true,
         summary: summary,
@@ -1371,12 +1359,6 @@ module.exports = (
           source: "admin_triggered", // ✅ Identify admin-triggered payments
           amount: amount.toString(), // ✅ Store amount as string
         },
-      });
-
-      console.log(`💰 Payment Intent created:`, {
-        id: paymentIntent.id,
-        status: paymentIntent.status,
-        amount: paymentIntent.amount,
       });
 
       // ✅ RETURN payment intent ID so frontend can save it
@@ -1440,10 +1422,6 @@ module.exports = (
       const normalizedEmail = email.toLowerCase().trim();
       const studentUids = family.children || []; // Get all student UIDs from family document
 
-      console.log(`\n👨‍👩‍👧 Processing family: ${familyName} (${normalizedEmail})`);
-      console.log(`📚 Found ${studentUids.length} students in family`);
-      console.log(`🔑 Current family uid: ${family.uid}`);
-
       // --- Step 2: Handle Firebase user ---
       let firebaseUid;
       let firebaseAction = "unknown";
@@ -1466,11 +1444,9 @@ module.exports = (
 
         if (Object.keys(updateFields).length > 0) {
           await admin.auth().updateUser(firebaseUid, updateFields);
-          console.log(`📧 Updated Firebase user:`, updateFields);
         }
 
         firebaseAction = "updated";
-        console.log(`⚠️ Firebase user updated, UID: ${firebaseUid}`);
       } catch (error) {
         // User doesn't exist - create new one with email and password from frontend
         const newUser = await admin.auth().createUser({
@@ -1480,7 +1456,6 @@ module.exports = (
         });
         firebaseUid = newUser.uid;
         firebaseAction = "created";
-        console.log(`🎉 Created new Firebase user, UID: ${firebaseUid}`);
       }
 
       // --- Step 3: Update all students in this family ---
@@ -1490,14 +1465,9 @@ module.exports = (
           .find({ uid: { $in: studentUids } })
           .toArray();
 
-        console.log(`✅ Found ${students.length} students to update`);
-
         for (const student of students) {
           // Check if student's parentUid is different
           if (student.parentUid !== firebaseUid) {
-            console.log(
-              `   ↳ Fixing parentUid for ${student.name}: ${student.parentUid} -> ${firebaseUid}`,
-            );
           }
 
           await studentsCollection.updateOne(
@@ -1512,7 +1482,6 @@ module.exports = (
             },
           );
           childrenUids.push(student.uid);
-          console.log(`   ↳ ✅ Updated student ${student.name}`);
         }
       }
 
@@ -1542,7 +1511,6 @@ module.exports = (
         { _id: new ObjectId(familyId) },
         { $set: updateData },
       );
-      console.log(`✅ Family record updated with uid: ${firebaseUid}`);
 
       // --- Step 5: Update or create user record ---
       const userResult = await usersCollection.updateOne(
@@ -1559,7 +1527,6 @@ module.exports = (
         },
         { upsert: true },
       );
-      console.log(`✅ User record upserted`);
 
       // --- Return success response ---
       res.status(200).json({

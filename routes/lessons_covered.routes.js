@@ -157,10 +157,6 @@ module.exports = (
 
       const prevMonth = monthNames[prevMonthIndex];
 
-      console.log(
-        `🔍 Looking for: ${prevMonth} ${prevYear} (previous to ${month} ${year})`,
-      );
-
       // SIMPLE FIX: Just find the ending data for the calculated previous month/year
       const previousEnding = await lessonsCoveredCollection.findOne({
         student_id: student_id,
@@ -174,10 +170,6 @@ module.exports = (
           message: `No ending data found for previous month (${prevMonth} ${prevYear})`,
         });
       }
-
-      console.log(
-        `✅ Found previous data: ${previousEnding.month} ${previousEnding.year}`,
-      );
 
       // Return the previous month's ending document
       res.send(previousEnding);
@@ -207,10 +199,6 @@ module.exports = (
         .aggregate(pipeline)
         .toArray();
 
-      console.log(
-        `Found ${result.length} complete student records for ${month} ${year}`,
-      );
-
       res.send(result.length > 0 ? result : []);
     } catch (error) {
       console.error("Monthly summary error:", error);
@@ -235,9 +223,6 @@ module.exports = (
         .aggregate(pipeline)
         .toArray();
 
-      console.log(
-        `Yearly summary found ${result.length} records for year ${year}`,
-      );
       return res.status(200).json(Array.isArray(result) ? result : []);
     } catch (error) {
       console.error("Yearly summary error:", error);
@@ -280,10 +265,6 @@ module.exports = (
         .aggregate(pipeline)
         .toArray();
 
-      console.log(
-        `Found ${result.length} complete student records for teacher ${teacher_id}`,
-      );
-
       res.send(result.length > 0 ? result : []);
     } catch (error) {
       console.error("Teacher monthly summary error:", error);
@@ -308,10 +289,6 @@ module.exports = (
       const result = await lessonsCoveredCollection
         .aggregate(pipeline)
         .toArray();
-
-      console.log(
-        `Yearly summary found ${result.length} records for teacher ${teacher_id} year ${year}`,
-      );
 
       return res.status(200).json(Array.isArray(result) ? result : []);
     } catch (error) {
@@ -357,10 +334,6 @@ module.exports = (
         .aggregate(pipeline)
         .toArray();
 
-      console.log(
-        `Found ${result.length} published monthly reports for students ${studentIdsArray}`,
-      );
-
       res.send(result.length > 0 ? result : []);
     } catch (error) {
       console.error("Student monthly summary error:", error);
@@ -389,10 +362,6 @@ module.exports = (
       const result = await lessonsCoveredCollection
         .aggregate(pipeline)
         .toArray();
-
-      console.log(
-        `Student yearly summary found ${result.length} records for students ${studentIdsArray} year ${year}`,
-      );
 
       res.send(result.length > 0 ? result : []);
     } catch (error) {
