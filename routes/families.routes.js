@@ -223,6 +223,11 @@ module.exports = (
       const result = await familiesCollection
         .aggregate([
           {
+            $match: {
+              isDeleted: { $ne: true }, // ✅ Add this filter
+            },
+          },
+          {
             $lookup: {
               from: studentsCollection.collectionName, // actual collection name
               let: { childUids: "$children" },
@@ -500,9 +505,16 @@ module.exports = (
     if (!ObjectId.isValid(id)) {
       return res.status(400).send({ error: "Invalid ID format" });
     }
+
     const query = { _id: new ObjectId(id) };
 
-    const result = await familiesCollection.deleteOne(query);
+    // ✅ SOFT DELETE - just update the flag
+    const result = await familiesCollection.updateOne(query, {
+      $set: {
+        isDeleted: true,
+      },
+    });
+
     res.send(result);
   });
   // update family
@@ -622,6 +634,11 @@ module.exports = (
     try {
       const result = await familiesCollection
         .aggregate([
+          {
+            $match: {
+              isDeleted: { $ne: true }, // ✅ Add this filter
+            },
+          },
           // Convert family _id → string
           {
             $addFields: {
