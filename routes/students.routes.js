@@ -1097,9 +1097,20 @@ module.exports = (
     const isDeactivating =
       student.activity === "active" && activity === "inactive";
 
+    // Prepare the update object
     const updatedDoc = {
       $set: { activity },
     };
+
+    // If deactivating, add deactivatedAt timestamp
+    if (isDeactivating) {
+      updatedDoc.$set.deactivatedAt = new Date();
+    }
+
+    // If activating, remove deactivatedAt field
+    if (isActivating) {
+      updatedDoc.$unset = { deactivatedAt: "" };
+    }
 
     const result = await studentsCollection.updateOne(query, updatedDoc);
 
@@ -1170,9 +1181,9 @@ module.exports = (
     res.send({
       ...result,
       message: isActivating
-        ? "Student activated, added to family, and family restored"
+        ? "Student activated, deactivatedAt removed, family restored"
         : isDeactivating
-          ? "Student deactivated"
+          ? "Student deactivated with deactivatedAt timestamp"
           : "Student activity updated",
     });
   });
@@ -1238,6 +1249,212 @@ module.exports = (
     );
 
     res.send(result);
+  });
+  // GET monthly admissions (enrolled students who joined in a specific month)
+  // GET monthly admissions (enrolled students who joined in a specific month)
+  router.get("/monthly-admissions", async (req, res) => {
+    try {
+      const { year, month } = req.query;
+
+      if (!year || !month) {
+        return res.status(400).json({ error: "Year and month are required" });
+      }
+
+      // Create date range for the selected month
+      const startDate = new Date(year, month - 1, 1);
+      const endDate = new Date(year, month, 0);
+
+      // Format dates to YYYY-MM-DD for comparison
+      const startDateStr = startDate.toISOString().split("T")[0];
+      const endDateStr = endDate.toISOString().split("T")[0];
+
+      // Build the match criteria
+      const matchCriteria = {
+        startingDate: {
+          $gte: startDateStr,
+          $lte: endDateStr,
+        },
+        status: "enrolled",
+        activity: "active",
+      };
+
+      // Use the existing aggregation pipeline
+      const students = await studentsCollection
+        .aggregate(buildStudentAggregationPipeline(matchCriteria))
+        .toArray();
+
+      // Extract class, department and session info from the aggregated data
+      const studentsWithInfo = students.map((student) => {
+        // Get the first enrollment from the enriched academic array
+        const enrollment = student.academic?.enrollments?.[0] || {};
+
+        return {
+          _id: student._id,
+          name: student.name,
+          class_name: enrollment.class || student.school_year || "Not Assigned",
+          dept_name: enrollment.department || "Not Assigned",
+          session: enrollment.session || "weekdays",
+          startingDate: student.startingDate,
+          student_id: student.student_id,
+        };
+      });
+
+      // Calculate session breakdown
+      const weekdaysCount = studentsWithInfo.filter(
+        (s) => s.session === "weekdays",
+      ).length;
+      const weekendCount = studentsWithInfo.filter(
+        (s) => s.session === "weekend",
+      ).length;
+
+      res.json({
+        success: true,
+        count: studentsWithInfo.length,
+        weekdays: weekdaysCount,
+        weekend: weekendCount,
+        students: studentsWithInfo,
+      });
+    } catch (error) {
+      console.error("Error fetching monthly admissions:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // GET monthly departures (enrolled students who became inactive in a specific month)
+  router.get("/monthly-departures", async (req, res) => {
+    try {
+      const { year, month } = req.query;
+
+      if (!year || !month) {
+        return res.status(400).json({ error: "Year and month are required" });
+      }
+
+      const startDate = new Date(year, month - 1, 1);
+      const endDate = new Date(year, month, 0);
+
+      // Build the match criteria
+      const matchCriteria = {
+        status: "enrolled",
+        activity: "inactive",
+        $or: [
+          { deactivatedAt: { $gte: startDate, $lte: endDate } },
+          {
+            deactivatedAt: { $exists: false },
+            updatedAt: { $gte: startDate, $lte: endDate },
+          },
+        ],
+      };
+
+      // Use the existing aggregation pipeline
+      const students = await studentsCollection
+        .aggregate(buildStudentAggregationPipeline(matchCriteria))
+        .toArray();
+
+      const studentsWithInfo = students.map((student) => {
+        const enrollment = student.academic?.enrollments?.[0] || {};
+
+        return {
+          _id: student._id,
+          name: student.name,
+          class_name: enrollment.class || student.school_year || "Not Assigned",
+          dept_name: enrollment.department || "Not Assigned",
+          session: enrollment.session || "weekdays",
+          deactivatedAt: student.deactivatedAt || student.updatedAt,
+          student_id: student.student_id,
+        };
+      });
+
+      const weekdaysCount = studentsWithInfo.filter(
+        (s) => s.session === "weekdays",
+      ).length;
+      const weekendCount = studentsWithInfo.filter(
+        (s) => s.session === "weekend",
+      ).length;
+
+      res.json({
+        success: true,
+        count: studentsWithInfo.length,
+        weekdays: weekdaysCount,
+        weekend: weekendCount,
+        students: studentsWithInfo,
+      });
+    } catch (error) {
+      console.error("Error fetching monthly departures:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // GET class departure statistics (which classes have most enrolled students leaving)
+  router.get("/class-departure-stats", async (req, res) => {
+    try {
+      const { year, month } = req.query;
+
+      const startDate = new Date(year, month - 1, 1);
+      const endDate = new Date(year, month, 0);
+
+      // Build the match criteria
+      const matchCriteria = {
+        status: "enrolled",
+        activity: "inactive",
+        $or: [
+          { deactivatedAt: { $gte: startDate, $lte: endDate } },
+          {
+            deactivatedAt: { $exists: false },
+            updatedAt: { $gte: startDate, $lte: endDate },
+          },
+        ],
+      };
+
+      // Use the existing aggregation pipeline
+      const students = await studentsCollection
+        .aggregate(buildStudentAggregationPipeline(matchCriteria))
+        .toArray();
+
+      // Group by class name and session
+      const classStats = {};
+
+      students.forEach((student) => {
+        const enrollment = student.academic?.enrollments?.[0] || {};
+        const className =
+          enrollment.class || student.school_year || "Not Assigned";
+        const session = enrollment.session || "weekdays";
+
+        if (!classStats[className]) {
+          classStats[className] = {
+            total: 0,
+            weekdays: 0,
+            weekend: 0,
+          };
+        }
+
+        classStats[className].total++;
+        if (session === "weekdays") {
+          classStats[className].weekdays++;
+        } else if (session === "weekend") {
+          classStats[className].weekend++;
+        }
+      });
+
+      // Convert to array and sort by total
+      const result = Object.entries(classStats)
+        .map(([className, stats]) => ({
+          _id: className,
+          total: stats.total,
+          weekdays: stats.weekdays,
+          weekend: stats.weekend,
+        }))
+        .filter((item) => item._id !== "Not Assigned")
+        .sort((a, b) => b.total - a.total)
+        .slice(0, 5);
+
+      res.json({
+        success: true,
+        classes: result,
+      });
+    } catch (error) {
+      console.error("Error fetching class departure stats:", error);
+      res.status(500).json({ error: error.message });
+    }
   });
 
   return router;
