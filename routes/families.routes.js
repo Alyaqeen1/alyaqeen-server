@@ -500,6 +500,7 @@ module.exports = (
     }
   });
   // Delete family
+  // Delete family - Modified to prevent deletion if active students exist
   router.delete("/:id", async (req, res) => {
     const id = req.params.id;
     if (!ObjectId.isValid(id)) {
@@ -508,15 +509,77 @@ module.exports = (
 
     const query = { _id: new ObjectId(id) };
 
-    // ✅ SOFT DELETE - just update the flag
+    // Get the family with its children
+    const family = await familiesCollection.findOne(query);
+
+    if (!family) {
+      return res.status(404).send({ error: "Family not found" });
+    }
+
+    // Check if family has any active children
+    const childrenUids = family.children || [];
+
+    if (childrenUids.length > 0) {
+      // Check for active students (status: enrolled, hold, approved AND activity: active)
+      const activeStudents = await studentsCollection
+        .find({
+          uid: { $in: childrenUids },
+          $or: [
+            { status: "enrolled" },
+            { status: "hold" },
+            { status: "approved" },
+          ],
+          activity: "active",
+        })
+        .toArray();
+
+      if (activeStudents.length > 0) {
+        return res.status(400).send({
+          error: "Cannot delete family with active students",
+          message:
+            "Please make all students inactive before deleting this family",
+          activeStudentCount: activeStudents.length,
+          activeStudents: activeStudents.map((s) => ({
+            uid: s.uid,
+            name: s.name,
+            status: s.status,
+          })),
+        });
+      }
+    }
+
+    // ✅ SOFT DELETE - only if no active students exist
     const result = await familiesCollection.updateOne(query, {
       $set: {
         isDeleted: true,
       },
     });
-
-    res.send(result);
+    console.log(result);
+    res.send({
+      success: true,
+      message: "Family deleted successfully",
+      result,
+    });
   });
+
+  // router.delete("/:id", async (req, res) => {
+  //   const id = req.params.id;
+  //   if (!ObjectId.isValid(id)) {
+  //     return res.status(400).send({ error: "Invalid ID format" });
+  //   }
+
+  //   const query = { _id: new ObjectId(id) };
+
+  //   // ✅ SOFT DELETE - just update the flag
+  //   const result = await familiesCollection.updateOne(query, {
+  //     $set: {
+  //       isDeleted: true,
+  //     },
+  //   });
+
+  //   res.send(result);
+  // });
+  // update family
   // update family
   router.patch("/update-by-admin/:id", async (req, res) => {
     try {
@@ -546,16 +609,65 @@ module.exports = (
         (child) => !children.includes(child),
       );
 
-      // ✅ FIXED: Check if newly added children belong to OTHER families
+      // ✅ NEW: Check if trying to remove the last active student
+      if (removedChildren.length > 0) {
+        // Get all current active students in this family
+        const currentActiveStudents = await studentsCollection
+          .find({
+            uid: { $in: currentChildren },
+            activity: "active",
+            status: { $in: ["enrolled", "hold", "approved"] },
+          })
+          .toArray();
+
+        const currentActiveCount = currentActiveStudents.length;
+
+        // Get the students being removed
+        const studentsBeingRemoved = await studentsCollection
+          .find({
+            uid: { $in: removedChildren },
+          })
+          .toArray();
+
+        // Count how many active students are being removed
+        const activeRemovedCount = studentsBeingRemoved.filter(
+          (s) =>
+            s.activity === "active" &&
+            ["enrolled", "hold", "approved"].includes(s.status),
+        ).length;
+
+        // Calculate remaining active students after removal
+        const remainingActiveCount = currentActiveCount - activeRemovedCount;
+
+        // If removing would leave 0 active students, prevent it
+        if (remainingActiveCount === 0 && activeRemovedCount > 0) {
+          const activeBeingRemoved = studentsBeingRemoved.filter(
+            (s) =>
+              s.activity === "active" &&
+              ["enrolled", "hold", "approved"].includes(s.status),
+          );
+
+          return res.status(400).json({
+            error: "Cannot remove last active student",
+            message: `Family must have at least one active student. Please make ${activeBeingRemoved.map((s) => s.name).join(", ")} inactive before removing.`,
+            lastActiveStudents: activeBeingRemoved.map((s) => ({
+              uid: s.uid,
+              name: s.name,
+            })),
+            remainingActiveCount: 0,
+          });
+        }
+      }
+
+      // ✅ Check if newly added children belong to OTHER families
       if (newlyAddedChildren.length > 0) {
-        // Only consider it a conflict if they have a NON-EMPTY parentUid that's DIFFERENT from this family
         const existingStudents = await studentsCollection
           .find({
             uid: { $in: newlyAddedChildren },
             $and: [
               { parentUid: { $exists: true } },
-              { parentUid: { $ne: "" } }, // Must have actual parentUid (not empty)
-              { parentUid: { $ne: familyDoc.uid } }, // And it's different from this family
+              { parentUid: { $ne: "" } },
+              { parentUid: { $ne: familyDoc.uid } },
             ],
           })
           .toArray();
@@ -592,13 +704,13 @@ module.exports = (
         },
       });
 
-      // Handle removals
-      if (removedChildren.length > 0) {
-        const removeResult = await studentsCollection.updateMany(
-          { uid: { $in: removedChildren } },
-          { $set: { email: "", family_name: "", parentUid: "" } },
-        );
-      }
+      // Handle removals - COMMENTED OUT (no data clearing)
+      // if (removedChildren.length > 0) {
+      //   const removeResult = await studentsCollection.updateMany(
+      //     { uid: { $in: removedChildren } },
+      //     { $set: { email: "", family_name: "", parentUid: "" } },
+      //   );
+      // }
 
       // Handle additions
       if (newlyAddedChildren.length > 0) {

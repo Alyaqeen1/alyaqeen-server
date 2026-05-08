@@ -1075,254 +1075,106 @@ module.exports = (
       });
     }
   });
-  // router.post("/generate-student-report/:id", async (req, res) => {
-  //   try {
-  //     const { id } = req.params;
-
-  //     if (!ObjectId.isValid(id)) {
-  //       return res.status(400).json({
-  //         success: false,
-  //         error: "Invalid student ID format",
-  //       });
-  //     }
-
-  //     // 1️⃣ Fetch student using shared aggregation pipeline
-  //     const students = await studentsCollection
-  //       .aggregate(buildStudentAggregationPipeline({ _id: new ObjectId(id) }))
-  //       .toArray();
-
-  //     if (!students.length) {
-  //       return res.status(404).json({
-  //         success: false,
-  //         error: "Student not found",
-  //       });
-  //     }
-
-  //     const studentData = students[0];
-  //     const student_id = studentData._id.toString();
-
-  //     // 2. Fetch attendance data
-  //     const attendanceSummary = await attendancesCollection
-  //       .aggregate([
-  //         {
-  //           $match: {
-  //             student_id: student_id,
-  //             attendance: "student",
-  //           },
-  //         },
-  //         {
-  //           $group: {
-  //             _id: "$status",
-  //             count: { $sum: 1 },
-  //           },
-  //         },
-  //         {
-  //           $group: {
-  //             _id: null,
-  //             total: { $sum: "$count" },
-  //             statusCounts: {
-  //               $push: {
-  //                 k: "$_id",
-  //                 v: "$count",
-  //               },
-  //             },
-  //           },
-  //         },
-  //         {
-  //           $project: {
-  //             _id: 0,
-  //             total: 1,
-  //             statusCounts: {
-  //               $arrayToObject: "$statusCounts",
-  //             },
-  //           },
-  //         },
-  //         {
-  //           $project: {
-  //             total: 1,
-  //             present: { $ifNull: ["$statusCounts.present", 0] },
-  //             absent: { $ifNull: ["$statusCounts.absent", 0] },
-  //             late: { $ifNull: ["$statusCounts.late", 0] },
-  //           },
-  //         },
-  //       ])
-  //       .toArray();
-
-  //     const attendanceData =
-  //       attendanceSummary.length > 0
-  //         ? attendanceSummary[0]
-  //         : {
-  //             total: 0,
-  //             present: 0,
-  //             absent: 0,
-  //             late: 0,
-  //           };
-
-  //     // 3. Fetch merit data (SIMPLIFIED VERSION)
-  //     const meritRecords = await meritsCollection
-  //       .find({
-  //         student_id: student_id,
-  //       })
-  //       .sort({ date: -1 })
-  //       .limit(10)
-  //       .toArray();
-
-  //     // Calculate merit summary
-  //     const totalMeritPoints = meritRecords.reduce(
-  //       (sum, record) => sum + (record.merit_points || 0),
-  //       0,
-  //     );
-  //     const totalAwards = meritRecords.length;
-  //     const averagePoints =
-  //       totalAwards > 0 ? totalMeritPoints / totalAwards : 0;
-
-  //     // Calculate behavior breakdown
-  //     const behaviorBreakdown = {};
-  //     meritRecords.forEach((record) => {
-  //       const behavior = record.behavior || "Other";
-  //       if (!behaviorBreakdown[behavior]) {
-  //         behaviorBreakdown[behavior] = {
-  //           count: 0,
-  //           totalPoints: 0,
-  //           averagePoints: 0,
-  //         };
-  //       }
-  //       behaviorBreakdown[behavior].count++;
-  //       behaviorBreakdown[behavior].totalPoints += record.merit_points || 0;
-  //       behaviorBreakdown[behavior].averagePoints =
-  //         behaviorBreakdown[behavior].totalPoints /
-  //         behaviorBreakdown[behavior].count;
-  //     });
-
-  //     const meritSummary = {
-  //       totalMeritPoints,
-  //       totalAwards,
-  //       averagePoints,
-  //       recentMerits: meritRecords.slice(0, 6), // Get first 6 (most recent)
-  //       behaviorBreakdown,
-  //     };
-
-  //     // 4. Calculate years range (from joining year to current year)
-  //     const currentYear = new Date().getFullYear();
-  //     let startingYear = currentYear;
-
-  //     if (studentData.startingDate) {
-  //       const startDate = new Date(studentData.startingDate);
-  //       startingYear = startDate.getFullYear();
-  //     }
-
-  //     // 5. Fetch lessons covered data for EACH YEAR using buildYearlySummaryPipeline
-  //     const allYearsLessonsData = [];
-
-  //     for (let year = startingYear; year <= currentYear; year++) {
-  //       // Get yearly data using buildYearlySummaryPipeline
-  //       const yearlyPipeline = buildYearlySummaryPipeline(year.toString());
-
-  //       // Get ALL students data for this year
-  //       const allYearlyData = await lessonsCoveredCollection
-  //         .aggregate(yearlyPipeline)
-  //         .toArray();
-
-  //       // Filter to get ONLY this student's data
-  //       const studentYearlyData = allYearlyData.filter((item) => {
-  //         // Check if this is our student (student_id might be in different format)
-  //         if (item.student_id && item.student_id.toString() === student_id) {
-  //           return true;
-  //         }
-  //         // Also check student_name if student_id doesn't match
-  //         if (item.student_name === studentData.name) {
-  //           return true;
-  //         }
-  //         return false;
-  //       });
-
-  //       if (studentYearlyData.length > 0) {
-  //         // Take the first matching record (should only be one per student per year)
-  //         const yearData = {
-  //           ...studentYearlyData[0],
-  //           year: year.toString(),
-  //         };
-  //         allYearsLessonsData.push(yearData);
-  //       } else {
-  //         // Add empty year data if no records found
-  //         allYearsLessonsData.push({
-  //           year: year.toString(),
-  //           progress: null,
-  //           months_with_ending: 0,
-  //           months_with_both: 0,
-  //         });
-  //       }
-  //     }
-
-  //     // 6. Generate PDF with comprehensive data INCLUDING MERIT DATA
-  //     const pdfResult = await generateStudentReport(studentData, {
-  //       attendance: attendanceData,
-  //       lessons: allYearsLessonsData,
-  //       merits: meritSummary, // Add merit data here
-  //       startingYear: startingYear,
-  //       currentYear: currentYear,
-  //     });
-
-  //     // 7. Upload to Cloudinary
-  //     const cloudinaryUrl = await uploadToCloudinary(
-  //       pdfResult.pdfBuffer,
-  //       pdfResult.fileName,
-  //     );
-
-  //     // 8. Update student document
-  //     await studentsCollection.updateOne(
-  //       { _id: new ObjectId(id) },
-  //       {
-  //         $set: {
-  //           reportPdf: cloudinaryUrl,
-  //         },
-  //       },
-  //     );
-
-  //     // 9. Return response
-  //     res.status(200).json({
-  //       success: true,
-  //       message: `Comprehensive yearly report generated successfully (${startingYear}-${currentYear})`,
-  //       reportUrl: cloudinaryUrl,
-  //       reportId: pdfResult.reportId,
-  //       studentId: id,
-  //       studentName: studentData.name,
-  //       yearsCovered: {
-  //         from: startingYear,
-  //         to: currentYear,
-  //         totalYears: currentYear - startingYear + 1,
-  //       },
-  //       dataSummary: {
-  //         attendanceRecords: attendanceData.total,
-  //         yearsWithLessonsData: allYearsLessonsData.filter((d) => d.progress)
-  //           .length,
-  //         totalYearsCovered: allYearsLessonsData.length,
-  //         totalMeritPoints: meritSummary.totalMeritPoints,
-  //         totalMeritAwards: meritSummary.totalAwards,
-  //       },
-  //     });
-  //   } catch (error) {
-  //     console.error("Comprehensive report generation error:", error);
-  //     res.status(500).json({
-  //       success: false,
-  //       error: "Failed to generate comprehensive report",
-  //       details:
-  //         process.env.NODE_ENV === "development" ? error.message : undefined,
-  //     });
-  //   }
-  // });
   router.patch("/update-activity/:id", async (req, res) => {
     const studentId = req.params.id;
     if (!ObjectId.isValid(studentId)) {
       return res.status(400).send({ message: "Invalid student ID format" });
     }
+
     const query = { _id: new ObjectId(studentId) };
     const { activity } = req.body;
+
+    // Get the student first to check current activity and get family info
+    const student = await studentsCollection.findOne(query);
+
+    if (!student) {
+      return res.status(404).send({ message: "Student not found" });
+    }
+
+    // If activating an inactive student (changing from inactive to active)
+    const isActivating =
+      student.activity === "inactive" && activity === "active";
+    const isDeactivating =
+      student.activity === "active" && activity === "inactive";
+
     const updatedDoc = {
       $set: { activity },
     };
+
     const result = await studentsCollection.updateOne(query, updatedDoc);
-    res.send(result);
+
+    // If activating the student, restore the family and add student back
+    if (isActivating && student.email) {
+      // Find the family by email
+      const family = await familiesCollection.findOne({
+        email: student.email,
+      });
+
+      if (family) {
+        // Prepare update object for family
+        const familyUpdate = {
+          $set: {},
+          $addToSet: {}, // Use $addToSet to avoid duplicates
+        };
+
+        // Always add student uid back to children array (if not already there)
+        familyUpdate.$addToSet.children = student.uid;
+
+        // If family was deleted, restore it
+        if (family.isDeleted === true) {
+          familyUpdate.$set.isDeleted = false;
+        }
+
+        // Update the family
+        await familiesCollection.updateOne(
+          { email: student.email },
+          familyUpdate,
+        );
+      } else {
+        console.log(`No family found with email: ${student.email}`);
+      }
+    }
+
+    // If deactivating a student, check if we need to mark family as deleted
+    if (isDeactivating && student.email) {
+      // Find the family by email
+      const family = await familiesCollection.findOne({
+        email: student.email,
+      });
+
+      if (family) {
+        // Check if there are any other active students in this family
+        const otherActiveStudents = await studentsCollection.countDocuments({
+          email: student.email, // Same family email
+          activity: "active",
+          _id: { $ne: new ObjectId(studentId) }, // Exclude current student
+        });
+
+        // If no other active students, mark family as deleted
+        if (otherActiveStudents === 0) {
+          await familiesCollection.updateOne(
+            { email: student.email },
+            {
+              $set: {
+                isDeleted: true,
+              },
+            },
+          );
+          console.log(
+            `Family ${family.name} marked as deleted - no active students remaining`,
+          );
+        }
+      }
+    }
+
+    res.send({
+      ...result,
+      message: isActivating
+        ? "Student activated, added to family, and family restored"
+        : isDeactivating
+          ? "Student deactivated"
+          : "Student activity updated",
+    });
   });
 
   // Update student status
