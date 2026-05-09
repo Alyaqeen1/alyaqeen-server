@@ -609,7 +609,7 @@ module.exports = (
         (child) => !children.includes(child),
       );
 
-      // ✅ NEW: Check if trying to remove the last active student
+      // ✅ Check if trying to remove the last active student
       if (removedChildren.length > 0) {
         // Get all current active students in this family
         const currentActiveStudents = await studentsCollection
@@ -659,9 +659,10 @@ module.exports = (
         }
       }
 
-      // ✅ Check if newly added children belong to OTHER families
+      // ✅ Check if newly added children belong to ANOTHER ACTIVE family
       if (newlyAddedChildren.length > 0) {
-        const existingStudents = await studentsCollection
+        // Get all students that have a parentUid different from current family
+        const studentsWithParent = await studentsCollection
           .find({
             uid: { $in: newlyAddedChildren },
             $and: [
@@ -671,6 +672,28 @@ module.exports = (
             ],
           })
           .toArray();
+
+        // Filter to only those whose parent family is ACTIVE (not deleted)
+        // AND the student is still in that family's children array
+        const existingStudents = [];
+        for (const student of studentsWithParent) {
+          // Find the family this student belongs to
+          const otherFamily = await familiesCollection.findOne({
+            uid: student.parentUid,
+          });
+
+          // Check if the other family exists, is NOT deleted, AND the student is still in their children array
+          if (otherFamily && otherFamily.isDeleted !== true) {
+            // Check if this student's UID is still in the other family's children array
+            const isStillInOtherFamily = otherFamily.children?.includes(
+              student.uid,
+            );
+
+            if (isStillInOtherFamily) {
+              existingStudents.push(student);
+            }
+          }
+        }
 
         if (existingStudents.length > 0) {
           const conflictedStudents = existingStudents.map((student) => ({
@@ -704,17 +727,12 @@ module.exports = (
         },
       });
 
-      // Handle removals - COMMENTED OUT (no data clearing)
-      // if (removedChildren.length > 0) {
-      //   const removeResult = await studentsCollection.updateMany(
-      //     { uid: { $in: removedChildren } },
-      //     { $set: { email: "", family_name: "", parentUid: "" } },
-      //   );
-      // }
+      // Handle removals - NO data clearing (keep student data for history)
+      // Students are only removed from family.children array, their data remains intact
 
-      // Handle additions
+      // Handle additions - Update student with new family info
       if (newlyAddedChildren.length > 0) {
-        const addResult = await studentsCollection.updateMany(
+        await studentsCollection.updateMany(
           { uid: { $in: newlyAddedChildren } },
           {
             $set: {

@@ -1124,16 +1124,12 @@ module.exports = (
       if (family) {
         // Prepare update object for family
         const familyUpdate = {
-          $set: {},
-          $addToSet: {}, // Use $addToSet to avoid duplicates
+          $addToSet: { children: student.uid }, // Add student back to children array
         };
 
-        // Always add student uid back to children array (if not already there)
-        familyUpdate.$addToSet.children = student.uid;
-
-        // If family was deleted, restore it
+        // If family was deleted, restore it (ONLY SET TO FALSE, NEVER SET TO TRUE)
         if (family.isDeleted === true) {
-          familyUpdate.$set.isDeleted = false;
+          familyUpdate.$set = { isDeleted: false };
         }
 
         // Update the family
@@ -1146,42 +1142,13 @@ module.exports = (
       }
     }
 
-    // If deactivating a student, check if we need to mark family as deleted
-    if (isDeactivating && student.email) {
-      // Find the family by email
-      const family = await familiesCollection.findOne({
-        email: student.email,
-      });
-
-      if (family) {
-        // Check if there are any other active students in this family
-        const otherActiveStudents = await studentsCollection.countDocuments({
-          email: student.email, // Same family email
-          activity: "active",
-          _id: { $ne: new ObjectId(studentId) }, // Exclude current student
-        });
-
-        // If no other active students, mark family as deleted
-        if (otherActiveStudents === 0) {
-          await familiesCollection.updateOne(
-            { email: student.email },
-            {
-              $set: {
-                isDeleted: true,
-              },
-            },
-          );
-          console.log(
-            `Family ${family.name} marked as deleted - no active students remaining`,
-          );
-        }
-      }
-    }
+    // ✅ COMPLETELY REMOVED: The code that marks family as deleted
+    // NEVER automatically set isDeleted to true
 
     res.send({
       ...result,
       message: isActivating
-        ? "Student activated, deactivatedAt removed, family restored"
+        ? "Student activated, deactivatedAt removed, family restored (if it was deleted)"
         : isDeactivating
           ? "Student deactivated with deactivatedAt timestamp"
           : "Student activity updated",
