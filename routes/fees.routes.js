@@ -437,6 +437,344 @@ module.exports = (
     }
   });
 
+  // GET fee summary for a specific month/year
+  router.get("/fee-summary/:month/:year", async (req, res) => {
+    try {
+      const { month, year } = req.params;
+      const monthNum = parseInt(month);
+      const yearNum = parseInt(year);
+      const monthStr = monthNum.toString().padStart(2, "0");
+
+      if (isNaN(monthNum) || monthNum < 1 || monthNum > 12) {
+        return res.status(400).json({ error: "Invalid month" });
+      }
+
+      // Get families with students that have status: enrolled, hold, or approved
+      const families = await familiesCollection
+        .aggregate([
+          {
+            $match: {
+              isDeleted: { $ne: true },
+            },
+          },
+          {
+            $lookup: {
+              from: "students",
+              let: { childUids: "$children" },
+              pipeline: [
+                {
+                  $match: {
+                    $expr: {
+                      $and: [
+                        { $in: ["$uid", "$$childUids"] },
+                        { $in: ["$status", ["enrolled", "hold", "approved"]] },
+                      ],
+                    },
+                  },
+                },
+                {
+                  $project: {
+                    _id: 1,
+                    uid: 1,
+                    name: 1,
+                    startingDate: 1,
+                    monthly_fee: 1,
+                    activity: 1,
+                    status: 1,
+                  },
+                },
+              ],
+              as: "childrenDocs",
+            },
+          },
+          {
+            $match: {
+              "childrenDocs.0": { $exists: true },
+            },
+          },
+        ])
+        .toArray();
+
+      // Get ALL fee records for these families
+      const familyIds = families.map((f) => f._id.toString());
+
+      const allFees = await feesCollection
+        .find({
+          familyId: { $in: familyIds },
+          paymentType: {
+            $in: ["monthly", "monthlyOnHold", "admission", "admissionOnHold"],
+          },
+        })
+        .toArray();
+
+      // Create fee map
+      const feesByFamily = new Map();
+      for (const fee of allFees) {
+        if (!feesByFamily.has(fee.familyId)) {
+          feesByFamily.set(fee.familyId, []);
+        }
+        feesByFamily.get(fee.familyId).push(fee);
+      }
+
+      let totalExpected = 0;
+      let totalReceived = 0;
+      let zeroFeeFamiliesCount = 0;
+      const paidFamilies = [];
+      const partiallyPaidFamilies = [];
+      const unpaidFamilies = [];
+
+      // Process each family
+      for (const family of families) {
+        const discount = family.discount || 0;
+
+        // Calculate expected amount for this family
+        let familyExpected = 0;
+        for (const student of family.childrenDocs) {
+          const monthlyFee = student.monthly_fee || 50;
+          const discountedFee =
+            discount > 0
+              ? monthlyFee - (monthlyFee * discount) / 100
+              : monthlyFee;
+          familyExpected += discountedFee;
+        }
+
+        const familyData = {
+          familyId: family._id,
+          name: family.name,
+          email: family.email,
+          expectedAmount: familyExpected,
+          paidAmount: 0,
+          remainingAmount: familyExpected,
+          discount: discount,
+          studentCount: family.childrenDocs.length,
+          students: family.childrenDocs.map((s) => ({
+            id: s._id,
+            name: s.name,
+            activity: s.activity,
+            status: s.status,
+            monthly_fee: s.monthly_fee || 50,
+          })),
+        };
+
+        // Handle zero-fee families
+        if (familyExpected === 0) {
+          zeroFeeFamiliesCount++;
+          unpaidFamilies.push({
+            ...familyData,
+            status: "zero_fee",
+            isZeroFee: true,
+          });
+          continue;
+        }
+
+        totalExpected += familyExpected;
+
+        // Get fees for this family
+        const familyFees = feesByFamily.get(family._id.toString()) || [];
+        let monthPaid = 0;
+
+        // Check payment for selected month
+        for (const fee of familyFees) {
+          for (const student of fee.students || []) {
+            // Monthly fees - CAN show partial
+            if (
+              fee.paymentType === "monthly" ||
+              fee.paymentType === "monthlyOnHold"
+            ) {
+              const monthPayment = student.monthsPaid?.find(
+                (mp) => mp.month === monthStr && mp.year === yearNum,
+              );
+              if (monthPayment && monthPayment.paid) {
+                monthPaid += monthPayment.paid;
+              }
+            }
+
+            // Admission fees - ALWAYS fully paid for the joining month (no partial)
+            if (
+              fee.paymentType === "admission" ||
+              fee.paymentType === "admissionOnHold"
+            ) {
+              const joiningMonth = student.joiningMonth
+                ?.toString()
+                .padStart(2, "0");
+              const joiningYear = student.joiningYear;
+
+              if (joiningMonth === monthStr && joiningYear === yearNum) {
+                // Calculate monthly portion (total paid minus admission fee)
+                let totalStudentPayments = student.subtotal || 0;
+                if (student.payments && Array.isArray(student.payments)) {
+                  const paymentsSum = student.payments.reduce(
+                    (sum, p) => sum + (p.amount || 0),
+                    0,
+                  );
+                  if (paymentsSum > totalStudentPayments) {
+                    totalStudentPayments = paymentsSum;
+                  }
+                }
+                const admissionFee = student.admissionFee || 20;
+                const monthlyPortion = Math.max(
+                  0,
+                  totalStudentPayments - admissionFee,
+                );
+
+                // For admission, if ANY payment was made for the monthly portion, mark as fully paid
+                if (monthlyPortion > 0) {
+                  const expectedMonthlyFee =
+                    student.discountedFee || student.monthlyFee || 50;
+                  monthPaid += expectedMonthlyFee; // Add full amount to mark as paid (not partial)
+                }
+              }
+            }
+          }
+        }
+
+        totalReceived += monthPaid;
+        familyData.paidAmount = monthPaid;
+        familyData.remainingAmount = Math.max(0, familyExpected - monthPaid);
+
+        if (monthPaid >= familyExpected) {
+          paidFamilies.push(familyData);
+        } else if (monthPaid > 0 && monthPaid < familyExpected) {
+          // This will only happen for monthly payments
+          // Admission payments always add full amount, so they won't trigger partial
+          partiallyPaidFamilies.push(familyData);
+        } else {
+          unpaidFamilies.push(familyData);
+        }
+      }
+
+      const totalOutstanding = totalExpected - totalReceived;
+
+      res.json({
+        success: true,
+        month: monthNum,
+        year: yearNum,
+        monthName: new Date(yearNum, monthNum - 1).toLocaleString("default", {
+          month: "long",
+        }),
+        summary: {
+          totalExpected: parseFloat(totalExpected.toFixed(2)),
+          totalReceived: parseFloat(totalReceived.toFixed(2)),
+          totalOutstanding: parseFloat(totalOutstanding.toFixed(2)),
+          totalFamilies: families.length,
+          zeroFeeFamiliesCount: zeroFeeFamiliesCount,
+          paidFamiliesCount: paidFamilies.length,
+          partiallyPaidFamiliesCount: partiallyPaidFamilies.length,
+          unpaidFamiliesCount: unpaidFamilies.length - zeroFeeFamiliesCount,
+          collectionRate:
+            totalExpected > 0
+              ? parseFloat(((totalReceived / totalExpected) * 100).toFixed(1))
+              : 0,
+        },
+        families: {
+          paid: paidFamilies,
+          partiallyPaid: partiallyPaidFamilies,
+          unpaid: unpaidFamilies.filter((f) => !f.isZeroFee),
+          zeroFee: unpaidFamilies.filter((f) => f.isZeroFee),
+        },
+      });
+    } catch (error) {
+      console.error("Error in fee summary:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+  // DEBUG route - Find which families are excluded from fee summary
+  router.get("/debug-missing-families", async (req, res) => {
+    try {
+      // Get ALL families not deleted
+      const allFamilies = await familiesCollection
+        .find({ isDeleted: { $ne: true } })
+        .toArray();
+
+      console.log(`Total families not deleted: ${allFamilies.length}`);
+
+      const missingFamilies = [];
+      const includedFamilies = [];
+
+      for (const family of allFamilies) {
+        // Get students for this family using the SAME logic as fee summary
+        const students = await studentsCollection
+          .find({
+            uid: { $in: family.children || [] },
+            status: { $in: ["enrolled", "hold", "approved"] },
+          })
+          .toArray();
+
+        const familyData = {
+          familyId: family._id,
+          familyName: family.name,
+          email: family.email,
+          totalStudentsInFamily: family.children?.length || 0,
+          studentsFound: students.length,
+          studentDetails: students.map((s) => ({
+            name: s.name,
+            status: s.status,
+            activity: s.activity,
+            uid: s.uid,
+          })),
+        };
+
+        if (students.length === 0) {
+          // This family is EXCLUDED from fee summary
+          missingFamilies.push(familyData);
+        } else {
+          // This family is INCLUDED in fee summary
+          includedFamilies.push(familyData);
+        }
+      }
+
+      // Also check families that have students but with wrong status
+      const familiesWithWrongStatus = [];
+      for (const family of allFamilies) {
+        const studentsWithWrongStatus = await studentsCollection
+          .find({
+            uid: { $in: family.children || [] },
+            status: { $nin: ["enrolled", "hold", "approved"] },
+          })
+          .toArray();
+
+        if (studentsWithWrongStatus.length > 0) {
+          familiesWithWrongStatus.push({
+            familyId: family._id,
+            familyName: family.name,
+            studentsWithWrongStatus: studentsWithWrongStatus.map((s) => ({
+              name: s.name,
+              status: s.status,
+              activity: s.activity,
+            })),
+          });
+        }
+      }
+
+      res.json({
+        summary: {
+          totalFamilies: allFamilies.length,
+          includedInFeeSummary: includedFamilies.length,
+          excludedFromFeeSummary: missingFamilies.length,
+          familiesWithWrongStatusStudents: familiesWithWrongStatus.length,
+        },
+        includedFamilies: includedFamilies.map((f) => ({
+          id: f.familyId,
+          name: f.familyName,
+          studentCount: f.studentsFound,
+        })),
+        excludedFamilies: missingFamilies.map((f) => ({
+          id: f.familyId,
+          name: f.familyName,
+          totalStudentsInFamily: f.totalStudentsInFamily,
+          studentsFound: f.studentsFound,
+          reason:
+            f.totalStudentsInFamily === 0
+              ? "No students in family.children array"
+              : `Has ${f.totalStudentsInFamily} student(s) but none with status enrolled/hold/approved`,
+        })),
+        familiesWithWrongStatus: familiesWithWrongStatus,
+      });
+    } catch (error) {
+      console.error("Debug error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
   router.get("/:id", async (req, res) => {
     const id = req.params.id;
     const query = { _id: new ObjectId(id) };
