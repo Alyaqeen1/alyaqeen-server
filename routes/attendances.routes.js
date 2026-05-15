@@ -11,6 +11,7 @@ module.exports = (
   teachersCollection,
   classesCollection,
   feesCollection,
+  meritsCollection,
 ) => {
   router.get("/", async (req, res) => {
     const result = await attendancesCollection.find().toArray();
@@ -69,10 +70,9 @@ module.exports = (
   // In your attendance routes
   router.get("/filtered", async (req, res) => {
     try {
-      const { studentIds, startDate, endDate, classId } = req.query; // Add classId
+      const { studentIds, startDate, endDate, classId } = req.query;
 
       if (!studentIds || !startDate || !endDate || !classId) {
-        // Require classId
         return res.status(400).send({
           message: "studentIds, startDate, endDate, and classId are required",
         });
@@ -80,10 +80,11 @@ module.exports = (
 
       const studentIdsArray = studentIds.split(",");
 
+      // Get attendance records
       const attendance = await attendancesCollection
         .find({
           student_id: { $in: studentIdsArray },
-          class_id: classId, // Add class filter
+          class_id: classId,
           date: {
             $gte: startDate,
             $lte: endDate,
@@ -92,7 +93,92 @@ module.exports = (
         })
         .toArray();
 
-      res.send(attendance);
+      // Get merit/demerit records for the same students and date range
+      const merits = await meritsCollection
+        .find({
+          student_id: { $in: studentIdsArray },
+          date: {
+            $gte: startDate,
+            $lte: endDate,
+          },
+        })
+        .toArray();
+
+      // Calculate statistics per student
+      const studentStats = {};
+      merits.forEach((merit) => {
+        const studentId = merit.student_id;
+        if (!studentStats[studentId]) {
+          studentStats[studentId] = {
+            totalPositiveMerits: 0,
+            totalDemerits: 0,
+            positiveCount: 0,
+            demeritCount: 0,
+            netPoints: 0,
+            recentMerits: [],
+          };
+        }
+
+        const points = merit.merit_points || 0;
+        studentStats[studentId].netPoints += points;
+
+        if (points > 0) {
+          studentStats[studentId].totalPositiveMerits += points;
+          studentStats[studentId].positiveCount++;
+          // Store recent positive merits
+          studentStats[studentId].recentMerits.push({
+            behavior: merit.behavior,
+            points: points,
+            date: merit.date,
+          });
+        } else if (points < 0) {
+          studentStats[studentId].totalDemerits += Math.abs(points);
+          studentStats[studentId].demeritCount++;
+          // Store recent demerits
+          studentStats[studentId].recentDemerits =
+            studentStats[studentId].recentDemerits || [];
+          studentStats[studentId].recentDemerits.push({
+            incident: merit.incident,
+            points: points,
+            date: merit.date,
+          });
+        }
+      });
+
+      // Sort recent merits/demerits by date (most recent first)
+      Object.keys(studentStats).forEach((studentId) => {
+        if (studentStats[studentId].recentMerits) {
+          studentStats[studentId].recentMerits
+            .sort((a, b) => new Date(b.date) - new Date(a.date))
+            .slice(0, 5); // Keep only last 5
+        }
+        if (studentStats[studentId].recentDemerits) {
+          studentStats[studentId].recentDemerits
+            .sort((a, b) => new Date(b.date) - new Date(a.date))
+            .slice(0, 5);
+        }
+      });
+
+      // Combine attendance with merit stats
+      const result = {
+        attendance: attendance,
+        meritStats: studentStats,
+        summary: {
+          totalStudents: studentIdsArray.length,
+          dateRange: { startDate, endDate },
+          totalPositiveMeritsAll: Object.values(studentStats).reduce(
+            (sum, stats) => sum + stats.totalPositiveMerits,
+            0,
+          ),
+          totalDemeritsAll: Object.values(studentStats).reduce(
+            (sum, stats) => sum + stats.totalDemerits,
+            0,
+          ),
+          studentsWithMerits: Object.keys(studentStats).length,
+        },
+      };
+
+      res.send(result);
     } catch (error) {
       console.error("Error fetching filtered attendance:", error);
       res.status(500).send({ message: "Error fetching attendance data" });
