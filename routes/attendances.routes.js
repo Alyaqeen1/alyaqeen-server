@@ -80,7 +80,7 @@ module.exports = (
 
       const studentIdsArray = studentIds.split(",");
 
-      // Get attendance records
+      // Get attendance records (still filtered by date)
       const attendance = await attendancesCollection
         .find({
           student_id: { $in: studentIdsArray },
@@ -93,14 +93,11 @@ module.exports = (
         })
         .toArray();
 
-      // Get merit/demerit records for the same students and date range
+      // ✅ REMOVE date filtering for merits - get ALL TIME merits
       const merits = await meritsCollection
         .find({
           student_id: { $in: studentIdsArray },
-          date: {
-            $gte: startDate,
-            $lte: endDate,
-          },
+          // ❌ Remove the date filter completely
         })
         .toArray();
 
@@ -115,7 +112,6 @@ module.exports = (
             positiveCount: 0,
             demeritCount: 0,
             netPoints: 0,
-            recentMerits: [],
           };
         }
 
@@ -125,37 +121,9 @@ module.exports = (
         if (points > 0) {
           studentStats[studentId].totalPositiveMerits += points;
           studentStats[studentId].positiveCount++;
-          // Store recent positive merits
-          studentStats[studentId].recentMerits.push({
-            behavior: merit.behavior,
-            points: points,
-            date: merit.date,
-          });
         } else if (points < 0) {
           studentStats[studentId].totalDemerits += Math.abs(points);
           studentStats[studentId].demeritCount++;
-          // Store recent demerits
-          studentStats[studentId].recentDemerits =
-            studentStats[studentId].recentDemerits || [];
-          studentStats[studentId].recentDemerits.push({
-            incident: merit.incident,
-            points: points,
-            date: merit.date,
-          });
-        }
-      });
-
-      // Sort recent merits/demerits by date (most recent first)
-      Object.keys(studentStats).forEach((studentId) => {
-        if (studentStats[studentId].recentMerits) {
-          studentStats[studentId].recentMerits
-            .sort((a, b) => new Date(b.date) - new Date(a.date))
-            .slice(0, 5); // Keep only last 5
-        }
-        if (studentStats[studentId].recentDemerits) {
-          studentStats[studentId].recentDemerits
-            .sort((a, b) => new Date(b.date) - new Date(a.date))
-            .slice(0, 5);
         }
       });
 
