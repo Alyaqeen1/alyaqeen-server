@@ -11,6 +11,19 @@ const DISABLED_FAMILY_EMAILS = [
 // Check payment status per STUDENT, not per family
 // Check payment status per STUDENT, not per family
 // Get ALL students from family collection and check their payment status
+// Helper function to check if student is currently enrolled
+const isStudentCurrentlyEnrolled = (student, currentDate) => {
+  // Check status and activity
+  if (student.status !== "enrolled") return false;
+  if (student.activity !== "active") return false;
+
+  // Check if starting date is in the future
+  if (!student.startingDate) return false;
+  const startingDate = new Date(student.startingDate);
+  if (startingDate > currentDate) return false;
+
+  return true;
+};
 const checkPaymentStatus = async (familyEmail, currentMonth, currentYear) => {
   const client = new MongoClient(MONGO_URI);
   try {
@@ -29,11 +42,21 @@ const checkPaymentStatus = async (familyEmail, currentMonth, currentYear) => {
 
     // Get ALL students for this family
     const studentUids = family.children;
-    const students = await studentsCollection
-      .find({
-        uid: { $in: studentUids },
-      })
+    const allStudents = await studentsCollection
+      .find({ uid: { $in: studentUids } })
       .toArray();
+
+    const currentDate = new Date();
+    const students = allStudents.filter((student) =>
+      isStudentCurrentlyEnrolled(student, currentDate),
+    );
+
+    if (students.length === 0) {
+      console.log(
+        `ℹ️ Family ${familyEmail} has no enrolled students - skipping`,
+      );
+      return { allPaid: true, unpaidStudents: [], enrolledStudents: [] };
+    }
 
     console.log(
       `👨‍👩‍👧‍👦 Family ${familyEmail} has ${students.length} students:`,
@@ -194,19 +217,45 @@ const checkPaymentStatus = async (familyEmail, currentMonth, currentYear) => {
   }
 };
 // Get all families who need reminders
+// Get all families who need reminders
 const getFamilies = async () => {
   const client = new MongoClient(MONGO_URI);
   try {
     await client.connect();
     const db = client.db(DB_NAME);
     const familiesCollection = db.collection("families");
+    const studentsCollection = db.collection("students"); // ← MISSING THIS
 
-    // Get ONLY the test family by email
-    const families = await familiesCollection.find({}).toArray();
+    // Get ALL families first
+    const allFamilies = await familiesCollection.find({}).toArray(); // ← FIXED: use allFamilies
 
-    console.log(`🧪 TEST MODE - Found ${families.length} test families`);
+    const currentDate = new Date();
+    const familiesWithEnrolledStudents = [];
 
-    return families.map((family) => ({
+    for (const family of allFamilies) {
+      // ← FIXED: use allFamilies
+      const studentUids = family.children || [];
+      const students = await studentsCollection
+        .find({ uid: { $in: studentUids } })
+        .toArray();
+      const hasEnrolledStudent = students.some(
+        (student) =>
+          student.status === "enrolled" &&
+          student.activity === "active" &&
+          student.startingDate &&
+          new Date(student.startingDate) <= currentDate,
+      );
+
+      if (hasEnrolledStudent) {
+        familiesWithEnrolledStudents.push(family);
+      }
+    }
+
+    console.log(
+      `📊 Found ${familiesWithEnrolledStudents.length} families with enrolled students`,
+    );
+
+    return familiesWithEnrolledStudents.map((family) => ({
       to: family.email,
       name: family.name || family.fatherName,
       studentName: "your child(ren)",
@@ -221,7 +270,7 @@ const getFamilies = async () => {
 
 const sendReminderEmail = async ({ to, name, studentName }, reminderType) => {
   if (DISABLED_FAMILY_EMAILS.includes(to)) {
-    console.log(`🚫 EMAIL BLOCKED: ${parentName} <${to}>`);
+    console.log(`🚫 EMAIL BLOCKED: ${name} <${to}>`);
     return; // Exit without sending
   }
 
