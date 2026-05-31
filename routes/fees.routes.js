@@ -438,6 +438,7 @@ module.exports = (
   });
 
   // GET fee summary for a specific month/year
+  // GET fee summary for a specific month/year
   router.get("/fee-summary/:month/:year", async (req, res) => {
     try {
       const { month, year } = req.params;
@@ -449,7 +450,11 @@ module.exports = (
         return res.status(400).json({ error: "Invalid month" });
       }
 
-      // Get families with students that have status: enrolled, hold, or approved
+      // Create the target month's date range for comparison
+      const targetMonthStart = new Date(yearNum, monthNum - 1, 1);
+      const targetMonthEnd = new Date(yearNum, monthNum, 0); // Last day of target month
+
+      // First, get ALL families with their students
       const families = await familiesCollection
         .aggregate([
           {
@@ -481,6 +486,7 @@ module.exports = (
                     monthly_fee: 1,
                     activity: 1,
                     status: 1,
+                    leavingDate: 1,
                   },
                 },
               ],
@@ -523,19 +529,68 @@ module.exports = (
       const partiallyPaidFamilies = [];
       const unpaidFamilies = [];
 
+      // Helper function to check if student was enrolled for the target month
+      const wasStudentEnrolledInMonth = (
+        student,
+        targetMonthStart,
+        targetMonthEnd,
+      ) => {
+        // If no startingDate, assume enrolled (backward compatible)
+        if (!student.startingDate) return true;
+
+        const startDate = new Date(student.startingDate);
+
+        // Student starts AFTER the target month ends → NOT enrolled
+        if (startDate > targetMonthEnd) {
+          return false;
+        }
+
+        // Check if student has left (if leavingDate exists)
+        if (student.leavingDate) {
+          const leaveDate = new Date(student.leavingDate);
+          // Student left BEFORE the target month starts → NOT enrolled
+          if (leaveDate < targetMonthStart) {
+            return false;
+          }
+        }
+
+        return true;
+      };
+
       // Process each family
       for (const family of families) {
         const discount = family.discount || 0;
 
         // Calculate expected amount for this family
+        // ONLY include students who were enrolled during the target month
         let familyExpected = 0;
+        const enrolledStudentsInMonth = [];
+
         for (const student of family.childrenDocs) {
-          const monthlyFee = student.monthly_fee || 50;
-          const discountedFee =
-            discount > 0
-              ? monthlyFee - (monthlyFee * discount) / 100
-              : monthlyFee;
-          familyExpected += discountedFee;
+          const wasEnrolled = wasStudentEnrolledInMonth(
+            student,
+            targetMonthStart,
+            targetMonthEnd,
+          );
+
+          if (wasEnrolled) {
+            const monthlyFee = student.monthly_fee || 50;
+            const discountedFee =
+              discount > 0
+                ? monthlyFee - (monthlyFee * discount) / 100
+                : monthlyFee;
+            familyExpected += discountedFee;
+            enrolledStudentsInMonth.push(student);
+          } else {
+            console.log(
+              `⏭️ Skipping ${student.name} (started: ${student.startingDate}) for ${monthStr}/${yearNum} - not enrolled yet`,
+            );
+          }
+        }
+
+        // Skip families with no enrolled students for this month
+        if (enrolledStudentsInMonth.length === 0) {
+          continue;
         }
 
         const familyData = {
@@ -546,13 +601,14 @@ module.exports = (
           paidAmount: 0,
           remainingAmount: familyExpected,
           discount: discount,
-          studentCount: family.childrenDocs.length,
-          students: family.childrenDocs.map((s) => ({
+          studentCount: enrolledStudentsInMonth.length,
+          students: enrolledStudentsInMonth.map((s) => ({
             id: s._id,
             name: s.name,
             activity: s.activity,
             status: s.status,
             monthly_fee: s.monthly_fee || 50,
+            startingDate: s.startingDate,
           })),
         };
 
@@ -575,13 +631,23 @@ module.exports = (
 
         // Check payment for selected month
         for (const fee of familyFees) {
-          for (const student of fee.students || []) {
-            // Monthly fees - CAN show partial
+          for (const studentFee of fee.students || []) {
+            // Find the matching student in enrolledStudentsInMonth
+            const matchingStudent = enrolledStudentsInMonth.find(
+              (s) =>
+                s.name === studentFee.name ||
+                s._id.toString() === studentFee.studentId?.toString(),
+            );
+
+            // Skip if this student wasn't enrolled in this month
+            if (!matchingStudent) continue;
+
+            // Monthly fees
             if (
               fee.paymentType === "monthly" ||
               fee.paymentType === "monthlyOnHold"
             ) {
-              const monthPayment = student.monthsPaid?.find(
+              const monthPayment = studentFee.monthsPaid?.find(
                 (mp) => mp.month === monthStr && mp.year === yearNum,
               );
               if (monthPayment && monthPayment.paid) {
@@ -589,21 +655,20 @@ module.exports = (
               }
             }
 
-            // Admission fees - ALWAYS fully paid for the joining month (no partial)
+            // Admission fees - ONLY count if joining month is this month
             if (
               fee.paymentType === "admission" ||
               fee.paymentType === "admissionOnHold"
             ) {
-              const joiningMonth = student.joiningMonth
+              const joiningMonth = studentFee.joiningMonth
                 ?.toString()
                 .padStart(2, "0");
-              const joiningYear = student.joiningYear;
+              const joiningYear = studentFee.joiningYear;
 
               if (joiningMonth === monthStr && joiningYear === yearNum) {
-                // Calculate monthly portion (total paid minus admission fee)
-                let totalStudentPayments = student.subtotal || 0;
-                if (student.payments && Array.isArray(student.payments)) {
-                  const paymentsSum = student.payments.reduce(
+                let totalStudentPayments = studentFee.subtotal || 0;
+                if (studentFee.payments && Array.isArray(studentFee.payments)) {
+                  const paymentsSum = studentFee.payments.reduce(
                     (sum, p) => sum + (p.amount || 0),
                     0,
                   );
@@ -611,17 +676,16 @@ module.exports = (
                     totalStudentPayments = paymentsSum;
                   }
                 }
-                const admissionFee = student.admissionFee || 20;
+                const admissionFee = studentFee.admissionFee || 20;
                 const monthlyPortion = Math.max(
                   0,
                   totalStudentPayments - admissionFee,
                 );
 
-                // For admission, if ANY payment was made for the monthly portion, mark as fully paid
                 if (monthlyPortion > 0) {
                   const expectedMonthlyFee =
-                    student.discountedFee || student.monthlyFee || 50;
-                  monthPaid += expectedMonthlyFee; // Add full amount to mark as paid (not partial)
+                    studentFee.discountedFee || studentFee.monthly_fee || 50;
+                  monthPaid += expectedMonthlyFee;
                 }
               }
             }
@@ -635,8 +699,6 @@ module.exports = (
         if (monthPaid >= familyExpected) {
           paidFamilies.push(familyData);
         } else if (monthPaid > 0 && monthPaid < familyExpected) {
-          // This will only happen for monthly payments
-          // Admission payments always add full amount, so they won't trigger partial
           partiallyPaidFamilies.push(familyData);
         } else {
           unpaidFamilies.push(familyData);
@@ -656,11 +718,15 @@ module.exports = (
           totalExpected: parseFloat(totalExpected.toFixed(2)),
           totalReceived: parseFloat(totalReceived.toFixed(2)),
           totalOutstanding: parseFloat(totalOutstanding.toFixed(2)),
-          totalFamilies: families.length,
+          totalFamilies:
+            paidFamilies.length +
+            partiallyPaidFamilies.length +
+            unpaidFamilies.filter((f) => !f.isZeroFee).length,
           zeroFeeFamiliesCount: zeroFeeFamiliesCount,
           paidFamiliesCount: paidFamilies.length,
           partiallyPaidFamiliesCount: partiallyPaidFamilies.length,
-          unpaidFamiliesCount: unpaidFamilies.length - zeroFeeFamiliesCount,
+          unpaidFamiliesCount: unpaidFamilies.filter((f) => !f.isZeroFee)
+            .length,
           collectionRate:
             totalExpected > 0
               ? parseFloat(((totalReceived / totalExpected) * 100).toFixed(1))
