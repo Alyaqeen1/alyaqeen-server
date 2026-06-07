@@ -854,6 +854,10 @@ module.exports = (
                     },
 
                     lastPaymentDate: 1,
+                    payments: {
+                      // ✅ ADD THIS - include the payments array with method
+                      method: 1,
+                    },
                   },
                 },
               ],
