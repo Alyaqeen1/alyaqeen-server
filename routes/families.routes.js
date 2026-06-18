@@ -804,6 +804,7 @@ module.exports = (
                     activity: 1,
                     mother: 1,
                     father: 1,
+                    email: 1,
                   },
                 },
               ],
@@ -924,6 +925,7 @@ module.exports = (
           {
             $project: {
               name: 1,
+              email: 1, // ✅ ADD THIS LINE - family email
               childrenDocs: 1,
               feePayments: 1,
               discount: 1,
