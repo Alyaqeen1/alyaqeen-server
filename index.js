@@ -34,6 +34,7 @@ const createBlogsRouter = require("./routes/blogs.routes");
 const createAnnouncementsRouter = require("./routes/announcements.routes");
 const createWebsiteSettingsRouter = require("./routes/website_settings.routes");
 const createComplaintsRouter = require("./routes/complaints.routes");
+const createYearlyReportsRouter = require("./routes/yearly_reports.routes");
 
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 let familiesCollection;
@@ -858,6 +859,9 @@ async function run() {
     const websiteSettingsCollection = client
       .db("alyaqeenDb")
       .collection("website-settings");
+    const yearlyReportsCollection = client
+      .db("alyaqeenDb")
+      .collection("yearly-reports");
 
     // Initialize the counter if it doesn't exist
     // await countersCollection.updateOne(
@@ -980,6 +984,10 @@ async function run() {
     app.use("/reviews", createReviewsRouter(reviewsCollection));
     app.use("/blogs", createBlogsRouter(blogsCollection));
     app.use("/complaints", createComplaintsRouter(complaintsCollection));
+    app.use(
+      "/yearly-reports",
+      createYearlyReportsRouter(yearlyReportsCollection),
+    );
     app.use(
       "/attendances",
       createAttendancesRouter(
