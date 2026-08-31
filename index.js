@@ -938,6 +938,7 @@ async function run() {
         lessonsCoveredCollection,
         meritsCollection,
         feesCollection,
+        yearlyReportsCollection,
       ),
     );
     app.use("/users", createUsersRouter(usersCollection));

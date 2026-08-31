@@ -9,7 +9,7 @@ async function generateStudentReport(studentData, data = {}) {
   const doc = new PDFDocument({
     size: "A4",
     margin: 50,
-    bufferPages: true, // 🔥 REQUIRED
+    bufferPages: true,
   });
 
   const buffers = [];
@@ -27,10 +27,9 @@ async function generateStudentReport(studentData, data = {}) {
 
   const cleanText = (text) => {
     if (!text || text === "N/A" || text === "null") return "N/A";
-
     return String(text)
       .replace(/[\x00-\x1F\x7F]/g, "")
-      .replace(/→|!’|!/g, " => ")
+      .replace(/→|!’|!/g, " -> ")
       .replace(/\s+/g, " ")
       .trim();
   };
@@ -82,7 +81,6 @@ async function generateStudentReport(studentData, data = {}) {
   const drawCard = (title, fields, color = "#3498db") => {
     checkPageBreak(fields.length * 20 + 50);
 
-    const startY = currentY;
     const height = 40 + fields.length * 18;
 
     doc
@@ -113,34 +111,91 @@ async function generateStudentReport(studentData, data = {}) {
     currentY += height + 20;
   };
 
-  const drawProgressBar = (title, value, maxValue = 100, color = "#9b59b6") => {
-    checkPageBreak(80);
+  // ===== NEW: Draw Progress Comparison Card =====
+  const drawProgressComparison = (
+    title,
+    beginningFields,
+    endingFields,
+    color = "#3498db",
+  ) => {
+    const totalFields = Math.max(beginningFields.length, endingFields.length);
+    const height = 50 + totalFields * 22;
 
+    checkPageBreak(height + 30);
+
+    // Card background
     doc
+      .roundedRect(50, currentY, pageWidth, height, 6)
+      .fillAndStroke("#f9f9f9", "#e0e0e0");
+
+    doc.rect(50, currentY, 6, height).fill(color);
+
+    // Title
+    doc
+      .fillColor(color)
       .font("Helvetica-Bold")
       .fontSize(12)
-      .fillColor("#2c3e50")
-      .text(title, 50, currentY);
+      .text(title, 65, currentY + 10);
 
-    currentY += 20;
-
-    const barWidth = pageWidth;
-    const percent = Math.min(value / maxValue, 1);
-    const progressWidth = barWidth * percent;
-
-    doc.rect(50, currentY, barWidth, 10).fill("#eaeaea");
-    doc.rect(50, currentY, progressWidth, 10).fill(color);
-
+    // Headers
+    const headerY = currentY + 30;
     doc
-      .fillColor("#333")
+      .fillColor("#666")
+      .font("Helvetica-Bold")
       .fontSize(9)
-      .text(`${value} pts`, 50, currentY + 15);
+      .text("Beginning", 70, headerY)
+      .text("->", 220, headerY, { width: 30, align: "center" })
+      .text("End", 260, headerY);
 
-    currentY += 35;
+    // Divider line
+    doc
+      .moveTo(50, headerY + 15)
+      .lineTo(pageWidth + 50, headerY + 15)
+      .strokeColor("#ddd")
+      .lineWidth(1)
+      .stroke();
+
+    let fieldY = headerY + 22;
+
+    // Display fields
+    const maxLength = Math.max(beginningFields.length, endingFields.length);
+    for (let i = 0; i < maxLength; i++) {
+      const beginVal = beginningFields[i] ? beginningFields[i][1] : "";
+      const endVal = endingFields[i] ? endingFields[i][1] : "";
+      const label = beginningFields[i]
+        ? beginningFields[i][0]
+        : endingFields[i]
+          ? endingFields[i][0]
+          : "";
+
+      if (label) {
+        doc
+          .fillColor("#333")
+          .font("Helvetica")
+          .fontSize(9)
+          .text(label + ":", 70, fieldY, { width: 60 })
+          .text(cleanText(beginVal), 130, fieldY, { width: 80 })
+          .text("->", 220, fieldY, { width: 30, align: "center" })
+          .text(cleanText(endVal), 260, fieldY, { width: 80 });
+      } else {
+        // If no label, just show the values
+        doc
+          .fillColor("#333")
+          .font("Helvetica")
+          .fontSize(9)
+          .text(cleanText(beginVal), 130, fieldY, { width: 80 })
+          .text("->", 220, fieldY, { width: 30, align: "center" })
+          .text(cleanText(endVal), 260, fieldY, { width: 80 });
+      }
+
+      fieldY += 20;
+    }
+
+    currentY += height + 15;
   };
 
   // ===== HEADER =====
-  doc.rect(0, 0, doc.page.width, 140).fill("#2c3e50"); // Increased height to 140
+  doc.rect(0, 0, doc.page.width, 140).fill("#2c3e50");
 
   doc
     .fillColor("white")
@@ -153,11 +208,10 @@ async function generateStudentReport(studentData, data = {}) {
     .font("Helvetica")
     .text("Student Progress Report", 0, 65, { align: "center" });
 
-  // Add contact information in header
   doc
     .fontSize(8)
     .font("Helvetica")
-    .fillColor("#ecf0f1") // Light gray/white color
+    .fillColor("#ecf0f1")
     .text("116-118 Church Road, Yardley Birmingham B25 8UX", 0, 90, {
       align: "center",
     })
@@ -170,10 +224,10 @@ async function generateStudentReport(studentData, data = {}) {
 
   doc
     .fontSize(8)
-    .fillColor("#bdc3c7") // Lighter gray for date
+    .fillColor("#bdc3c7")
     .text(`Generated: ${reportDate}`, doc.page.width - 200, 125);
 
-  currentY = 160; // Increased starting Y to account for taller header
+  currentY = 160;
 
   // ===== STUDENT INFO =====
   drawCard(
@@ -274,15 +328,6 @@ async function generateStudentReport(studentData, data = {}) {
     "#9b59b6",
   );
 
-  if (merit.totalMeritPoints > 0) {
-    drawProgressBar(
-      "Merit Points Progress",
-      merit.totalMeritPoints,
-      100,
-      "#9b59b6",
-    );
-  }
-
   if (merit.recentMerits?.length > 0) {
     checkPageBreak(120);
 
@@ -310,101 +355,169 @@ async function generateStudentReport(studentData, data = {}) {
     currentY += 15;
   }
 
-  // ===== ACADEMIC PROGRESS =====
-  const allYearsData = data.lessons || [];
+  // ===== ACADEMIC PROGRESS - YEARLY REPORTS =====
+  const yearlyReports = data.yearlyReports || [];
 
-  // Filter out years with no progress data
-  const yearsWithData = allYearsData.filter((yearData) => {
-    const progress = yearData.progress || {};
-
-    // Check if any subject has actual progress data
-    const hasQuran =
-      progress.qaidah_quran_progress &&
-      progress.qaidah_quran_progress.page_progress !== "N/A" &&
-      progress.qaidah_quran_progress.page_progress !== null;
-
-    const hasIslamic =
-      progress.islamic_studies_progress &&
-      progress.islamic_studies_progress.page_progress !== "N/A" &&
-      progress.islamic_studies_progress.page_progress !== null;
-
-    const hasDuas =
-      progress.dua_surah_progress &&
-      progress.dua_surah_progress.page_progress !== "N/A" &&
-      progress.dua_surah_progress.page_progress !== null;
-
-    const hasGift =
-      progress.gift_for_muslim_progress &&
-      progress.gift_for_muslim_progress.page_progress !== "N/A" &&
-      progress.gift_for_muslim_progress.page_progress !== null;
-
-    return hasQuran || hasIslamic || hasDuas || hasGift;
-  });
+  // Filter out years with no data
+  const yearsWithData = yearlyReports.filter(
+    (yearData) => yearData.hasBeginning || yearData.hasEnding,
+  );
 
   if (yearsWithData.length > 0) {
     yearsWithData.forEach((yearData) => {
-      checkPageBreak(100);
+      checkPageBreak(120);
 
+      // Year Header
       doc
         .font("Helvetica-Bold")
         .fontSize(14)
         .fillColor("#2c3e50")
-        .text(`Academic Year ${yearData.year}`, 50, currentY);
+        .text(
+          `Academic Year ${yearData.year} (${yearData.academic_year})`,
+          50,
+          currentY,
+        );
 
-      currentY += 20;
+      currentY += 25;
 
-      const progress = yearData.progress || {};
+      const educationType = yearData.type || "normal";
+      const isGiftMuslim = educationType === "gift_muslim";
 
-      const subjectKeys = [
-        ["Quran Qaidah", progress.qaidah_quran_progress],
-        ["Islamic Studies", progress.islamic_studies_progress],
-        ["Duas & Surahs", progress.dua_surah_progress],
-        ["Gift for Muslim", progress.gift_for_muslim_progress],
-      ];
+      // Get beginning and ending data
+      const beginning = yearData.beginning;
+      const ending = yearData.ending;
 
-      let hasAnySubject = false;
+      // ===== PROGRESS COMPARISON =====
+      // For each subject, show Beginning -> End comparison
+      const subjectKeys = isGiftMuslim
+        ? ["qaidah_quran", "gift_for_muslim"]
+        : ["qaidah_quran", "islamic_studies", "dua_surah"];
 
-      subjectKeys.forEach(([title, subject]) => {
-        if (
-          !subject ||
-          subject.page_progress === "N/A" ||
-          subject.page_progress === null
-        )
-          return;
+      subjectKeys.forEach((subjectKey) => {
+        const beginSubject = beginning?.subjects?.[subjectKey];
+        const endSubject = ending?.subjects?.[subjectKey];
 
-        const fields = [];
+        if (!beginSubject && !endSubject) return;
 
-        Object.entries(subject).forEach(([key, value]) => {
-          if (value && value !== "N/A" && value !== null) {
-            // Format the key to be more readable
-            const formattedKey = key
-              .replace(/_/g, " ")
-              .replace(/display$/, "")
-              .replace(/progress$/, "")
-              .trim();
+        // Build beginning fields
+        const beginFields = [];
+        const endFields = [];
 
-            if (formattedKey && value) {
-              fields.push([formattedKey, value]);
+        if (beginSubject) {
+          Object.entries(beginSubject).forEach(([key, value]) => {
+            if (
+              value &&
+              value !== "N/A" &&
+              value !== "null" &&
+              key !== "selected" &&
+              key !== "type"
+            ) {
+              const formattedKey = key.replace(/_/g, " ").toUpperCase();
+              beginFields.push([formattedKey, value]);
             }
-          }
-        });
+          });
+        }
 
-        if (fields.length > 0) {
-          drawCard(title, fields, "#34495e");
-          hasAnySubject = true;
+        if (endSubject) {
+          Object.entries(endSubject).forEach(([key, value]) => {
+            if (
+              value &&
+              value !== "N/A" &&
+              value !== "null" &&
+              key !== "selected" &&
+              key !== "type"
+            ) {
+              const formattedKey = key.replace(/_/g, " ").toUpperCase();
+              // Only add if not already in beginFields or if value is different
+              const existing = beginFields.find((f) => f[0] === formattedKey);
+              if (existing) {
+                // Update the end value
+                const idx = beginFields.indexOf(existing);
+                // We'll handle this differently - just add to endFields
+                endFields.push([formattedKey, value]);
+              } else {
+                endFields.push([formattedKey, value]);
+              }
+            }
+          });
+        }
+
+        // If we have both beginning and ending data, show comparison
+        if (beginFields.length > 0 && endFields.length > 0) {
+          // Combine fields - use beginning fields as base
+          const combinedBegin = [];
+          const combinedEnd = [];
+
+          beginFields.forEach(([label, value]) => {
+            const endMatch = endFields.find((f) => f[0] === label);
+            combinedBegin.push([label, value]);
+            combinedEnd.push([label, endMatch ? endMatch[1] : "N/A"]);
+          });
+
+          // Add any ending fields that weren't in beginning
+          endFields.forEach(([label, value]) => {
+            if (!combinedBegin.find((f) => f[0] === label)) {
+              combinedBegin.push([label, "N/A"]);
+              combinedEnd.push([label, value]);
+            }
+          });
+
+          const subjectTitle =
+            beginSubject?.type ||
+            endSubject?.type ||
+            subjectKey.replace(/_/g, " ").toUpperCase();
+
+          drawProgressComparison(
+            `${subjectTitle} Progress`,
+            combinedBegin,
+            combinedEnd,
+            isGiftMuslim ? "#e67e22" : "#3498db",
+          );
+        } else if (beginFields.length > 0) {
+          // Only beginning data
+          drawCard(
+            `${beginSubject?.type || subjectKey.replace(/_/g, " ").toUpperCase()} - Beginning Only`,
+            beginFields,
+            "#3498db",
+          );
+        } else if (endFields.length > 0) {
+          // Only ending data
+          drawCard(
+            `${endSubject?.type || subjectKey.replace(/_/g, " ").toUpperCase()} - End Only`,
+            endFields,
+            "#e67e22",
+          );
         }
       });
 
-      // If no subjects with data in this year, don't show the year at all
-      if (!hasAnySubject) {
-        // Remove the year header we added
-        currentY -= 20;
+      // ===== NOTES =====
+      if (yearData.notes && yearData.notes.length > 0) {
+        checkPageBreak(60);
+        doc
+          .font("Helvetica-Bold")
+          .fontSize(11)
+          .fillColor("#f39c12")
+          .text("Notes:", 50, currentY);
+        currentY += 18;
+
+        yearData.notes.slice(0, 5).forEach((note) => {
+          doc
+            .font("Helvetica")
+            .fontSize(9)
+            .fillColor("#333")
+            .text(
+              `${formatShortDate(note.date)}: ${cleanText(note.text)}`,
+              65,
+              currentY,
+            );
+          currentY += 16;
+        });
+        currentY += 10;
       }
 
       currentY += 10;
     });
   } else {
-    // Optional: Show a message if no academic progress data
     checkPageBreak(100);
     doc
       .font("Helvetica")
@@ -413,7 +526,8 @@ async function generateStudentReport(studentData, data = {}) {
       .text("No academic progress records available", 50, currentY);
     currentY += 30;
   }
-  // ===== FEE SUMMARY (OUTSTANDING BALANCE) =====
+
+  // ===== FEE SUMMARY =====
   const fees = data?.fees || {
     totalPaid: 0,
     outstandingAmount: 0,
@@ -437,15 +551,12 @@ async function generateStudentReport(studentData, data = {}) {
   ) {
     checkPageBreak(120);
 
-    // Determine color based on status
-    let feeStatusColor = "#95a5a6"; // Default gray
-    if (fees.paymentStatus === "Fully Paid")
-      feeStatusColor = "#27ae60"; // Green
+    let feeStatusColor = "#95a5a6";
+    if (fees.paymentStatus === "Fully Paid") feeStatusColor = "#27ae60";
     else if (fees.paymentStatus === "Partially Paid")
-      feeStatusColor = "#f39c12"; // Orange
-    else if (fees.paymentStatus === "Unpaid") feeStatusColor = "#e67e22"; // Dark orange
+      feeStatusColor = "#f39c12";
+    else if (fees.paymentStatus === "Unpaid") feeStatusColor = "#e67e22";
 
-    // Build fee summary fields
     const feeFields = [
       ["Monthly Fee", `£${fees.monthlyFee}`],
       fees.discountedMonthlyFee !== fees.monthlyFee
@@ -456,7 +567,6 @@ async function generateStudentReport(studentData, data = {}) {
       ["Status", fees.paymentStatus],
     ];
 
-    // Add counts if they exist
     if (fees.fullyPaidMonths?.length > 0) {
       feeFields.push(["Fully Paid Months", fees.fullyPaidMonths.length]);
     }
@@ -481,25 +591,13 @@ async function generateStudentReport(studentData, data = {}) {
 
       doc
         .font("Helvetica-Bold")
-        .fontSize(12)
+        .fontSize(11)
         .fillColor("#f39c12")
         .text("Partially Paid Months", 50, currentY);
 
       currentY += 20;
 
-      // Table header
-      doc
-        .font("Helvetica-Bold")
-        .fontSize(8)
-        .fillColor("#666")
-        .text("Month", 55, currentY)
-        .text("Paid", 120, currentY)
-        .text("Due", pageWidth - 70, currentY, { align: "right" });
-
-      currentY += 15; // Space after header
-
       fees.partiallyPaidMonths.slice(0, 6).forEach((month, index) => {
-        // Background for alternating rows
         if (index % 2 === 0) {
           doc
             .fillColor("#fef9e7")
@@ -512,7 +610,7 @@ async function generateStudentReport(studentData, data = {}) {
           .font("Helvetica")
           .fontSize(9)
           .text(month.displayMonth || month.month, 55, currentY)
-          .text(`£${month.paidAmount?.toFixed(2) || 0}`, 120, currentY)
+          .text(`£${month.paidAmount?.toFixed(2) || 0}`, 150, currentY)
           .text(
             `£${month.remainingAmount?.toFixed(2) || month.dueAmount?.toFixed(2) || 0}`,
             pageWidth - 70,
@@ -532,24 +630,13 @@ async function generateStudentReport(studentData, data = {}) {
 
       doc
         .font("Helvetica-Bold")
-        .fontSize(12)
+        .fontSize(11)
         .fillColor("#e67e22")
         .text("Unpaid Months", 50, currentY);
 
       currentY += 20;
 
-      // Table header
-      doc
-        .font("Helvetica-Bold")
-        .fontSize(8)
-        .fillColor("#666")
-        .text("Month", 55, currentY)
-        .text("Amount Due", pageWidth - 70, currentY, { align: "right" });
-
-      currentY += 15; // Space after header
-
       fees.unpaidMonths.slice(0, 6).forEach((month, index) => {
-        // Background for alternating rows
         if (index % 2 === 0) {
           doc
             .fillColor("#fdedec")
@@ -574,27 +661,8 @@ async function generateStudentReport(studentData, data = {}) {
 
       currentY += 15;
     }
-
-    // Show fully paid months summary
-    // if (fees.fullyPaidMonths && fees.fullyPaidMonths.length > 0) {
-    //   checkPageBreak(80);
-
-    //   doc
-    //     .font("Helvetica")
-    //     .fontSize(10)
-    //     .fillColor("#27ae60")
-    //     .text(
-    //       `✓ ${fees.fullyPaidMonths.length} Month${fees.fullyPaidMonths.length > 1 ? "s" : ""} Fully Paid`,
-    //       50,
-    //       currentY,
-    //     );
-
-    //   currentY += 20;
-    // }
   } else {
-    // Show a simple "No fee records" message
     checkPageBreak(80);
-
     drawCard(
       "Fee Summary",
       [
@@ -604,6 +672,7 @@ async function generateStudentReport(studentData, data = {}) {
       "#95a5a6",
     );
   }
+
   // ===== FOOTER PAGES =====
   doc.on("end", () => {
     const range = doc.bufferedPageRange();
