@@ -770,6 +770,7 @@ app.use(
       "http://localhost:5173",
       "https://alyaqeen.vercel.app",
       "https://alyaqeen-one.vercel.app",
+      "https://rupture-unsigned-renovator.ngrok-free.dev",
       process.env.FRONTEND_URL,
     ],
     credentials: true,

@@ -1045,6 +1045,7 @@ module.exports = (
           to: student?.email,
           name: student?.family_name,
           studentName: student?.name,
+          startingDate: student?.startingDate,
         });
       }
 
