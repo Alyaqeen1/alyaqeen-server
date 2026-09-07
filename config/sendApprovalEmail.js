@@ -16,12 +16,18 @@ const sendApprovalEmail = async ({ to, name, studentName, startingDate }) => {
 
   const apiInstance = new SibApiV3Sdk.TransactionalEmailsApi();
 
+  // Format YYYY-MM-DD without timezone issues
   const formattedStartingDate = startingDate
-    ? new Date(startingDate).toLocaleDateString("en-GB", {
-        day: "2-digit",
-        month: "long",
-        year: "numeric",
-      })
+    ? (() => {
+        const [year, month, day] = startingDate.split("-");
+        const date = new Date(year, month - 1, day);
+
+        return date.toLocaleDateString("en-GB", {
+          day: "numeric",
+          month: "long",
+          year: "numeric",
+        });
+      })()
     : "the scheduled starting date";
 
   const sendSmtpEmail = {
@@ -33,58 +39,46 @@ const sendApprovalEmail = async ({ to, name, studentName, startingDate }) => {
     to: [
       {
         email: to,
-        name,
+        name: name,
       },
     ],
 
-    subject: "⚠️ Action Required: Complete Your Child’s Admission – Alyaqeen",
+    subject: "Admission Approved - Next Steps",
 
     htmlContent: `
       <p>Dear <strong>${name}</strong>,</p>
 
       <p>
-        We’re happy to inform you that your child
-        <strong>${studentName}</strong> has been approved for admission to Alyaqeen.
+        We’re pleased to inform you that your child
+        <strong>${studentName}</strong>’s admission to Alyaqeen Academy has been approved.
       </p>
 
       <p>
-        To complete the enrollment process, we kindly ask you to take the next step.
-        Please visit our website and log in to your account to proceed with the
-        necessary actions (e.g., fee payment).
+        On the starting date you have chosen, please bring your child
+        <strong>10 minutes before the class starting time</strong>. This will allow
+        us to assess your child if required, provide any required books, and
+        enrol them in the most suitable class.
       </p>
 
       <p>
-        🔗 Website:
-        <a href="https://www.alyaqeen.co.uk/login">
-          https://www.alyaqeen.co.uk/login
-        </a>
+        You may also pay the admission/registration fee and monthly fee by visiting
+        our website and logging into your account. Alternatively, you can make the
+        payment at the Academy Office on the starting date, where you can also
+        purchase any required books or a bag, if needed.
       </p>
 
       <p>
-        <strong>Starting Date:</strong> ${formattedStartingDate}
+        <strong>Starting Date: ${formattedStartingDate}</strong>
       </p>
 
       <p>
-        Once the enrollment process is completed, your child can start attending
-        Alyaqeen from <strong>${formattedStartingDate}</strong>.
+        We look forward to welcoming <strong>${studentName}</strong> to
+        Alyaqeen Academy.
       </p>
 
-      <p>
-        (Use your registered email and password to log in.)
-      </p>
-
-      <p>
-        If you need any help or have questions, feel free to reply to this email.
-      </p>
-
-      <p>
-        Thank you for choosing Alyaqeen. We’re looking forward to welcoming
-        your child on board!
-      </p>
+      <p>JazakAllahu Khairan.</p>
 
       <br />
-
-      <p>JazakumAllahu khayran for your support.</p>
 
       <p>
         Warm regards,<br />
@@ -95,6 +89,7 @@ const sendApprovalEmail = async ({ to, name, studentName, startingDate }) => {
 
   try {
     const data = await apiInstance.sendTransacEmail(sendSmtpEmail);
+
     console.log("✅ Approval email sent successfully:", data);
   } catch (error) {
     console.error(
