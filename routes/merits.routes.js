@@ -1,11 +1,25 @@
 const express = require("express");
 const { ObjectId } = require("mongodb");
+const sendMeritEmail = require("../config/sendMeritEmail");
 const router = express.Router();
-
+/**
+ * Determine which milestone email is due.
+ *   Merit:   50–99   → 50
+ *            100+     → 100
+ *   Demerit: -25 to -49 → -25
+ *            -50 or less → -50
+ */
+function getDueMilestone(totalMerit) {
+  if (totalMerit >= 100) return { type: "merit", milestone: 100 };
+  if (totalMerit >= 50) return { type: "merit", milestone: 50 };
+  if (totalMerit <= -50) return { type: "demerit", milestone: -50 };
+  if (totalMerit <= -25) return { type: "demerit", milestone: -25 };
+  return null;
+}
 module.exports = (
   meritsCollection,
   notificationsCollection,
-  studentsCollection
+  studentsCollection,
 ) => {
   router.get("/", async (req, res) => {
     const result = await meritsCollection.find().toArray();
@@ -56,7 +70,7 @@ module.exports = (
       // Calculate total merit points
       const totalMerit = meritRecords.reduce(
         (sum, record) => sum + (record.merit_points || 0),
-        0
+        0,
       );
 
       // Calculate monthly merit points (last 30 days) - only if no specific month filter
@@ -130,7 +144,7 @@ module.exports = (
           // Daily trend for specific month
           const day = recordDate.getDate();
           const dayKey = `${day.toString().padStart(2, "0")} ${getMonthName(
-            month
+            month,
           ).substring(0, 3)}`;
           trendKey = dayKey;
         } else if (year) {
@@ -173,7 +187,7 @@ module.exports = (
 
           if (recordDate >= weekAgo) {
             const weekDiff = Math.floor(
-              (new Date() - recordDate) / (7 * 24 * 60 * 60 * 1000)
+              (new Date() - recordDate) / (7 * 24 * 60 * 60 * 1000),
             );
             const weekKey = `Week ${8 - weekDiff}`;
             if (weeklyTrend.hasOwnProperty(weekKey)) {
@@ -194,7 +208,7 @@ module.exports = (
         // Filter only records from that specific month/year
         const monthStr = month.toString().padStart(2, "0");
         const filteredMonthRecords = meritRecords.filter((record) =>
-          record.date.startsWith(`${year}-${monthStr}`)
+          record.date.startsWith(`${year}-${monthStr}`),
         );
 
         lastMerits = filteredMonthRecords.slice(-6).reverse(); // last 6 of that month
@@ -227,11 +241,11 @@ module.exports = (
         behaviorStats: {
           mostFrequent:
             Object.entries(behaviorBreakdown).sort(
-              ([, a], [, b]) => b.count - a.count
+              ([, a], [, b]) => b.count - a.count,
             )[0]?.[0] || "None",
           highestValue:
             Object.entries(behaviorBreakdown).sort(
-              ([, a], [, b]) => b.averagePoints - a.averagePoints
+              ([, a], [, b]) => b.averagePoints - a.averagePoints,
             )[0]?.[0] || "None",
           totalBehaviors: Object.keys(behaviorBreakdown).length,
         },
@@ -249,8 +263,8 @@ module.exports = (
           month && year
             ? `Showing data for ${getMonthName(month)} ${year}`
             : year
-            ? `Showing data for year ${year}`
-            : "Showing all time data",
+              ? `Showing data for year ${year}`
+              : "Showing all time data",
       };
 
       res.send(result);
@@ -612,18 +626,16 @@ module.exports = (
 
   router.post("/", async (req, res) => {
     const newMerit = req.body;
-    try {
-      // Insert the new merit point entry
-      const result = await meritsCollection.insertOne(newMerit);
 
+    try {
+      // 1. Insert the merit record
+      const result = await meritsCollection.insertOne(newMerit);
       const studentId = newMerit.student_id;
 
-      // Calculate total merit points for this student
+      // 2. Calculate total merit points
       const studentMerit = await meritsCollection
         .aggregate([
-          {
-            $match: { student_id: studentId },
-          },
+          { $match: { student_id: studentId } },
           {
             $group: {
               _id: "$student_id",
@@ -635,34 +647,89 @@ module.exports = (
 
       const totalMerit = studentMerit[0]?.totalMerit || 0;
 
-      // If merit >= 50, check if a notification exists
-      if (totalMerit >= 50) {
-        const existingNotification = await notificationsCollection.findOne({
-          type: "merit",
-          student_id: studentId,
-        });
+      // 3. Determine which milestone is due
+      const due = getDueMilestone(totalMerit);
+      if (!due) return res.send(result);
 
-        if (!existingNotification) {
-          // Optional: Fetch student name
-          const student = await studentsCollection.findOne({
-            _id: new ObjectId(studentId),
-          });
-          const studentName = student?.name || "A student";
+      const { type: dueType, milestone: dueMilestone } = due;
 
-          // Insert new notification
-          await notificationsCollection.insertOne({
-            type: "merit",
-            student_id: studentId,
-            message: `${studentName} has earned 50 merit points!`,
-            isRead: false,
-            createdAt: new Date(),
-            link: "/dashboard/merit-students",
+      // 4. Fetch student
+      if (!ObjectId.isValid(studentId)) return res.send(result);
+
+      const student = await studentsCollection.findOne({
+        _id: new ObjectId(studentId),
+      });
+
+      if (!student) return res.send(result);
+
+      // 5. Skip if not active + enrolled
+      if (student.activity !== "active" || student.status !== "enrolled") {
+        return res.send(result);
+      }
+
+      const studentName = student?.name || "Your child";
+
+      // 6. Resolve parent email
+      const parentEmail =
+        student?.father?.email ||
+        student?.mother?.email ||
+        student?.parentEmail ||
+        student?.email ||
+        null;
+
+      const parentName =
+        student?.father?.name || student?.mother?.name || "Parent";
+
+      // 7. Build unique notification type for this milestone
+      //    e.g., "merit_50", "merit_100", "demerit_25", "demerit_50"
+      const notificationType =
+        dueType === "merit"
+          ? `merit_${dueMilestone}`
+          : `demerit_${Math.abs(dueMilestone)}`;
+
+      // 8. Check if THIS milestone was already sent
+      const existingNotification = await notificationsCollection.findOne({
+        type: notificationType,
+        student_id: studentId,
+      });
+
+      if (existingNotification) return res.send(result);
+
+      // 9. Insert notification (acts as the "already sent" flag)
+      await notificationsCollection.insertOne({
+        type: notificationType,
+        student_id: studentId,
+        message:
+          dueType === "merit"
+            ? `${studentName} has reached ${dueMilestone} merit points!`
+            : `${studentName} has reached ${Math.abs(dueMilestone)} demerit points.`,
+        isRead: false,
+        createdAt: new Date(),
+        link:
+          dueType === "merit"
+            ? "/dashboard/merit-students"
+            : "/dashboard/merit-students",
+      });
+
+      // 10. Send email
+      if (parentEmail) {
+        try {
+          await sendMeritEmail({
+            to: parentEmail,
+            parentName,
+            studentName,
+            type: dueType,
+            milestone: dueMilestone,
+            points: totalMerit,
           });
+        } catch (emailErr) {
+          console.error("Merit email failed:", emailErr);
         }
       }
 
       res.send(result);
     } catch (error) {
+      console.error("Error in merit POST:", error);
       res.status(500).send({ message: "Server error" });
     }
   });
