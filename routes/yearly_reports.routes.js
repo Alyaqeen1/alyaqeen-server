@@ -8,7 +8,6 @@ module.exports = (yearlyReportsCollection) => {
     try {
       const result = await yearlyReportsCollection
         .aggregate([
-          // Convert string IDs to ObjectId
           {
             $addFields: {
               student_id_obj: { $toObjectId: "$student_id" },
@@ -16,7 +15,6 @@ module.exports = (yearlyReportsCollection) => {
               class_id_obj: { $toObjectId: "$class_id" },
             },
           },
-          // Lookup student
           {
             $lookup: {
               from: "students",
@@ -31,7 +29,6 @@ module.exports = (yearlyReportsCollection) => {
               preserveNullAndEmptyArrays: true,
             },
           },
-          // Lookup teacher
           {
             $lookup: {
               from: "teachers",
@@ -46,7 +43,6 @@ module.exports = (yearlyReportsCollection) => {
               preserveNullAndEmptyArrays: true,
             },
           },
-          // Lookup class
           {
             $lookup: {
               from: "classes",
@@ -61,7 +57,6 @@ module.exports = (yearlyReportsCollection) => {
               preserveNullAndEmptyArrays: true,
             },
           },
-          // Add name fields
           {
             $addFields: {
               student_name: "$student_info.name",
@@ -69,7 +64,6 @@ module.exports = (yearlyReportsCollection) => {
               class_name: "$class_info.class_name",
             },
           },
-          // Remove temporary fields
           {
             $project: {
               student_id_obj: 0,
@@ -80,7 +74,6 @@ module.exports = (yearlyReportsCollection) => {
               class_info: 0,
             },
           },
-          // Sort by date
           { $sort: { created_at: -1 } },
         ])
         .toArray();
@@ -192,7 +185,6 @@ module.exports = (yearlyReportsCollection) => {
         return res.status(400).send({ error: "academic_year is required" });
       }
 
-      // Use aggregation to include names
       const result = await yearlyReportsCollection
         .aggregate([
           {
@@ -294,7 +286,6 @@ module.exports = (yearlyReportsCollection) => {
         return res.status(400).send({ error: "academic_year is required" });
       }
 
-      // Use aggregation to include names
       const result = await yearlyReportsCollection
         .aggregate([
           {
@@ -386,12 +377,100 @@ module.exports = (yearlyReportsCollection) => {
     }
   });
 
+  // ==================== GET TERM PROGRESS ====================
+  // Query params: year (optional), term (optional)
+  router.get("/student/:studentId/term", async (req, res) => {
+    try {
+      const { studentId } = req.params;
+      const { year, term } = req.query;
+
+      const query = {
+        student_id: studentId,
+        report_type: "term_progress",
+      };
+
+      if (year) query.year = Number(year);
+      if (term) query.term = term;
+
+      const result = await yearlyReportsCollection
+        .find(query)
+        .sort({ year: -1, term: 1 })
+        .toArray();
+
+      res.send(result);
+    } catch (error) {
+      console.error("Error fetching term progress:", error);
+      res.status(500).send({ error: error.message });
+    }
+  });
+
   // ==================== CREATE NEW REPORT ====================
   router.post("/", async (req, res) => {
     try {
       const newReport = req.body;
 
-      // Validate required fields
+      // ========================================================
+      // ===== TERM PROGRESS HANDLER =====
+      // ========================================================
+      if (newReport.report_type === "term_progress") {
+        // Validate term progress specific fields
+        const termRequiredFields = [
+          "student_id",
+          "teacher_id",
+          "class_id",
+          "department_id",
+          "year",
+          "term",
+          "subjects",
+        ];
+
+        for (const field of termRequiredFields) {
+          if (!newReport[field]) {
+            return res.status(400).send({
+              error: `${field} is required for term progress report`,
+            });
+          }
+        }
+
+        // Validate term value
+        if (!["autumn", "spring", "summer"].includes(newReport.term)) {
+          return res.status(400).send({
+            error: "term must be one of: autumn, spring, summer",
+          });
+        }
+
+        // Check if same term/year already exists for this student
+        const existing = await yearlyReportsCollection.findOne({
+          student_id: newReport.student_id,
+          year: Number(newReport.year),
+          term: newReport.term,
+          report_type: "term_progress",
+        });
+
+        if (existing) {
+          return res.status(400).send({
+            error: `${newReport.term} term progress already exists for ${newReport.year}`,
+          });
+        }
+
+        // Add timestamps + normalize year + default published state
+        newReport.created_at = new Date().toISOString();
+        newReport.updated_at = new Date().toISOString();
+        newReport.year = Number(newReport.year);
+        newReport.is_published = false; // ← NEW: default unpublished
+
+        const result = await yearlyReportsCollection.insertOne(newReport);
+
+        return res.send({
+          success: true,
+          insertedId: result.insertedId,
+          message: "Term progress report created successfully",
+        });
+      }
+
+      // ========================================================
+      // ===== BEGINNING / END OF YEAR HANDLER =====
+      // ========================================================
       const requiredFields = [
         "student_id",
         "teacher_id",
@@ -429,7 +508,6 @@ module.exports = (yearlyReportsCollection) => {
       newReport.updated_at = new Date().toISOString();
       newReport.is_published = false;
 
-      // Initialize notes array if not present
       if (!newReport.notes) {
         newReport.notes = [];
       }
