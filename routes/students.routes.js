@@ -579,27 +579,61 @@ module.exports = (
     yearlyReportsCollection,
   ) {
     try {
-      // Build academic year string (e.g., "2025-2026")
       const academicYear = `${year}-${year + 1}`;
 
-      // Find both beginning and end of year reports
+      // Fetch both academic_year reports AND term_progress reports
       const reports = await yearlyReportsCollection
         .find({
           student_id: studentId,
-          academic_year: academicYear,
+          $or: [
+            { academic_year: academicYear },
+            { year: Number(year), report_type: "term_progress" },
+          ],
         })
         .toArray();
+
+      const beginning =
+        reports.find((r) => r.report_type === "beginning_of_year") || null;
+      const ending =
+        reports.find((r) => r.report_type === "end_of_year") || null;
+
+      // Only include PUBLISHED term progress
+      const termProgress = {
+        autumn:
+          reports.find(
+            (r) =>
+              r.report_type === "term_progress" &&
+              r.term === "autumn" &&
+              r.is_published === true,
+          ) || null,
+        spring:
+          reports.find(
+            (r) =>
+              r.report_type === "term_progress" &&
+              r.term === "spring" &&
+              r.is_published === true,
+          ) || null,
+        summer:
+          reports.find(
+            (r) =>
+              r.report_type === "term_progress" &&
+              r.term === "summer" &&
+              r.is_published === true,
+          ) || null,
+      };
+
+      const hasAnyTerm = Object.values(termProgress).some(Boolean);
 
       return {
         year: year.toString(),
         academic_year: academicYear,
-        beginning:
-          reports.find((r) => r.report_type === "beginning_of_year") || null,
-        ending: reports.find((r) => r.report_type === "end_of_year") || null,
-        hasBeginning: reports.some(
-          (r) => r.report_type === "beginning_of_year",
-        ),
-        hasEnding: reports.some((r) => r.report_type === "end_of_year"),
+        beginning,
+        ending,
+        termProgress,
+        hasBeginning: !!beginning,
+        hasEnding: !!ending,
+        hasTermProgress: hasAnyTerm,
+        hasData: !!beginning || !!ending || hasAnyTerm,
         notes: reports.reduce((acc, r) => {
           if (r.notes && r.notes.length > 0) {
             acc = [...acc, ...r.notes];
@@ -615,15 +649,17 @@ module.exports = (
         academic_year: `${year}-${year + 1}`,
         beginning: null,
         ending: null,
+        termProgress: { autumn: null, spring: null, summer: null },
         hasBeginning: false,
         hasEnding: false,
+        hasTermProgress: false,
+        hasData: false,
         notes: [],
         type: "normal",
         error: error.message,
       };
     }
   }
-
   // Helper function to format lesson data for report
   function formatYearlyReportData(report, type) {
     if (!report || !report.lessons) return null;
@@ -693,6 +729,60 @@ module.exports = (
     }
 
     return formatted;
+  }
+  // ===== NEW: Format term progress for the PDF =====
+  function formatTermProgressData(termReport) {
+    if (!termReport || !termReport.subjects) return null;
+
+    const s = termReport.subjects;
+    const subjects = [];
+
+    // Qaida / Qur'an / Tajweed
+    if (s.qaida_quran_tajweed) {
+      const d = s.qaida_quran_tajweed;
+      if (d.beginning || d.end || d.total_learning) {
+        subjects.push({
+          label: d.title || "Qaida / Qur'an / Tajweed",
+          beginning: d.beginning || "—",
+          end: d.end || "—",
+          summary: d.total_learning || "—",
+        });
+      }
+    }
+
+    // Duas & Surahs (skip if GFM)
+    if (!termReport.is_gfm && s.duas_surahs) {
+      const d = s.duas_surahs;
+      if (d.beginning || d.end || d.total_learning) {
+        subjects.push({
+          label: "Duas & Surahs",
+          beginning: d.beginning || "—",
+          end: d.end || "—",
+          summary: d.total_learning || "—",
+        });
+      }
+    }
+
+    // Islamic Studies
+    if (s.islamic_studies) {
+      const d = s.islamic_studies;
+      if (d.beginning || d.end || d.total_learning) {
+        subjects.push({
+          label: "Islamic Studies",
+          beginning: d.beginning || "—",
+          end: d.end || "—",
+          summary: d.total_learning || "—",
+        });
+      }
+    }
+
+    return {
+      term: termReport.term,
+      year: termReport.year,
+      is_gfm: termReport.is_gfm || false,
+      created_at: termReport.created_at,
+      subjects,
+    };
   }
 
   // ===== UPDATED: Generate Student Report =====
@@ -854,10 +944,22 @@ module.exports = (
         const yearlyData = await getStudentYearlyReports(
           student_id,
           year,
-          yearlyReportsCollection, // Make sure this is passed to the router
+          yearlyReportsCollection,
         );
 
-        // Format the data for the report
+        // NEW: Format term progress
+        const formattedTermProgress = {
+          autumn: yearlyData.termProgress?.autumn
+            ? formatTermProgressData(yearlyData.termProgress.autumn)
+            : null,
+          spring: yearlyData.termProgress?.spring
+            ? formatTermProgressData(yearlyData.termProgress.spring)
+            : null,
+          summer: yearlyData.termProgress?.summer
+            ? formatTermProgressData(yearlyData.termProgress.summer)
+            : null,
+        };
+
         const formattedData = {
           year: yearlyData.year,
           academic_year: yearlyData.academic_year,
@@ -868,14 +970,17 @@ module.exports = (
           ending: yearlyData.ending
             ? formatYearlyReportData(yearlyData.ending, yearlyData.type)
             : null,
+          // NEW: term progress
+          termProgress: formattedTermProgress,
           hasBeginning: yearlyData.hasBeginning,
           hasEnding: yearlyData.hasEnding,
+          hasTermProgress: yearlyData.hasTermProgress,
+          hasData: yearlyData.hasData,
           notes: yearlyData.notes,
         };
 
         allYearsReportsData.push(formattedData);
       }
-
       // 7. Generate PDF with comprehensive data
       const pdfResult = await generateStudentReport(studentData, {
         attendance: attendanceData,

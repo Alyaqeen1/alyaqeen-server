@@ -194,6 +194,83 @@ async function generateStudentReport(studentData, data = {}) {
     currentY += height + 15;
   };
 
+  // ===== NEW: Draw a term progress card =====
+  const drawTermCard = (title, subjects, color = "#3498db") => {
+    const height = 40 + subjects.length * 60;
+
+    checkPageBreak(height + 30);
+
+    // Card background
+    doc
+      .roundedRect(50, currentY, pageWidth, height, 6)
+      .fillAndStroke("#f9f9f9", "#e0e0e0");
+
+    doc.rect(50, currentY, 6, height).fill(color);
+
+    // Title
+    doc
+      .fillColor(color)
+      .font("Helvetica-Bold")
+      .fontSize(12)
+      .text(title, 65, currentY + 10);
+
+    let y = currentY + 32;
+
+    subjects.forEach((sub) => {
+      // Subject label
+      doc
+        .fillColor("#2c3e50")
+        .font("Helvetica-Bold")
+        .fontSize(10)
+        .text(sub.label, 65, y);
+
+      y += 16;
+
+      // Beginning
+      doc
+        .fillColor("#555")
+        .font("Helvetica-Bold")
+        .fontSize(9)
+        .text("Beginning:", 75, y, { width: 60 })
+        .font("Helvetica")
+        .fillColor("#333")
+        .text(cleanText(sub.beginning), 135, y, {
+          width: pageWidth - 110,
+        });
+
+      y += 13;
+
+      // End
+      doc
+        .fillColor("#555")
+        .font("Helvetica-Bold")
+        .fontSize(9)
+        .text("End:", 75, y, { width: 60 })
+        .font("Helvetica")
+        .fillColor("#333")
+        .text(cleanText(sub.end), 135, y, {
+          width: pageWidth - 110,
+        });
+
+      y += 13;
+
+      // Summary
+      doc
+        .fillColor("#555")
+        .font("Helvetica-Bold")
+        .fontSize(9)
+        .text("Summary:", 75, y, { width: 60 })
+        .font("Helvetica")
+        .fillColor("#333")
+        .text(cleanText(sub.summary), 135, y, {
+          width: pageWidth - 110,
+        });
+
+      y += 18;
+    });
+
+    currentY += height + 15;
+  };
   // ===== HEADER =====
   doc.rect(0, 0, doc.page.width, 140).fill("#2c3e50");
 
@@ -360,7 +437,8 @@ async function generateStudentReport(studentData, data = {}) {
 
   // Filter out years with no data
   const yearsWithData = yearlyReports.filter(
-    (yearData) => yearData.hasBeginning || yearData.hasEnding,
+    (yearData) =>
+      yearData.hasBeginning || yearData.hasEnding || yearData.hasTermProgress,
   );
 
   if (yearsWithData.length > 0) {
@@ -489,7 +567,32 @@ async function generateStudentReport(studentData, data = {}) {
           );
         }
       });
+      // ===== TERM PROGRESS =====
+      const termProgress = yearData.termProgress || {};
+      const termOrder = ["autumn", "spring", "summer"];
+      const termColors = {
+        autumn: "#f39c12",
+        spring: "#27ae60",
+        summer: "#2980b9",
+      };
+      const termLabels = {
+        autumn: "Autumn Term (1 Sep – 31 Dec)",
+        spring: "Spring Term (1 Jan – 30 Apr)",
+        summer: "Summer Term (1 May – 31 Aug)",
+      };
 
+      termOrder.forEach((termKey) => {
+        const termData = termProgress[termKey];
+        if (!termData || !termData.subjects?.length) return;
+
+        checkPageBreak(200);
+
+        drawTermCard(
+          `${termLabels[termKey]}`,
+          termData.subjects,
+          termColors[termKey],
+        );
+      });
       // ===== NOTES =====
       if (yearData.notes && yearData.notes.length > 0) {
         checkPageBreak(60);
