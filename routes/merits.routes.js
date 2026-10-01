@@ -298,25 +298,39 @@ module.exports = (
 
   router.get("/top-merit-students", async (req, res) => {
     try {
-      const { search } = req.query;
+      const { search, category } = req.query;
+      // category: "merit" (default) | "demerit" | "all"
 
       let matchStage;
 
+      // Determine the base filter
       if (search) {
-        // Only search by name/email (no merit filter)
+        // When searching, return any active student (merit or demerit) matching name/email
         matchStage = {
           $or: [
             { "student.name": { $regex: search, $options: "i" } },
             { "student.family_name": { $regex: search, $options: "i" } },
             { "student.email": { $regex: search, $options: "i" } },
           ],
-          "student.activity": "active", // ✅ Only active students when searching
+          "student.activity": "active",
+        };
+      } else if (category === "demerit") {
+        // Only demerit students: net merit <= -25
+        matchStage = {
+          totalMerit: { $lte: -25 },
+          "student.activity": "active",
+        };
+      } else if (category === "all") {
+        // Both merit (>=50) and demerit (<=-25)
+        matchStage = {
+          $or: [{ totalMerit: { $gte: 50 } }, { totalMerit: { $lte: -25 } }],
+          "student.activity": "active",
         };
       } else {
-        // Only show students with 50+ merit
+        // Default: only merit students (>= 50)
         matchStage = {
           totalMerit: { $gte: 50 },
-          "student.activity": "active", // ✅ Only active students for top list
+          "student.activity": "active",
         };
       }
 
@@ -339,12 +353,11 @@ module.exports = (
           },
           { $unwind: "$student" },
           { $match: matchStage },
-          // Handle department lookup for both old and new structures
+          // Department lookup
           {
             $lookup: {
               from: "departments",
               let: {
-                // Get dept_id from either enrollments array or old structure
                 deptIds: {
                   $cond: {
                     if: {
@@ -393,12 +406,11 @@ module.exports = (
               as: "departments",
             },
           },
-          // Handle class lookup for both old and new structures
+          // Class lookup
           {
             $lookup: {
               from: "classes",
               let: {
-                // Get class_id from either enrollments array or old structure
                 classIds: {
                   $cond: {
                     if: {
@@ -453,7 +465,6 @@ module.exports = (
               totalMerit: 1,
               student_name: "$student.name",
               family_name: "$student.family_name",
-              // Handle multiple departments/classes
               departments: {
                 $cond: {
                   if: { $gt: [{ $size: "$departments" }, 0] },
@@ -480,7 +491,6 @@ module.exports = (
                   else: ["Unknown Class"],
                 },
               },
-              // For backward compatibility - show first department/class
               department: {
                 $ifNull: [
                   { $arrayElemAt: ["$departments.dept_name", 0] },
@@ -495,6 +505,26 @@ module.exports = (
               },
             },
           },
+          // ✅ Add a category field so the frontend can split them
+          {
+            $addFields: {
+              category: {
+                $cond: {
+                  if: { $gte: ["$totalMerit", 50] },
+                  then: "merit",
+                  else: {
+                    $cond: {
+                      if: { $lte: ["$totalMerit", -25] },
+                      then: "demerit",
+                      else: "neutral",
+                    },
+                  },
+                },
+              },
+            },
+          },
+          // Sort: highest merit first for merit; lowest (most negative) first for demerit
+          { $sort: { totalMerit: -1 } },
         ])
         .toArray();
 
@@ -623,7 +653,41 @@ module.exports = (
   //     res.status(500).send({ message: "Server Error" });
   //   }
   // });
+  // GET /merits/student/:studentId/all
+  // Returns ALL merit records for a student (unsorted limit)
+  router.get("/student/:studentId/all", async (req, res) => {
+    try {
+      const { studentId } = req.params;
 
+      if (!studentId) {
+        return res.status(400).send({ message: "Student ID is required" });
+      }
+
+      const merits = await meritsCollection
+        .find({ student_id: studentId })
+        .sort({ date: -1, createdAt: -1 })
+        .toArray();
+
+      const totalMerit = merits.reduce(
+        (sum, m) => sum + (m.merit_points || 0),
+        0,
+      );
+
+      res.json({
+        success: true,
+        studentId,
+        totalMerit,
+        totalRecords: merits.length,
+        meritRecords: merits,
+      });
+    } catch (err) {
+      console.error("Error fetching all merit records:", err);
+      res.status(500).send({
+        message: "Error fetching all merit records",
+        error: err.message,
+      });
+    }
+  });
   router.post("/", async (req, res) => {
     const newMerit = req.body;
 
