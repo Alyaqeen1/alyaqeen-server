@@ -347,35 +347,30 @@ module.exports = (
       // Process each fee's payments array
       feesWithPayments.forEach((fee) => {
         if (!fee.payments || !Array.isArray(fee.payments)) {
-          return; // Skip fees without payments array
+          return;
         }
 
-        // Process each payment in the payments array
         fee.payments.forEach((payment) => {
           const paymentAmount = payment.amount || 0;
           const paymentDateStr = payment.date;
 
-          // Skip if no amount or date
           if (paymentAmount <= 0 || !paymentDateStr) {
             return;
           }
 
-          // Parse the date string (format: "2026-01-07")
           try {
-            // Extract year and month from date string
             const dateParts = paymentDateStr.split("-");
             if (dateParts.length < 2) return;
 
             const paymentYear = parseInt(dateParts[0]);
             const paymentMonth = parseInt(dateParts[1]);
 
-            // Only count payments from the requested year
             if (
               paymentYear === yearNum &&
               paymentMonth >= 1 &&
               paymentMonth <= 12
             ) {
-              const monthIndex = paymentMonth - 1; // Convert to 0-11
+              const monthIndex = paymentMonth - 1;
               monthlyTotals[monthIndex] += paymentAmount;
             }
           } catch (error) {
@@ -403,6 +398,14 @@ module.exports = (
         "Dec",
       ];
 
+      // ✅ FIX: Compute total and average based on active months only
+      const totalRevenue = monthlyTotals.reduce(
+        (sum, amount) => sum + amount,
+        0,
+      );
+      const activeMonths = monthlyTotals.filter((amount) => amount > 0).length;
+      const averageRevenue = activeMonths > 0 ? totalRevenue / activeMonths : 0;
+
       const response = {
         success: true,
         year: yearNum,
@@ -414,14 +417,9 @@ module.exports = (
           },
         ],
         summary: {
-          total: parseFloat(
-            monthlyTotals.reduce((sum, amount) => sum + amount, 0).toFixed(2),
-          ),
-          average: parseFloat(
-            (
-              monthlyTotals.reduce((sum, amount) => sum + amount, 0) / 12
-            ).toFixed(2),
-          ),
+          total: parseFloat(totalRevenue.toFixed(2)),
+          average: parseFloat(averageRevenue.toFixed(2)), // ✅ Now divides by activeMonths
+          activeMonths: activeMonths, // ✅ Exposed for frontend
           transactionCount: feesWithPayments.length,
         },
       };
