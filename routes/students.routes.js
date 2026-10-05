@@ -8,6 +8,10 @@ const {
   generateStudentReport,
 } = require("../config/generateReport");
 const {
+  generateFeeRefundReport,
+  uploadToCloudinary: uploadFeeRefundToCloudinary,
+} = require("../config/generateFeeRefundReport");
+const {
   buildStudentYearlySummaryPipeline,
   buildYearlySummaryPipeline,
 } = require("../utils/lessonsCoveredUtils");
@@ -1393,6 +1397,140 @@ module.exports = (
       res.status(500).json({ error: error.message });
     }
   });
+  // ===== NEW: Generate Fee Refund / Dispute Report =====
+  router.post("/generate-fee-refund-report/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
 
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid student ID format",
+        });
+      }
+
+      // 1️⃣ Fetch student
+      const students = await studentsCollection
+        .aggregate(buildStudentAggregationPipeline({ _id: new ObjectId(id) }))
+        .toArray();
+
+      if (!students.length) {
+        return res.status(404).json({
+          success: false,
+          error: "Student not found",
+        });
+      }
+
+      const studentData = students[0];
+      const student_id = studentData._id.toString();
+
+      // 2️⃣ Attendance data
+      const attendanceSummary = await attendancesCollection
+        .aggregate([
+          { $match: { student_id: student_id, attendance: "student" } },
+          { $group: { _id: "$status", count: { $sum: 1 } } },
+          {
+            $group: {
+              _id: null,
+              total: { $sum: "$count" },
+              statusCounts: { $push: { k: "$_id", v: "$count" } },
+            },
+          },
+          {
+            $project: {
+              _id: 0,
+              total: 1,
+              statusCounts: { $arrayToObject: "$statusCounts" },
+            },
+          },
+          {
+            $project: {
+              total: 1,
+              present: { $ifNull: ["$statusCounts.present", 0] },
+              absent: { $ifNull: ["$statusCounts.absent", 0] },
+              late: { $ifNull: ["$statusCounts.late", 0] },
+            },
+          },
+        ])
+        .toArray();
+
+      const attendanceData =
+        attendanceSummary.length > 0
+          ? attendanceSummary[0]
+          : { total: 0, present: 0, absent: 0, late: 0 };
+
+      // 3️⃣ Fee data — pull from your fees collection
+      //    (mirror the logic you already use in generate-student-report)
+      let feeSummary = {
+        totalPaid: 0,
+        outstandingAmount: 0,
+        lastPaymentDate: null,
+        paymentStatus: "No payment records",
+        unpaidMonths: [],
+        partiallyPaidMonths: [],
+        fullyPaidMonths: [],
+        monthlyFee: studentData.monthly_fee || 50,
+        discountedMonthlyFee: studentData.monthly_fee || 50,
+        paidMonthsCount: 0,
+        partiallyPaidMonthsCount: 0,
+        unpaidMonthsCount: 0,
+      };
+
+      // TODO: if you already have a helper that builds feeSummary
+      // (e.g. inside generate-student-report), extract it to a shared function
+      // and call it here. For now this endpoint accepts feeSummary from req.body
+      // OR falls back to defaults.
+      if (req.body?.fees) {
+        feeSummary = { ...feeSummary, ...req.body.fees };
+      }
+
+      // 4️⃣ Generate the Fee Refund / Dispute PDF
+      const pdfResult = await generateFeeRefundReport(studentData, {
+        attendance: attendanceData,
+        fees: feeSummary,
+        reportType: "fee_refund_dispute",
+        requestedBy: req.body?.requestedBy || "Academy Administration",
+        disputeReason: req.body?.disputeReason || null,
+      });
+
+      // 5️⃣ Upload to Cloudinary (separate folder)
+      const cloudinaryUrl = await uploadFeeRefundToCloudinary(
+        pdfResult.pdfBuffer,
+        pdfResult.fileName,
+      );
+
+      // 6️⃣ (Optional) Store reference on the student document
+      await studentsCollection.updateOne(
+        { _id: new ObjectId(id) },
+        {
+          $set: {
+            feeRefundReportPdf: cloudinaryUrl,
+            feeRefundReportGeneratedAt: new Date(),
+          },
+        },
+      );
+
+      // 7️⃣ Respond
+      res.status(200).json({
+        success: true,
+        message: "Fee refund / dispute report generated successfully",
+        reportUrl: cloudinaryUrl,
+        reportId: pdfResult.reportId,
+        studentId: id,
+        studentName: studentData.name,
+        reportType: "fee_refund_dispute",
+        includesPolicies: true,
+        includesSignatureProof: true,
+      });
+    } catch (error) {
+      console.error("Fee refund report generation error:", error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to generate fee refund report",
+        details:
+          process.env.NODE_ENV === "development" ? error.message : undefined,
+      });
+    }
+  });
   return router;
 };
