@@ -1075,9 +1075,13 @@ module.exports = (
         periodLabel = `${currentYear}-${currentMonth}`;
       }
 
-      // -------- 2) Aggregate status counts + gender breakdown --------
-      // We use $lookup to fetch the student document by student_id (string)
-      const attendanceAgg = await attendancesCollection
+      // ============================================================
+      //  2) SINGLE aggregation with $facet:
+      //     - statusTotals    → overall present/absent/late/half_day
+      //     - genderTotals    → grouped by (status, gender)
+      //     - sessionTotals   → grouped by (status, session_time) — per enrollment
+      // ============================================================
+      const facetResult = await attendancesCollection
         .aggregate([
           {
             $match: {
@@ -1085,7 +1089,7 @@ module.exports = (
               attendance: "student",
             },
           },
-          // Join with students collection to get gender
+          // Top-level lookup: only for gender
           {
             $lookup: {
               from: "students",
@@ -1093,9 +1097,7 @@ module.exports = (
               pipeline: [
                 {
                   $match: {
-                    $expr: {
-                      $eq: [{ $toString: "$_id" }, "$$sid"],
-                    },
+                    $expr: { $eq: [{ $toString: "$_id" }, "$$sid"] },
                   },
                 },
                 { $project: { _id: 0, gender: 1 } },
@@ -1113,34 +1115,111 @@ module.exports = (
               },
             },
           },
-          // Group by status + gender
           {
-            $group: {
-              _id: { status: "$status", gender: "$gender" },
-              count: { $sum: 1 },
+            $facet: {
+              // --- a) Overall status totals ---
+              statusTotals: [
+                {
+                  $group: {
+                    _id: "$status",
+                    count: { $sum: 1 },
+                  },
+                },
+              ],
+
+              // --- b) Status × Gender ---
+              genderTotals: [
+                {
+                  $group: {
+                    _id: { status: "$status", gender: "$gender" },
+                    count: { $sum: 1 },
+                  },
+                },
+              ],
+
+              // --- c) Status × Session (per enrollment) ---
+              sessionTotals: [
+                // Independent lookup for enrollments
+                {
+                  $lookup: {
+                    from: "students",
+                    let: { sid: "$student_id" },
+                    pipeline: [
+                      {
+                        $match: {
+                          $expr: { $eq: [{ $toString: "$_id" }, "$$sid"] },
+                        },
+                      },
+                      {
+                        $project: {
+                          _id: 0,
+                          session_times: "$academic.enrollments.session_time",
+                        },
+                      },
+                    ],
+                    as: "stu",
+                  },
+                },
+                {
+                  $addFields: {
+                    session_times: {
+                      $ifNull: [
+                        { $arrayElemAt: ["$stu.session_times", 0] },
+                        ["Unknown"],
+                      ],
+                    },
+                  },
+                },
+                // One document per session this student attends
+                { $unwind: "$session_times" },
+                {
+                  $group: {
+                    _id: { status: "$status", session: "$session_times" },
+                    count: { $sum: 1 },
+                  },
+                },
+              ],
             },
           },
         ])
         .toArray();
 
-      // -------- 3) Flatten aggregation --------
-      const statusTotals = {}; // { present: n, absent: n, ... }
+      const facets = facetResult[0] || {
+        statusTotals: [],
+        genderTotals: [],
+        sessionTotals: [],
+      };
+
+      // -------- 3) Flatten status totals --------
+      const statusTotals = {};
+      facets.statusTotals.forEach((row) => {
+        statusTotals[row._id] = row.count;
+      });
+
+      const totalPresent = statusTotals.present || 0;
+      const totalAbsent = statusTotals.absent || 0;
+      const totalLate = statusTotals.late || 0;
+      const totalHalfDay = statusTotals.half_day || 0;
+
+      const totalAttendance =
+        totalPresent + totalAbsent + totalLate + totalHalfDay;
+      const attendanceRate =
+        totalAttendance > 0
+          ? ((totalPresent / totalAttendance) * 100).toFixed(1)
+          : 0;
+
+      // -------- 4) Flatten gender breakdown --------
       const byGender = {
-        // { Male: {...}, Female: {...}, Unknown: {...} }
         Male: { present: 0, absent: 0, late: 0, half_day: 0, total: 0 },
         Female: { present: 0, absent: 0, late: 0, half_day: 0, total: 0 },
         Unknown: { present: 0, absent: 0, late: 0, half_day: 0, total: 0 },
       };
 
-      attendanceAgg.forEach((row) => {
+      facets.genderTotals.forEach((row) => {
         const status = row._id.status;
         const gender = row._id.gender || "Unknown";
         const count = row.count;
 
-        // Status totals
-        statusTotals[status] = (statusTotals[status] || 0) + count;
-
-        // Gender buckets — normalize gender casing
         const g =
           String(gender).toLowerCase() === "male"
             ? "Male"
@@ -1156,19 +1235,6 @@ module.exports = (
         }
       });
 
-      const totalPresent = statusTotals.present || 0;
-      const totalAbsent = statusTotals.absent || 0;
-      const totalLate = statusTotals.late || 0;
-      const totalHalfDay = statusTotals.half_day || 0;
-
-      const totalAttendance =
-        totalPresent + totalAbsent + totalLate + totalHalfDay;
-      const attendanceRate =
-        totalAttendance > 0
-          ? ((totalPresent / totalAttendance) * 100).toFixed(1)
-          : 0;
-
-      // Per-gender rates
       const genderRates = {};
       ["Male", "Female", "Unknown"].forEach((g) => {
         const bucket = byGender[g];
@@ -1184,8 +1250,41 @@ module.exports = (
         };
       });
 
-      // -------- 4) Previous-period comparison (status only) --------
-      // (unchanged logic — kept identical to your original code)
+      // -------- 5) Flatten session breakdown --------
+      const SESSION_KEYS = ["S1", "S2", "WM", "WA", "Unknown"];
+      const sessionBreakdown = {};
+      SESSION_KEYS.forEach((s) => {
+        sessionBreakdown[s] = {
+          present: 0,
+          absent: 0,
+          late: 0,
+          half_day: 0,
+          total: 0,
+        };
+      });
+
+      facets.sessionTotals.forEach((row) => {
+        const session = row._id.session || "Unknown";
+        const status = row._id.status;
+        const count = row.count;
+
+        if (!sessionBreakdown[session]) return;
+        if (sessionBreakdown[session][status] !== undefined) {
+          sessionBreakdown[session][status] += count;
+        }
+        sessionBreakdown[session].total += count;
+      });
+
+      // Add per-session attendance rate
+      Object.keys(sessionBreakdown).forEach((s) => {
+        const bucket = sessionBreakdown[s];
+        bucket.rate =
+          bucket.total > 0
+            ? parseFloat(((bucket.present / bucket.total) * 100).toFixed(1))
+            : 0;
+      });
+
+      // -------- 6) Previous-period comparison --------
       let previousPeriodStats = { present: 0, absent: 0, total: 0, rate: 0 };
 
       if (periodType === "month") {
@@ -1268,7 +1367,7 @@ module.exports = (
         };
       }
 
-      // -------- 5) Change % --------
+      // -------- 7) Change % --------
       let changePercentage = 0;
       if (previousPeriodStats.rate > 0) {
         changePercentage = parseFloat(
@@ -1282,7 +1381,7 @@ module.exports = (
         changePercentage = 100;
       }
 
-      // -------- 6) Response --------
+      // -------- 8) Response --------
       res.json({
         success: true,
         period: periodLabel,
@@ -1295,8 +1394,8 @@ module.exports = (
           total: totalAttendance,
           rate: parseFloat(attendanceRate),
         },
-        // ✅ NEW: gender breakdown
         genderBreakdown: genderRates,
+        sessionBreakdown: sessionBreakdown,
         comparison: {
           previous: previousPeriodStats,
           change: changePercentage,
