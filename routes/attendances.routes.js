@@ -1076,20 +1076,23 @@ module.exports = (
       }
 
       // ============================================================
-      //  2) SINGLE aggregation with $facet:
-      //     - statusTotals    → overall present/absent/late/half_day
-      //     - genderTotals    → grouped by (status, gender)
-      //     - sessionTotals   → grouped by (status, session_time) — per enrollment
+      //  2) SINGLE aggregation with $facet
+      //     Rules:
+      //       • Only attendance rows inside the selected date range
+      //       • Only rows whose student exists
+      //       • Only rows whose student is enrolled + active
       // ============================================================
       const facetResult = await attendancesCollection
         .aggregate([
+          // 1️⃣ Only records within the selected period
           {
             $match: {
               ...dateFilter,
               attendance: "student",
             },
           },
-          // Top-level lookup: only for gender
+
+          // 2️⃣ Join students — filtered to enrolled + active
           {
             $lookup: {
               from: "students",
@@ -1100,11 +1103,24 @@ module.exports = (
                     $expr: { $eq: [{ $toString: "$_id" }, "$$sid"] },
                   },
                 },
-                { $project: { _id: 0, gender: 1 } },
+                // 🚫 exclude hold / rejected / inactive / deleted
+                { $match: { status: "enrolled", activity: "active" } },
+                {
+                  $project: {
+                    _id: 0,
+                    gender: 1,
+                    session_times: "$academic.enrollments.session_time",
+                  },
+                },
               ],
               as: "studentInfo",
             },
           },
+
+          // 3️⃣ Drop rows whose student wasn't found, not enrolled, or inactive
+          { $match: { "studentInfo.0": { $exists: true } } },
+
+          // 4️⃣ Hoist gender + session_times to top-level fields
           {
             $addFields: {
               gender: {
@@ -1113,8 +1129,16 @@ module.exports = (
                   "Unknown",
                 ],
               },
+              session_times: {
+                $ifNull: [
+                  { $arrayElemAt: ["$studentInfo.session_times", 0] },
+                  ["Unknown"],
+                ],
+              },
             },
           },
+
+          // 5️⃣ Split into facets
           {
             $facet: {
               // --- a) Overall status totals ---
@@ -1127,7 +1151,7 @@ module.exports = (
                 },
               ],
 
-              // --- b) Status × Gender ---
+              // --- b) Status × Gender (overall) ---
               genderTotals: [
                 {
                   $group: {
@@ -1137,44 +1161,16 @@ module.exports = (
                 },
               ],
 
-              // --- c) Status × Session (per enrollment) ---
+              // --- c) Status × Session × Gender (per enrollment) ---
               sessionTotals: [
-                // Independent lookup for enrollments
-                {
-                  $lookup: {
-                    from: "students",
-                    let: { sid: "$student_id" },
-                    pipeline: [
-                      {
-                        $match: {
-                          $expr: { $eq: [{ $toString: "$_id" }, "$$sid"] },
-                        },
-                      },
-                      {
-                        $project: {
-                          _id: 0,
-                          session_times: "$academic.enrollments.session_time",
-                        },
-                      },
-                    ],
-                    as: "stu",
-                  },
-                },
-                {
-                  $addFields: {
-                    session_times: {
-                      $ifNull: [
-                        { $arrayElemAt: ["$stu.session_times", 0] },
-                        ["Unknown"],
-                      ],
-                    },
-                  },
-                },
-                // One document per session this student attends
                 { $unwind: "$session_times" },
                 {
                   $group: {
-                    _id: { status: "$status", session: "$session_times" },
+                    _id: {
+                      status: "$status",
+                      session: "$session_times",
+                      gender: "$gender",
+                    },
                     count: { $sum: 1 },
                   },
                 },
@@ -1208,7 +1204,7 @@ module.exports = (
           ? ((totalPresent / totalAttendance) * 100).toFixed(1)
           : 0;
 
-      // -------- 4) Flatten gender breakdown --------
+      // -------- 4) Flatten overall gender breakdown --------
       const byGender = {
         Male: { present: 0, absent: 0, late: 0, half_day: 0, total: 0 },
         Female: { present: 0, absent: 0, late: 0, half_day: 0, total: 0 },
@@ -1250,7 +1246,7 @@ module.exports = (
         };
       });
 
-      // -------- 5) Flatten session breakdown --------
+      // -------- 5) Flatten session breakdown (with per-session gender) --------
       const SESSION_KEYS = ["S1", "S2", "WM", "WA", "Unknown"];
       const sessionBreakdown = {};
       SESSION_KEYS.forEach((s) => {
@@ -1260,31 +1256,124 @@ module.exports = (
           late: 0,
           half_day: 0,
           total: 0,
+          rate: 0,
+          male: {
+            present: 0,
+            absent: 0,
+            late: 0,
+            half_day: 0,
+            total: 0,
+            rate: 0,
+          },
+          female: {
+            present: 0,
+            absent: 0,
+            late: 0,
+            half_day: 0,
+            total: 0,
+            rate: 0,
+          },
+          unknown: {
+            present: 0,
+            absent: 0,
+            late: 0,
+            half_day: 0,
+            total: 0,
+            rate: 0,
+          },
         };
       });
 
       facets.sessionTotals.forEach((row) => {
         const session = row._id.session || "Unknown";
         const status = row._id.status;
+        const gender = row._id.gender || "Unknown";
         const count = row.count;
 
         if (!sessionBreakdown[session]) return;
+
+        // Top-level session totals
         if (sessionBreakdown[session][status] !== undefined) {
           sessionBreakdown[session][status] += count;
         }
         sessionBreakdown[session].total += count;
+
+        // Gender bucket inside this session
+        const g =
+          String(gender).toLowerCase() === "male"
+            ? "male"
+            : String(gender).toLowerCase() === "female"
+              ? "female"
+              : "unknown";
+
+        const bucket = sessionBreakdown[session][g];
+        if (bucket) {
+          if (bucket[status] !== undefined) bucket[status] += count;
+          bucket.total += count;
+        }
       });
 
-      // Add per-session attendance rate
+      // Compute rates for session + per-gender per-session
       Object.keys(sessionBreakdown).forEach((s) => {
         const bucket = sessionBreakdown[s];
         bucket.rate =
           bucket.total > 0
             ? parseFloat(((bucket.present / bucket.total) * 100).toFixed(1))
             : 0;
+
+        ["male", "female", "unknown"].forEach((g) => {
+          const gb = bucket[g];
+          gb.rate =
+            gb.total > 0
+              ? parseFloat(((gb.present / gb.total) * 100).toFixed(1))
+              : 0;
+        });
       });
 
       // -------- 6) Previous-period comparison --------
+      // Helper: count statuses for a date filter, but ONLY for currently
+      // active + enrolled students.
+      const countStatusesForActiveStudents = async (filter) => {
+        const rows = await attendancesCollection
+          .aggregate([
+            { $match: { ...filter, attendance: "student" } },
+            {
+              $lookup: {
+                from: "students",
+                let: { sid: "$student_id" },
+                pipeline: [
+                  {
+                    $match: {
+                      $expr: { $eq: [{ $toString: "$_id" }, "$$sid"] },
+                    },
+                  },
+                  { $match: { status: "enrolled", activity: "active" } },
+                  { $project: { _id: 1 } },
+                ],
+                as: "activeStu",
+              },
+            },
+            { $match: { "activeStu.0": { $exists: true } } },
+            { $group: { _id: "$status", count: { $sum: 1 } } },
+          ])
+          .toArray();
+
+        const present = rows.find((r) => r._id === "present")?.count || 0;
+        const absent = rows.find((r) => r._id === "absent")?.count || 0;
+        const late = rows.find((r) => r._id === "late")?.count || 0;
+        const halfDay = rows.find((r) => r._id === "half_day")?.count || 0;
+
+        const total = present + absent + late + halfDay;
+        const rate = total > 0 ? ((present / total) * 100).toFixed(1) : 0;
+
+        return {
+          present,
+          absent,
+          total,
+          rate: parseFloat(rate),
+        };
+      };
+
       let previousPeriodStats = { present: 0, absent: 0, total: 0, rate: 0 };
 
       if (periodType === "month") {
@@ -1297,30 +1386,9 @@ module.exports = (
           date: { $regex: `^${prevYear}-${prevMonth}` },
         };
 
-        const prevStats = await attendancesCollection
-          .aggregate([
-            { $match: { ...prevDateFilter, attendance: "student" } },
-            { $group: { _id: "$status", count: { $sum: 1 } } },
-          ])
-          .toArray();
-
-        const prevPresent =
-          prevStats.find((a) => a._id === "present")?.count || 0;
-        const prevAbsent =
-          prevStats.find((a) => a._id === "absent")?.count || 0;
-        const prevLate = prevStats.find((a) => a._id === "late")?.count || 0;
-        const prevHalfDay =
-          prevStats.find((a) => a._id === "half_day")?.count || 0;
-
-        const prevTotal = prevPresent + prevAbsent + prevLate + prevHalfDay;
-        const prevRate =
-          prevTotal > 0 ? ((prevPresent / prevTotal) * 100).toFixed(1) : 0;
-
+        const prev = await countStatusesForActiveStudents(prevDateFilter);
         previousPeriodStats = {
-          present: prevPresent,
-          absent: prevAbsent,
-          total: prevTotal,
-          rate: parseFloat(prevRate),
+          ...prev,
           period: `${prevYear}-${prevMonth}`,
         };
       } else if (periodType === "custom" && startDate && endDate) {
@@ -1335,40 +1403,22 @@ module.exports = (
 
         const prevStartStr = prevStart.toISOString().split("T")[0];
         const prevEndStr = prevEnd.toISOString().split("T")[0];
+
         const prevDateFilter = {
           date: { $gte: prevStartStr, $lte: prevEndStr },
         };
 
-        const prevStats = await attendancesCollection
-          .aggregate([
-            { $match: { ...prevDateFilter, attendance: "student" } },
-            { $group: { _id: "$status", count: { $sum: 1 } } },
-          ])
-          .toArray();
-
-        const prevPresent =
-          prevStats.find((a) => a._id === "present")?.count || 0;
-        const prevAbsent =
-          prevStats.find((a) => a._id === "absent")?.count || 0;
-        const prevLate = prevStats.find((a) => a._id === "late")?.count || 0;
-        const prevHalfDay =
-          prevStats.find((a) => a._id === "half_day")?.count || 0;
-
-        const prevTotal = prevPresent + prevAbsent + prevLate + prevHalfDay;
-        const prevRate =
-          prevTotal > 0 ? ((prevPresent / prevTotal) * 100).toFixed(1) : 0;
-
+        const prev = await countStatusesForActiveStudents(prevDateFilter);
         previousPeriodStats = {
-          present: prevPresent,
-          absent: prevAbsent,
-          total: prevTotal,
-          rate: parseFloat(prevRate),
+          ...prev,
           period: `${prevStartStr} to ${prevEndStr}`,
         };
       }
 
       // -------- 7) Change % --------
       let changePercentage = 0;
+      let hasComparisonData = false;
+
       if (previousPeriodStats.rate > 0) {
         changePercentage = parseFloat(
           (
@@ -1377,8 +1427,11 @@ module.exports = (
             100
           ).toFixed(1),
         );
+        hasComparisonData = true;
       } else if (parseFloat(attendanceRate) > 0) {
-        changePercentage = 100;
+        // Previous period had 0 attendance → no meaningful comparison
+        changePercentage = 0;
+        hasComparisonData = false;
       }
 
       // -------- 8) Response --------
@@ -1400,6 +1453,7 @@ module.exports = (
           previous: previousPeriodStats,
           change: changePercentage,
           isIncrease: changePercentage >= 0,
+          hasComparisonData,
         },
       });
     } catch (error) {
