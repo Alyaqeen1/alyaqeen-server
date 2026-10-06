@@ -1049,46 +1049,35 @@ module.exports = (
     try {
       const { year, month, startDate, endDate } = req.query;
 
-      // Determine date range based on parameters
+      // -------- 1) Build date filter --------
       let dateFilter = {};
       let periodType = "";
       let periodLabel = "";
 
       if (startDate && endDate) {
-        // Custom date range
-        dateFilter = {
-          date: { $gte: startDate, $lte: endDate },
-        };
+        dateFilter = { date: { $gte: startDate, $lte: endDate } };
         periodType = "custom";
         periodLabel = `${startDate} to ${endDate}`;
       } else if (year && month) {
-        // Specific month
         const monthStr = String(month).padStart(2, "0");
-        dateFilter = {
-          date: { $regex: `^${year}-${monthStr}` },
-        };
+        dateFilter = { date: { $regex: `^${year}-${monthStr}` } };
         periodType = "month";
         periodLabel = `${year}-${monthStr}`;
       } else if (year) {
-        // Whole year
-        dateFilter = {
-          date: { $regex: `^${year}` },
-        };
+        dateFilter = { date: { $regex: `^${year}` } };
         periodType = "year";
         periodLabel = `${year}`;
       } else {
-        // Default: current month
         const today = getUKDate();
         const [currentYear, currentMonth] = today.split("-");
-        dateFilter = {
-          date: { $regex: `^${currentYear}-${currentMonth}` },
-        };
+        dateFilter = { date: { $regex: `^${currentYear}-${currentMonth}` } };
         periodType = "current";
         periodLabel = `${currentYear}-${currentMonth}`;
       }
 
-      // Get attendance for CURRENT period
-      const attendanceStats = await attendancesCollection
+      // -------- 2) Aggregate status counts + gender breakdown --------
+      // We use $lookup to fetch the student document by student_id (string)
+      const attendanceAgg = await attendancesCollection
         .aggregate([
           {
             $match: {
@@ -1096,23 +1085,81 @@ module.exports = (
               attendance: "student",
             },
           },
+          // Join with students collection to get gender
+          {
+            $lookup: {
+              from: "students",
+              let: { sid: "$student_id" },
+              pipeline: [
+                {
+                  $match: {
+                    $expr: {
+                      $eq: [{ $toString: "$_id" }, "$$sid"],
+                    },
+                  },
+                },
+                { $project: { _id: 0, gender: 1 } },
+              ],
+              as: "studentInfo",
+            },
+          },
+          {
+            $addFields: {
+              gender: {
+                $ifNull: [
+                  { $arrayElemAt: ["$studentInfo.gender", 0] },
+                  "Unknown",
+                ],
+              },
+            },
+          },
+          // Group by status + gender
           {
             $group: {
-              _id: "$status",
+              _id: { status: "$status", gender: "$gender" },
               count: { $sum: 1 },
             },
           },
         ])
         .toArray();
 
-      const totalPresent =
-        attendanceStats.find((a) => a._id === "present")?.count || 0;
-      const totalAbsent =
-        attendanceStats.find((a) => a._id === "absent")?.count || 0;
-      const totalLate =
-        attendanceStats.find((a) => a._id === "late")?.count || 0;
-      const totalHalfDay =
-        attendanceStats.find((a) => a._id === "half_day")?.count || 0;
+      // -------- 3) Flatten aggregation --------
+      const statusTotals = {}; // { present: n, absent: n, ... }
+      const byGender = {
+        // { Male: {...}, Female: {...}, Unknown: {...} }
+        Male: { present: 0, absent: 0, late: 0, half_day: 0, total: 0 },
+        Female: { present: 0, absent: 0, late: 0, half_day: 0, total: 0 },
+        Unknown: { present: 0, absent: 0, late: 0, half_day: 0, total: 0 },
+      };
+
+      attendanceAgg.forEach((row) => {
+        const status = row._id.status;
+        const gender = row._id.gender || "Unknown";
+        const count = row.count;
+
+        // Status totals
+        statusTotals[status] = (statusTotals[status] || 0) + count;
+
+        // Gender buckets — normalize gender casing
+        const g =
+          String(gender).toLowerCase() === "male"
+            ? "Male"
+            : String(gender).toLowerCase() === "female"
+              ? "Female"
+              : "Unknown";
+
+        if (byGender[g]) {
+          if (byGender[g][status] !== undefined) {
+            byGender[g][status] += count;
+          }
+          byGender[g].total += count;
+        }
+      });
+
+      const totalPresent = statusTotals.present || 0;
+      const totalAbsent = statusTotals.absent || 0;
+      const totalLate = statusTotals.late || 0;
+      const totalHalfDay = statusTotals.half_day || 0;
 
       const totalAttendance =
         totalPresent + totalAbsent + totalLate + totalHalfDay;
@@ -1121,11 +1168,27 @@ module.exports = (
           ? ((totalPresent / totalAttendance) * 100).toFixed(1)
           : 0;
 
-      // Calculate PREVIOUS period for comparison
+      // Per-gender rates
+      const genderRates = {};
+      ["Male", "Female", "Unknown"].forEach((g) => {
+        const bucket = byGender[g];
+        const attended = bucket.present + bucket.late + bucket.half_day;
+        const rate =
+          bucket.total > 0
+            ? ((bucket.present / bucket.total) * 100).toFixed(1)
+            : 0;
+        genderRates[g] = {
+          ...bucket,
+          attended,
+          rate: parseFloat(rate),
+        };
+      });
+
+      // -------- 4) Previous-period comparison (status only) --------
+      // (unchanged logic — kept identical to your original code)
       let previousPeriodStats = { present: 0, absent: 0, total: 0, rate: 0 };
 
       if (periodType === "month") {
-        // Get previous month
         const currentDate = new Date(`${year}-${month}-01`);
         currentDate.setMonth(currentDate.getMonth() - 1);
         const prevYear = currentDate.getFullYear();
@@ -1137,18 +1200,8 @@ module.exports = (
 
         const prevStats = await attendancesCollection
           .aggregate([
-            {
-              $match: {
-                ...prevDateFilter,
-                attendance: "student",
-              },
-            },
-            {
-              $group: {
-                _id: "$status",
-                count: { $sum: 1 },
-              },
-            },
+            { $match: { ...prevDateFilter, attendance: "student" } },
+            { $group: { _id: "$status", count: { $sum: 1 } } },
           ])
           .toArray();
 
@@ -1172,17 +1225,14 @@ module.exports = (
           period: `${prevYear}-${prevMonth}`,
         };
       } else if (periodType === "custom" && startDate && endDate) {
-        // For custom range, calculate equivalent previous period
         const start = new Date(startDate);
         const end = new Date(endDate);
-        const diffDays = Math.floor((end - start) / (1000 * 60 * 60 * 24)) + 1; // +1 to include both start and end days
+        const diffDays = Math.floor((end - start) / (1000 * 60 * 60 * 24)) + 1;
 
-        // Calculate previous period of same duration
         const prevEnd = new Date(start);
-        prevEnd.setDate(prevEnd.getDate() - 1); // Day before the start date
-
+        prevEnd.setDate(prevEnd.getDate() - 1);
         const prevStart = new Date(prevEnd);
-        prevStart.setDate(prevStart.getDate() - diffDays + 1); // Go back same number of days
+        prevStart.setDate(prevStart.getDate() - diffDays + 1);
 
         const prevStartStr = prevStart.toISOString().split("T")[0];
         const prevEndStr = prevEnd.toISOString().split("T")[0];
@@ -1192,18 +1242,8 @@ module.exports = (
 
         const prevStats = await attendancesCollection
           .aggregate([
-            {
-              $match: {
-                ...prevDateFilter,
-                attendance: "student",
-              },
-            },
-            {
-              $group: {
-                _id: "$status",
-                count: { $sum: 1 },
-              },
-            },
+            { $match: { ...prevDateFilter, attendance: "student" } },
+            { $group: { _id: "$status", count: { $sum: 1 } } },
           ])
           .toArray();
 
@@ -1228,7 +1268,7 @@ module.exports = (
         };
       }
 
-      // Calculate change percentage
+      // -------- 5) Change % --------
       let changePercentage = 0;
       if (previousPeriodStats.rate > 0) {
         changePercentage = parseFloat(
@@ -1239,10 +1279,10 @@ module.exports = (
           ).toFixed(1),
         );
       } else if (parseFloat(attendanceRate) > 0) {
-        // If previous period had 0% but current has attendance
         changePercentage = 100;
       }
 
+      // -------- 6) Response --------
       res.json({
         success: true,
         period: periodLabel,
@@ -1255,6 +1295,8 @@ module.exports = (
           total: totalAttendance,
           rate: parseFloat(attendanceRate),
         },
+        // ✅ NEW: gender breakdown
+        genderBreakdown: genderRates,
         comparison: {
           previous: previousPeriodStats,
           change: changePercentage,
@@ -1270,7 +1312,6 @@ module.exports = (
       });
     }
   });
-
   // router.get("/attendance-stats", async (req, res) => {
   //   try {
   //     const { year, month, startDate, endDate } = req.query;
