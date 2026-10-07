@@ -1076,23 +1076,97 @@ module.exports = (
       }
 
       // ============================================================
-      //  2) SINGLE aggregation with $facet
-      //     Rules:
-      //       • Only attendance rows inside the selected date range
-      //       • Only rows whose student exists
-      //       • Only rows whose student is enrolled + active
+      //  ENROLLED PER SESSION
+      //  Uses the SAME filter as /by-activity/:activity so the numbers
+      //  on the attendance card match the Active Students page.
+      // ============================================================
+      const ENROLLMENT_MATCH = {
+        activity: "active",
+        status: { $in: ["enrolled", "hold"] },
+      };
+
+      const enrolledPerSessionAgg = await studentsCollection
+        .aggregate([
+          { $match: ENROLLMENT_MATCH },
+          {
+            $project: {
+              gender: 1,
+              session_times: "$academic.enrollments.session_time",
+            },
+          },
+          { $unwind: "$session_times" },
+          {
+            $group: {
+              _id: { session: "$session_times", gender: "$gender" },
+              totalStudents: { $sum: 1 },
+            },
+          },
+        ])
+        .toArray();
+
+      // Flatten enrolled per-session structure
+      const enrolledPerSession = {
+        S1: { total: 0, male: 0, female: 0, unknown: 0 },
+        S2: { total: 0, male: 0, female: 0, unknown: 0 },
+        WM: { total: 0, male: 0, female: 0, unknown: 0 },
+        WA: { total: 0, male: 0, female: 0, unknown: 0 },
+        Unknown: { total: 0, male: 0, female: 0, unknown: 0 },
+      };
+
+      enrolledPerSessionAgg.forEach((row) => {
+        const session = row._id.session || "Unknown";
+        const gender = String(row._id.gender || "Unknown").toLowerCase();
+        const count = row.totalStudents;
+
+        if (!enrolledPerSession[session]) {
+          enrolledPerSession[session] = {
+            total: 0,
+            male: 0,
+            female: 0,
+            unknown: 0,
+          };
+        }
+
+        enrolledPerSession[session].total += count;
+        if (gender === "male") enrolledPerSession[session].male += count;
+        else if (gender === "female")
+          enrolledPerSession[session].female += count;
+        else enrolledPerSession[session].unknown += count;
+      });
+
+      // ============================================================
+      //  ENROLLED OVERALL (for overall gender breakdown)
+      // ============================================================
+      const enrolledOverallAgg = await studentsCollection
+        .aggregate([
+          { $match: ENROLLMENT_MATCH },
+          { $group: { _id: "$gender", count: { $sum: 1 } } },
+        ])
+        .toArray();
+
+      const enrolledOverall = {
+        Male: enrolledOverallAgg.find((r) => r._id === "Male")?.count || 0,
+        Female: enrolledOverallAgg.find((r) => r._id === "Female")?.count || 0,
+        Unknown:
+          enrolledOverallAgg.find((r) => r._id !== "Male" && r._id !== "Female")
+            ?.count || 0,
+      };
+
+      // ============================================================
+      //  MAIN FACET AGGREGATION
+      //  Rules:
+      //    • Only attendance rows inside the selected date range
+      //    • Only rows whose student exists
+      //    • Only rows whose student is enrolled/hold + active
       // ============================================================
       const facetResult = await attendancesCollection
         .aggregate([
-          // 1️⃣ Only records within the selected period
           {
             $match: {
               ...dateFilter,
               attendance: "student",
             },
           },
-
-          // 2️⃣ Join students — filtered to enrolled + active
           {
             $lookup: {
               from: "students",
@@ -1103,8 +1177,8 @@ module.exports = (
                     $expr: { $eq: [{ $toString: "$_id" }, "$$sid"] },
                   },
                 },
-                // 🚫 exclude hold / rejected / inactive / deleted
-                { $match: { status: "enrolled", activity: "active" } },
+                // ✅ matches /by-activity filter
+                { $match: ENROLLMENT_MATCH },
                 {
                   $project: {
                     _id: 0,
@@ -1116,11 +1190,7 @@ module.exports = (
               as: "studentInfo",
             },
           },
-
-          // 3️⃣ Drop rows whose student wasn't found, not enrolled, or inactive
           { $match: { "studentInfo.0": { $exists: true } } },
-
-          // 4️⃣ Hoist gender + session_times to top-level fields
           {
             $addFields: {
               gender: {
@@ -1137,8 +1207,6 @@ module.exports = (
               },
             },
           },
-
-          // 5️⃣ Split into facets
           {
             $facet: {
               // --- a) Overall status totals ---
@@ -1157,6 +1225,14 @@ module.exports = (
                   $group: {
                     _id: { status: "$status", gender: "$gender" },
                     count: { $sum: 1 },
+                    students: { $addToSet: "$student_id" },
+                  },
+                },
+                {
+                  $project: {
+                    _id: 1,
+                    count: 1,
+                    studentCount: { $size: "$students" },
                   },
                 },
               ],
@@ -1172,6 +1248,14 @@ module.exports = (
                       gender: "$gender",
                     },
                     count: { $sum: 1 },
+                    students: { $addToSet: "$student_id" },
+                  },
+                },
+                {
+                  $project: {
+                    _id: 1,
+                    count: 1,
+                    studentCount: { $size: "$students" },
                   },
                 },
               ],
@@ -1206,15 +1290,40 @@ module.exports = (
 
       // -------- 4) Flatten overall gender breakdown --------
       const byGender = {
-        Male: { present: 0, absent: 0, late: 0, half_day: 0, total: 0 },
-        Female: { present: 0, absent: 0, late: 0, half_day: 0, total: 0 },
-        Unknown: { present: 0, absent: 0, late: 0, half_day: 0, total: 0 },
+        Male: {
+          present: 0,
+          absent: 0,
+          late: 0,
+          half_day: 0,
+          total: 0,
+          presentStudents: 0,
+          totalStudents: 0,
+        },
+        Female: {
+          present: 0,
+          absent: 0,
+          late: 0,
+          half_day: 0,
+          total: 0,
+          presentStudents: 0,
+          totalStudents: 0,
+        },
+        Unknown: {
+          present: 0,
+          absent: 0,
+          late: 0,
+          half_day: 0,
+          total: 0,
+          presentStudents: 0,
+          totalStudents: 0,
+        },
       };
 
       facets.genderTotals.forEach((row) => {
         const status = row._id.status;
         const gender = row._id.gender || "Unknown";
         const count = row.count;
+        const studentCount = row.studentCount || 0;
 
         const g =
           String(gender).toLowerCase() === "male"
@@ -1228,6 +1337,11 @@ module.exports = (
             byGender[g][status] += count;
           }
           byGender[g].total += count;
+
+          if (status === "present") {
+            byGender[g].presentStudents += studentCount;
+          }
+          byGender[g].totalStudents += studentCount;
         }
       });
 
@@ -1239,49 +1353,96 @@ module.exports = (
           bucket.total > 0
             ? ((bucket.present / bucket.total) * 100).toFixed(1)
             : 0;
+
+        const enrolledGender = enrolledOverall[g] || 0;
+        const enrolledRate =
+          enrolledGender > 0
+            ? parseFloat(
+                ((bucket.presentStudents / enrolledGender) * 100).toFixed(1),
+              )
+            : 0;
+
         genderRates[g] = {
           ...bucket,
           attended,
           rate: parseFloat(rate),
+          enrolledStudents: enrolledGender,
+          enrolledRate,
         };
       });
 
       // -------- 5) Flatten session breakdown (with per-session gender) --------
       const SESSION_KEYS = ["S1", "S2", "WM", "WA", "Unknown"];
       const sessionBreakdown = {};
-      SESSION_KEYS.forEach((s) => {
-        sessionBreakdown[s] = {
+
+      const makeBucket = () => ({
+        // record counts
+        present: 0,
+        absent: 0,
+        late: 0,
+        half_day: 0,
+        total: 0,
+
+        // distinct students who had ANY record
+        presentStudents: 0,
+        absentStudents: 0,
+        lateStudents: 0,
+        halfDayStudents: 0,
+        totalStudents: 0,
+
+        // enrolled students (the "denominator" you want)
+        enrolledStudents: 0,
+        enrolledMale: 0,
+        enrolledFemale: 0,
+        enrolledUnknown: 0,
+
+        rate: 0,
+        studentRate: 0,
+        enrolledRate: 0,
+
+        male: {
           present: 0,
           absent: 0,
           late: 0,
           half_day: 0,
           total: 0,
+          presentStudents: 0,
+          totalStudents: 0,
+          enrolledStudents: 0,
           rate: 0,
-          male: {
-            present: 0,
-            absent: 0,
-            late: 0,
-            half_day: 0,
-            total: 0,
-            rate: 0,
-          },
-          female: {
-            present: 0,
-            absent: 0,
-            late: 0,
-            half_day: 0,
-            total: 0,
-            rate: 0,
-          },
-          unknown: {
-            present: 0,
-            absent: 0,
-            late: 0,
-            half_day: 0,
-            total: 0,
-            rate: 0,
-          },
-        };
+          studentRate: 0,
+          enrolledRate: 0,
+        },
+        female: {
+          present: 0,
+          absent: 0,
+          late: 0,
+          half_day: 0,
+          total: 0,
+          presentStudents: 0,
+          totalStudents: 0,
+          enrolledStudents: 0,
+          rate: 0,
+          studentRate: 0,
+          enrolledRate: 0,
+        },
+        unknown: {
+          present: 0,
+          absent: 0,
+          late: 0,
+          half_day: 0,
+          total: 0,
+          presentStudents: 0,
+          totalStudents: 0,
+          enrolledStudents: 0,
+          rate: 0,
+          studentRate: 0,
+          enrolledRate: 0,
+        },
+      });
+
+      SESSION_KEYS.forEach((s) => {
+        sessionBreakdown[s] = makeBucket();
       });
 
       facets.sessionTotals.forEach((row) => {
@@ -1289,16 +1450,10 @@ module.exports = (
         const status = row._id.status;
         const gender = row._id.gender || "Unknown";
         const count = row.count;
+        const studentCount = row.studentCount || 0;
 
         if (!sessionBreakdown[session]) return;
 
-        // Top-level session totals
-        if (sessionBreakdown[session][status] !== undefined) {
-          sessionBreakdown[session][status] += count;
-        }
-        sessionBreakdown[session].total += count;
-
-        // Gender bucket inside this session
         const g =
           String(gender).toLowerCase() === "male"
             ? "male"
@@ -1306,33 +1461,100 @@ module.exports = (
               ? "female"
               : "unknown";
 
+        // Session-level record + student counts
+        if (sessionBreakdown[session][status] !== undefined) {
+          sessionBreakdown[session][status] += count;
+        }
+        sessionBreakdown[session].total += count;
+
+        if (status === "present") {
+          sessionBreakdown[session].presentStudents += studentCount;
+        } else if (status === "absent") {
+          sessionBreakdown[session].absentStudents += studentCount;
+        } else if (status === "late") {
+          sessionBreakdown[session].lateStudents += studentCount;
+        } else if (status === "half_day") {
+          sessionBreakdown[session].halfDayStudents += studentCount;
+        }
+        sessionBreakdown[session].totalStudents += studentCount;
+
+        // Per-gender
         const bucket = sessionBreakdown[session][g];
         if (bucket) {
           if (bucket[status] !== undefined) bucket[status] += count;
           bucket.total += count;
+
+          if (status === "present") bucket.presentStudents += studentCount;
+          bucket.totalStudents += studentCount;
         }
       });
 
-      // Compute rates for session + per-gender per-session
+      // Attach enrolled counts + compute all rates
       Object.keys(sessionBreakdown).forEach((s) => {
-        const bucket = sessionBreakdown[s];
-        bucket.rate =
-          bucket.total > 0
-            ? parseFloat(((bucket.present / bucket.total) * 100).toFixed(1))
+        const b = sessionBreakdown[s];
+        const enrolled = enrolledPerSession[s] || {
+          total: 0,
+          male: 0,
+          female: 0,
+          unknown: 0,
+        };
+
+        b.enrolledStudents = enrolled.total;
+        b.enrolledMale = enrolled.male;
+        b.enrolledFemale = enrolled.female;
+        b.enrolledUnknown = enrolled.unknown;
+
+        // Record rate
+        b.rate =
+          b.total > 0
+            ? parseFloat(((b.present / b.total) * 100).toFixed(1))
             : 0;
 
+        // Student rate (out of those who had ANY record)
+        b.studentRate =
+          b.totalStudents > 0
+            ? parseFloat(
+                ((b.presentStudents / b.totalStudents) * 100).toFixed(1),
+              )
+            : 0;
+
+        // ✅ Enrolled rate (what the admin sees vs. Active Students page)
+        b.enrolledRate =
+          enrolled.total > 0
+            ? parseFloat(
+                ((b.presentStudents / enrolled.total) * 100).toFixed(1),
+              )
+            : 0;
+
+        // Per-gender enrolled
         ["male", "female", "unknown"].forEach((g) => {
-          const gb = bucket[g];
+          const gb = b[g];
+          const enrolledGender = enrolled[g] || 0;
+
+          gb.enrolledStudents = enrolledGender;
+
           gb.rate =
             gb.total > 0
               ? parseFloat(((gb.present / gb.total) * 100).toFixed(1))
+              : 0;
+
+          gb.studentRate =
+            gb.totalStudents > 0
+              ? parseFloat(
+                  ((gb.presentStudents / gb.totalStudents) * 100).toFixed(1),
+                )
+              : 0;
+
+          gb.enrolledRate =
+            enrolledGender > 0
+              ? parseFloat(
+                  ((gb.presentStudents / enrolledGender) * 100).toFixed(1),
+                )
               : 0;
         });
       });
 
       // -------- 6) Previous-period comparison --------
-      // Helper: count statuses for a date filter, but ONLY for currently
-      // active + enrolled students.
       const countStatusesForActiveStudents = async (filter) => {
         const rows = await attendancesCollection
           .aggregate([
@@ -1347,7 +1569,7 @@ module.exports = (
                       $expr: { $eq: [{ $toString: "$_id" }, "$$sid"] },
                     },
                   },
-                  { $match: { status: "enrolled", activity: "active" } },
+                  { $match: ENROLLMENT_MATCH },
                   { $project: { _id: 1 } },
                 ],
                 as: "activeStu",
@@ -1429,7 +1651,6 @@ module.exports = (
         );
         hasComparisonData = true;
       } else if (parseFloat(attendanceRate) > 0) {
-        // Previous period had 0 attendance → no meaningful comparison
         changePercentage = 0;
         hasComparisonData = false;
       }
@@ -1449,6 +1670,8 @@ module.exports = (
         },
         genderBreakdown: genderRates,
         sessionBreakdown: sessionBreakdown,
+        enrolledPerSession: enrolledPerSession, // ✅ raw map (optional)
+        enrolledOverall: enrolledOverall, // ✅ raw overall (optional)
         comparison: {
           previous: previousPeriodStats,
           change: changePercentage,
