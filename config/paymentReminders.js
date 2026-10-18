@@ -79,11 +79,17 @@ const checkPaymentStatus = async (familyEmail, currentMonth, currentYear) => {
         let monthlyFee = student.monthly_fee || 50;
         let paymentType = "unknown";
 
+        // Helper for fallback name matching (trims spaces, ignores case)
+        const normalizeName = (n) => (n || "").trim().toLowerCase();
+
         // Check ALL fee records for this student
         for (const feeRecord of feeRecords) {
-          // Try to match by student name
+          // 1. Try to match by ID first (Most Reliable)
+          // 2. Fallback to normalized name matching if ID is missing
           const studentFeeRecord = feeRecord.students.find(
-            (s) => s.name === student.name,
+            (s) =>
+              String(s.studentId) === String(student._id) ||
+              normalizeName(s.name) === normalizeName(student.name),
           );
 
           if (studentFeeRecord) {
@@ -98,10 +104,12 @@ const checkPaymentStatus = async (familyEmail, currentMonth, currentYear) => {
               studentFeeRecord.monthsPaid &&
               studentFeeRecord.monthsPaid.length > 0
             ) {
+              // Find this part inside the loop:
               const currentMonthPayment = studentFeeRecord.monthsPaid.find(
                 (monthPaid) =>
-                  monthPaid.month === currentMonth &&
-                  monthPaid.year === currentYear,
+                  String(monthPaid.month).padStart(2, "0") ===
+                    String(currentMonth).padStart(2, "0") &&
+                  Number(monthPaid.year) === Number(currentYear),
               );
 
               if (currentMonthPayment) {
